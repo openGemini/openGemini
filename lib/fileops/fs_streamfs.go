@@ -437,6 +437,9 @@ func (sc *StreamClient) FileExists(name string) error {
 	case C.int(StreamDoesntExist):
 		return ErrStreamFileNotExist
 	default: // anything else should be an error
+		if sc.fs == nil {
+			sc.Logger.Error("streamFs is nil")
+		}
 		return fmt.Errorf("check file(%s) exist failed,error number:%d", name, int(value))
 	}
 }
@@ -972,6 +975,34 @@ func (sc *StreamClient) Truncate(fileName string, size int64, lock string, shoul
 	return nil
 }
 
+func (sc *StreamClient) UpdateObsAkSk(ak, sk string) error {
+	cAk := C.CString(ak)
+	defer C.free(unsafe.Pointer(cAk))
+
+	cSk := C.CString(sk)
+	defer C.free(unsafe.Pointer(cSk))
+
+	ret := C.streamUpdateOBSAkSk(sc.fs, cAk, cSk)
+	if int(ret) != 0 {
+		return fmt.Errorf("update obs ak and sk error: %d", ret)
+	}
+	return nil
+}
+
+func (sc *StreamClient) StreamConfUpdate(propertyName, propertyValue string) error {
+	cPropertyName := C.CString(propertyName)
+	defer C.free(unsafe.Pointer(cPropertyName))
+	cPropertyValue := C.CString(propertyValue)
+	defer C.free(unsafe.Pointer(cPropertyValue))
+
+	res := C.streamConfUpdate(sc.fs, cPropertyName, cPropertyValue)
+	if int(res) == -1 {
+		return fmt.Errorf("stream update conf failed, modified name:%s, value:%s ", propertyName, propertyValue)
+	}
+
+	return nil
+}
+
 func (f *StreamFile) Write(p []byte) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1498,6 +1529,14 @@ func (fs *streamVfs) GetOBSTmpIndexFileName(path string, obsOption *obs.ObsOptio
 
 func (fs *streamVfs) DecodeRemotePathToLocal(path string) (string, error) {
 	return "", nil
+}
+
+func (fs *streamVfs) UpdateObsAkSk(ak, sk string) error {
+	return fs.sc.UpdateObsAkSk(ak, sk)
+}
+
+func (fs *streamVfs) StreamConfUpdate(propertyName, propertyValue string) error {
+	return fs.sc.StreamConfUpdate(propertyName, propertyValue)
 }
 
 func Mmap(fd int, offset int64, length int) (data []byte, err error) {

@@ -18,9 +18,11 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -29,20 +31,45 @@ import (
 	"github.com/influxdata/influxdb/pkg/bloom"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/encoding"
+	"github.com/openGemini/openGemini/lib/failpoint"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/pool"
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/request"
+	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/pingcap/failpoint"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func compareFile(f1, f2 interface{}) bool {
+	firstMin, firstMax, _ := f1.(TSSPFile).MinMaxTime()
+	secondMin, secondMax, _ := f2.(TSSPFile).MinMaxTime()
+	if firstMin == secondMin {
+		return firstMax <= secondMax
+	}
+	if firstMin < secondMin {
+		return false
+	}
+	return true
+}
+
+func compareFileByDescend(f1, f2 interface{}) bool {
+	firstMin, firstMax, _ := f1.(TSSPFile).MinMaxTime()
+	secondMin, secondMax, _ := f2.(TSSPFile).MinMaxTime()
+	if firstMax == secondMax {
+		return firstMin <= secondMin
+	}
+
+	if firstMax > secondMax {
+		return true
+	}
+	return false
+}
 
 const (
 	testDir = "/tmp/data1"
@@ -109,7 +136,7 @@ func genMemTableData(id uint64, idCount int, rows int, idr *MinMax, tr *MinMax) 
 	genRecFn := func() *record.Record {
 		b := record.NewRecordBuilder(schema)
 
-		f1 := rand.Int63n(10)
+		f1 := rand.Int64N(10)
 		f2 := 1.2 * float64(f1)
 		f4 := true
 
@@ -163,6 +190,60 @@ func genMemTableData(id uint64, idCount int, rows int, idr *MinMax, tr *MinMax) 
 	tr.max = uint64(tm - time.Millisecond.Milliseconds())
 
 	return ids, data
+}
+
+func newDefaultStreamWriteFile(dir string) *StreamWriteFile {
+	conf := NewTsStoreConfig()
+	return NewStreamWriteFile("mst", conf, dir, make(chan struct{}), &dir)
+}
+
+func writeRecordsToFile(dir string, ids []uint64, data map[uint64]*record.Record) (TSSPFile, error) {
+	swf := newDefaultStreamWriteFile(dir)
+	err := swf.InitFlushFile(1, true)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, id := range ids {
+		rec := data[id]
+		err := swf.WriteRecord(id, rec)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return swf.NewTSSPFile(false)
+}
+
+func iterateBySeriesIDS(f TSSPFile, ids []uint64, handler func(cm *ChunkMeta)) error {
+	if fileops.ReadMetaCacheEn {
+		readcache.SetMataPageListByConf([]string{"4kb"})
+	}
+
+	tr := util.TimeRange{Min: 0, Max: math.MaxInt64}
+	for _, sid := range ids {
+		_, midx, err := f.MetaIndex(sid, tr)
+		if err != nil {
+			return err
+		}
+
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
+		if err != nil {
+			return err
+		}
+		handler(cm)
+	}
+	return nil
+}
+
+func newRecordByChunkMeta(cm *ChunkMeta) *record.Record {
+	dst := &record.Record{}
+	for _, item := range cm.colMeta {
+		dst.Schema = append(dst.Schema, record.Field{
+			Type: int(item.ty), Name: item.name,
+		})
+	}
+	dst.ColVals = make([]record.ColVal, len(dst.Schema))
+	return dst
 }
 
 func TestTableStoreOpen(t *testing.T) {
@@ -225,6 +306,8 @@ func TestTableStoreOpen(t *testing.T) {
 }
 
 func TestLazyInitError(t *testing.T) {
+	config.GetStoreConfig().Merge.MaxNumOfFileToMergeSelf = []int{8, 8, 4}
+	config.GetStoreConfig().Merge.MaxMergeSelfLevel = 3
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
 		sig.Close()
@@ -282,29 +365,29 @@ func TestLazyInitError(t *testing.T) {
 		t.Fatal("get file fail")
 	}
 
-	require.NoError(t, failpoint.Enable(fp.failPath, fp.inTerms))
+	failpoint.Enable(fp.failPath, fp.inTerms)
 	midx, err := f.MetaIndexAt(0)
 	if err = fp.expect(err); err != nil {
 		t.Fatal(err)
 	}
-	require.NoError(t, failpoint.Disable(fp.failPath))
+	failpoint.Disable(fp.failPath)
 
 	midx, err = f.MetaIndexAt(0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	decs := NewReadContext(true)
-	require.NoError(t, failpoint.Enable(fp.failPath, fp.inTerms))
+	failpoint.Enable(fp.failPath, fp.inTerms)
 	cms, err := f.ReadChunkMetaData(0, midx, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err = fp.expect(err); err != nil {
 		t.Fatal(err)
 	}
-	require.NoError(t, failpoint.Disable(fp.failPath))
+	failpoint.Disable(fp.failPath)
 	cms, _ = f.ReadChunkMetaData(0, midx, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
 	rec := record.NewRecordBuilder(schema)
 	fr := f.(*tsspFile).reader.(*tsspFileReader)
 
-	require.NoError(t, failpoint.Enable(fp.failPath, fp.inTerms))
+	failpoint.Enable(fp.failPath, fp.inTerms)
 	fr.Ref()
 	_, err = f.ReadAt(&cms[0], 0, rec, decs, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err = fp.expect(err); err != nil {
@@ -314,16 +397,16 @@ func TestLazyInitError(t *testing.T) {
 	if fr.ref != 0 {
 		t.Fatal("ref error")
 	}
-	require.NoError(t, failpoint.Disable(fp.failPath))
+	failpoint.Disable(fp.failPath)
 
-	require.NoError(t, failpoint.Enable(fp.failPath, fp.inTerms))
+	failpoint.Enable(fp.failPath, fp.inTerms)
 	fr.Ref()
 	_, err = f.ReadData(0, 1, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err = fp.expect(err); err != nil {
 		t.Fatal(err)
 	}
 	fr.Unref()
-	require.NoError(t, failpoint.Disable(fp.failPath))
+	failpoint.Disable(fp.failPath)
 	if fr.ref != 0 {
 		t.Fatal("ref error")
 	}
@@ -1032,49 +1115,13 @@ func TestReadTimeColumn(t *testing.T) {
 
 func TestReadTimeColumnByCacheInOfSinglePage(t *testing.T) {
 	dir := t.TempDir()
-	conf := NewTsStoreConfig()
-	tier := uint64(util.Hot)
-	lockPath := ""
-	store := NewTableStore(dir, &lockPath, &tier, false, conf)
-	store.SetImmTableType(config.TSSTORE)
-	defer store.Close()
 
-	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
-		for _, id := range ids {
-			rec := data[id]
-			err := msb.WriteData(id, rec)
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-
-	fileSeq := uint64(1)
 	var idMinMax, tmMinMax MinMax
-	ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
-	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
-	msb := NewMsBuilder(dir, "mst", &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2, config.TSSTORE, nil, 0)
-	write(ids, data, msb)
-	fileSeq++
-	store.AddTable(msb, true, false)
+	ids, data := genMemTableData(1, 1000, 10, &idMinMax, &tmMinMax)
+	f, err := writeRecordsToFile(dir, ids, data)
+	require.NoError(t, err)
+	defer f.Close()
 
-	fs := store.tableFiles("mst", true)
-	if !assert.NotEmpty(t, fs, "get mst files fail") {
-		return
-	}
-
-	f := store.File("mst", fs.Files()[0].Path(), true)
-	if !assert.NotEmpty(t, f, "get file failed") {
-		return
-	}
-
-	var cm = &ChunkMeta{}
-	var err error
-
-	midx, _ := f.MetaIndexAt(0)
-	if !assert.NotEmpty(t, midx) {
-		return
-	}
 	fileops.EnableReadMetaCache(102400)
 	fileops.EnableReadDataCache(1024000)
 	defer fileops.EnableReadMetaCache(0)
@@ -1083,72 +1130,29 @@ func TestReadTimeColumnByCacheInOfSinglePage(t *testing.T) {
 	prePageSize := readcache.PageSize
 	readcache.SetPageSize(int64(pageSize))
 	defer readcache.SetPageSize(prePageSize)
-	cm, err = f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
-	if !assert.NoError(t, err) {
-		return
-	}
 
-	dst := &record.Record{}
-	cm.colMeta[0] = cm.colMeta[len(cm.colMeta)-1]
-	for _, item := range cm.colMeta {
-		dst.Schema = append(dst.Schema, record.Field{
-			Type: int(item.ty), Name: item.name,
-		})
-	}
-	dst.ColVals = make([]record.ColVal, len(dst.Schema))
+	ctx := &ReadContext{coderCtx: &encoding.CoderContext{}}
+	err = iterateBySeriesIDS(f, ids, func(cm *ChunkMeta) {
+		cm.colMeta[0] = cm.colMeta[len(cm.colMeta)-1]
+		dst := newRecordByChunkMeta(cm)
 
-	_, err = f.ReadAt(cm, 0, dst, &ReadContext{coderCtx: &encoding.CoderContext{}}, fileops.IO_PRIORITY_ULTRA_HIGH)
-	if !assert.NoError(t, err) {
-		return
-	}
-	assert.Equal(t, dst.Times(), dst.Column(0).IntegerValues())
+		_, err = f.ReadAt(cm, 0, dst, ctx, fileops.IO_PRIORITY_ULTRA_HIGH)
+		require.NoError(t, err)
+		assert.Equal(t, dst.Times(), dst.Column(0).IntegerValues())
+	})
+
+	require.NoError(t, err)
 }
 
 func TestReadTimeColumnByCacheInOfMultiPage(t *testing.T) {
 	dir := t.TempDir()
-	conf := NewTsStoreConfig()
-	tier := uint64(util.Hot)
-	lockPath := ""
-	store := NewTableStore(dir, &lockPath, &tier, false, conf)
-	store.SetImmTableType(config.TSSTORE)
-	defer store.Close()
 
-	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
-		for _, id := range ids {
-			rec := data[id]
-			err := msb.WriteData(id, rec)
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-
-	fileSeq := uint64(1)
 	var idMinMax, tmMinMax MinMax
 	ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
-	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
-	msb := NewMsBuilder(dir, "mst", &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2, config.TSSTORE, nil, 0)
-	write(ids, data, msb)
-	fileSeq++
-	store.AddTable(msb, true, false)
+	f, err := writeRecordsToFile(dir, ids, data)
+	require.NoError(t, err)
+	defer f.Close()
 
-	fs := store.tableFiles("mst", true)
-	if !assert.NotEmpty(t, fs, "get mst files fail") {
-		return
-	}
-
-	f := store.File("mst", fs.Files()[0].Path(), true)
-	if !assert.NotEmpty(t, f, "get file failed") {
-		return
-	}
-
-	var cm = &ChunkMeta{}
-	var err error
-
-	midx, _ := f.MetaIndexAt(0)
-	if !assert.NotEmpty(t, midx) {
-		return
-	}
 	fileops.EnableReadMetaCache(102400)
 	fileops.EnableReadDataCache(102400)
 	defer fileops.EnableReadMetaCache(0)
@@ -1157,31 +1161,21 @@ func TestReadTimeColumnByCacheInOfMultiPage(t *testing.T) {
 	prePageSize := readcache.PageSize
 	readcache.SetPageSize(pageSize)
 	defer readcache.SetPageSize(prePageSize)
-	cm, err = f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
-	if !assert.NoError(t, err) {
-		return
-	}
 
-	dst := &record.Record{}
-	cm.colMeta[0] = cm.colMeta[len(cm.colMeta)-1]
-	for _, item := range cm.colMeta {
-		dst.Schema = append(dst.Schema, record.Field{
-			Type: int(item.ty), Name: item.name,
-		})
-	}
-	dst.ColVals = make([]record.ColVal, len(dst.Schema))
+	err = iterateBySeriesIDS(f, ids, func(cm *ChunkMeta) {
+		cm.colMeta[0] = cm.colMeta[len(cm.colMeta)-1]
 
-	_, err = f.ReadAt(cm, 0, dst, &ReadContext{coderCtx: &encoding.CoderContext{}}, fileops.IO_PRIORITY_ULTRA_HIGH)
-	if !assert.NoError(t, err) {
-		return
-	}
-	assert.Equal(t, dst.Times(), dst.Column(0).IntegerValues())
-	dst.ColVals = make([]record.ColVal, len(dst.Schema))
-	_, err = f.ReadAt(cm, 0, dst, &ReadContext{coderCtx: &encoding.CoderContext{}}, fileops.IO_PRIORITY_ULTRA_HIGH)
-	if !assert.NoError(t, err) {
-		return
-	}
-	assert.Equal(t, dst.Times(), dst.Column(0).IntegerValues())
+		dst := newRecordByChunkMeta(cm)
+		_, err = f.ReadAt(cm, 0, dst, &ReadContext{coderCtx: &encoding.CoderContext{}}, fileops.IO_PRIORITY_ULTRA_HIGH)
+		require.NoError(t, err)
+		require.Equal(t, dst.Times(), dst.Column(0).IntegerValues())
+
+		dst.ColVals = make([]record.ColVal, len(dst.Schema))
+		_, err = f.ReadAt(cm, 0, dst, &ReadContext{coderCtx: &encoding.CoderContext{}}, fileops.IO_PRIORITY_ULTRA_HIGH)
+		require.NoError(t, err)
+		require.Equal(t, dst.Times(), dst.Column(0).IntegerValues())
+	})
+	require.NoError(t, err)
 }
 
 func TestReadTimeColumnByCacheInOfVariablePage(t *testing.T) {
@@ -1193,76 +1187,26 @@ func TestReadTimeColumnByCacheInOfVariablePage(t *testing.T) {
 	defer func() {
 		readcache.IsPageSizeVariable = false
 	}()
+
 	dir := t.TempDir()
-	conf := NewTsStoreConfig()
-	tier := uint64(util.Hot)
-	lockPath := ""
-	store := NewTableStore(dir, &lockPath, &tier, false, conf)
-	store.SetImmTableType(config.TSSTORE)
-	defer store.Close()
-
-	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
-		for _, id := range ids {
-			rec := data[id]
-			err := msb.WriteData(id, rec)
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-
-	fileSeq := uint64(1)
 	var idMinMax, tmMinMax MinMax
 	ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
-	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
-	msb := NewMsBuilder(dir, "mst", &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2, config.TSSTORE, nil, 0)
-	write(ids, data, msb)
-	fileSeq++
-	store.AddTable(msb, true, false)
+	f, err := writeRecordsToFile(dir, ids, data)
+	require.NoError(t, err)
+	defer f.Close()
 
-	fs := store.tableFiles("mst", true)
-	if !assert.NotEmpty(t, fs, "get mst files fail") {
-		return
-	}
+	err = iterateBySeriesIDS(f, ids, func(cm *ChunkMeta) {
+		cm.colMeta[0] = cm.colMeta[len(cm.colMeta)-1]
+		dst := newRecordByChunkMeta(cm)
 
-	f := store.File("mst", fs.Files()[0].Path(), true)
-	if !assert.NotEmpty(t, f, "get file failed") {
-		return
-	}
-
-	var cm = &ChunkMeta{}
-	var err error
-
-	midx, _ := f.MetaIndexAt(0)
-	if !assert.NotEmpty(t, midx) {
-		return
-	}
-
-	cm, err = f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
-	if !assert.NoError(t, err) {
-		return
-	}
-
-	dst := &record.Record{}
-	cm.colMeta[0] = cm.colMeta[len(cm.colMeta)-1]
-	for _, item := range cm.colMeta {
-		dst.Schema = append(dst.Schema, record.Field{
-			Type: int(item.ty), Name: item.name,
-		})
-	}
-	dst.ColVals = make([]record.ColVal, len(dst.Schema))
-
-	_, err = f.ReadAt(cm, 0, dst, &ReadContext{coderCtx: &encoding.CoderContext{}}, fileops.IO_PRIORITY_ULTRA_HIGH)
-	if !assert.NoError(t, err) {
-		return
-	}
-	assert.Equal(t, dst.Times(), dst.Column(0).IntegerValues())
-	dst.ColVals = make([]record.ColVal, len(dst.Schema))
-	_, err = f.ReadAt(cm, 0, dst, &ReadContext{coderCtx: &encoding.CoderContext{}}, fileops.IO_PRIORITY_ULTRA_HIGH)
-	if !assert.NoError(t, err) {
-		return
-	}
-	assert.Equal(t, dst.Times(), dst.Column(0).IntegerValues())
+		_, err = f.ReadAt(cm, 0, dst, &ReadContext{coderCtx: &encoding.CoderContext{}}, fileops.IO_PRIORITY_ULTRA_HIGH)
+		require.NoError(t, err)
+		require.Equal(t, dst.Times(), dst.Column(0).IntegerValues())
+		dst.ColVals = make([]record.ColVal, len(dst.Schema))
+		_, err = f.ReadAt(cm, 0, dst, &ReadContext{coderCtx: &encoding.CoderContext{}}, fileops.IO_PRIORITY_ULTRA_HIGH)
+		require.NoError(t, err)
+		require.Equal(t, dst.Times(), dst.Column(0).IntegerValues())
+	})
 }
 
 func TestCompactionPlan(t *testing.T) {
@@ -1481,8 +1425,8 @@ func TestCompactionPlan(t *testing.T) {
 			t.Fatalf("exp groups :%v, get:%v", len(c.expGroups), len(plans))
 		}
 		for i, group := range c.expGroups {
-			if !reflect.DeepEqual(group, plans[i].group) {
-				t.Fatalf("exp groups :%v, get:%v", c.expGroups, plans)
+			if !checkEqual(group, plans[i].group) {
+				t.Fatalf("exp groups :%v, get:%v", c.expGroups, plans[i].group)
 			}
 			store.CompactDone(group)
 		}
@@ -1771,8 +1715,8 @@ func TestCompactionPlanWithAbnormal(t *testing.T) {
 			t.Fatalf("exp groups :%v, get:%v", len(c.expGroups), len(plans))
 		}
 		for i, group := range c.expGroups {
-			if !reflect.DeepEqual(group, plans[i].group) {
-				t.Fatalf("exp groups :%v, get:%v", c.expGroups, plans)
+			if !checkEqual(group, plans[i].group) {
+				t.Fatalf("exp groups :%v, get:%v", c.expGroups, plans[i].group)
 			}
 			store.CompactDone(group)
 		}
@@ -1780,6 +1724,22 @@ func TestCompactionPlanWithAbnormal(t *testing.T) {
 		delete(store.Order, "mst")
 		store.inCompact = make(map[string]struct{}, defaultCap)
 	}
+}
+
+func checkEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	sMap := make(map[string]struct{})
+	for _, n := range a {
+		sMap[n] = struct{}{}
+	}
+	for _, n := range b {
+		if _, ok := sMap[n]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func genTsspFile(name string) TSSPFile {
@@ -2013,7 +1973,7 @@ func TestUnmarshalChunkMeta_error(t *testing.T) {
 	r.r = fileops.NewFileReader(fd, &lockPath)
 
 	buf := genChunkMetaBuf()
-	_, err := r.unmarshalChunkMetas(buf, 1, nil)
+	_, err := r.unmarshalChunkMetas(&ChunkMetaCodecCtx{}, buf, 1, nil)
 	require.EqualError(t, err, "too smaller data for segment meta,  20 < 24(2)")
 }
 
@@ -2240,6 +2200,7 @@ func TestUnloadFilesCompactionPlan(t *testing.T) {
 			t.Fatalf("exp groups :%v, get:%v", len(c.expGroups), len(plans))
 		}
 		for i, group := range c.expGroups {
+			slices.Sort(plans[i].group)
 			if !reflect.DeepEqual(group, plans[i].group) {
 				fmt.Println(plans, plans[0], plans[1])
 				t.Fatalf("exp groups :%v, get:%v", c.expGroups, plans)
@@ -2338,4 +2299,38 @@ func TestGetFilesAndUnref(t *testing.T) {
 	var files *TSSPFiles
 	allFiles := files.GetFilesAndUnref()
 	assert.Equal(t, len(allFiles), 0)
+}
+
+func TestForceDone(t *testing.T) {
+	file := &tsspFile{}
+	file.wg.Add(1)
+	file.ForceDone()
+	require.Equal(t, int64(1), stat.RuntimeIns().TSSPForceDoneTotal.GetValue())
+}
+
+func TestCompactGroup(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		lock := "/testPath/lockPath"
+		cg := &CompactGroup{
+			name:    "mst_0000",
+			shardId: 0,
+			toLevel: 2,
+			group:   []string{"/file1", "/file2"},
+			path:    "/testPath",
+			lock:    &lock,
+		}
+		content := []byte{}
+		content, err := cg.MarshalBinary(content)
+		require.NoError(t, err)
+
+		cg2 := &CompactGroup{}
+		_, err = cg2.UnmarshalBinary(content)
+		require.NoError(t, err)
+		require.Equal(t, cg, cg2)
+	})
+	t.Run("2", func(t *testing.T) {
+		cg := &CompactGroup{}
+		_, err := cg.UnmarshalBinary([]byte{})
+		require.Error(t, err)
+	})
 }

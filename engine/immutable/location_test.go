@@ -15,9 +15,14 @@
 package immutable
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/openGemini/openGemini/lib/fragment"
+	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -180,4 +185,23 @@ func TestReadCtx(t *testing.T) {
 	loc.SetChunkMeta(&ChunkMeta{timeRange: []SegmentRange{[2]int64{0, 1}}})
 	_, _, err := loc.readData(nil, nil, nil, nil, nil)
 	assert.Equal(t, err, nil)
+}
+
+func TestLocationContainsWithSpan(t *testing.T) {
+	convey.Convey("test loc contains with span", t, func() {
+		_, span := tracing.NewTrace("location")
+		file := &tsspFile{}
+		l := &Location{span: span, r: file}
+		patches := gomonkey.ApplyMethod(file, "ContainsValue", func(_ *tsspFile, _ uint64, _ util.TimeRange) (bool, error) {
+			return true, nil
+		})
+		defer patches.Reset()
+
+		patches.ApplyPrivateMethod(l, "readChunkMeta", func(_ *Location, id uint64, tr util.TimeRange, ctx *ChunkMetaContext) error {
+			return errors.New("read failed")
+		})
+
+		_, err := l.Contains(0, util.TimeRange{}, &ChunkMetaContext{})
+		convey.So(err, convey.ShouldNotBeNil)
+	})
 }

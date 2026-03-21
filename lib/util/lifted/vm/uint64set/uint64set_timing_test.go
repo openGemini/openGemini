@@ -97,3 +97,41 @@ func BenchmarkBitmapIteratorWithAllocs(b *testing.B) {
 		})
 	}
 }
+
+func generateSet(n int) *Set {
+	s := new(Set)
+	start := uint64(time.Now().UnixNano())
+	end := start + uint64(n)
+	for start < end {
+		s.Add(start)
+		start++
+	}
+	return s
+}
+
+func BenchmarkUnion(b *testing.B) {
+	/*
+	   BenchmarkUnion/union
+	   BenchmarkUnion/union-8         	   26275	     43284 ns/op	      96 B/op	       1 allocs/op
+	   BenchmarkUnion/union#01
+	   BenchmarkUnion/union#01-8      	   28395	     40106 ns/op	       0 B/op	       0 allocs/op
+	*/
+	a := generateSet(1000000)
+	s := generateSet(1000000)
+
+	b.Run("union", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			s.Union(a)
+		}
+	})
+
+	b.Run("union", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			s.UnionMayOwn(a)
+		}
+	})
+}

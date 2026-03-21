@@ -16,6 +16,8 @@ package config
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/influxdata/influxdb/toml"
@@ -44,6 +46,8 @@ const (
 
 	// MonitorRetentionPolicy Name of the retention policy used by the monitor service.
 	MonitorRetentionPolicy = "autogen"
+
+	MonitorServitizationRetentionPolicy = "monitor"
 
 	// MonitorRetentionPolicyDuration Duration of the monitor retention policy.
 	MonitorRetentionPolicyDuration = 7 * 24 * time.Hour
@@ -99,6 +103,9 @@ func (c *TSMonitor) GetCommon() *Common {
 	return nil
 }
 
+func (c *TSMonitor) GetData() *Store {
+	return nil
+}
 func (c *TSMonitor) ShowConfigs() map[string]interface{} {
 	return nil
 }
@@ -117,11 +124,13 @@ type MonitorMain struct {
 	History      string `toml:"history-file"`
 	Compress     bool   `toml:"compress"`
 	HttpEndpoint string `toml:"http-endpoint"`
+	LockFilePath string `toml:"lock-file-path"`
 }
 
 func newMonitor() MonitorMain {
 	return MonitorMain{
-		History: DefaultHistoryFile,
+		History:      DefaultHistoryFile,
+		LockFilePath: filepath.Dir(os.Args[0]),
 	}
 }
 
@@ -165,28 +174,30 @@ func newMonitorReport() MonitorReport {
 
 // Monitor represents the configuration for the monitor service.
 type Monitor struct {
-	app           App
-	Pushers       string        `toml:"pushers"`
-	StoreEnabled  bool          `toml:"store-enabled"`
-	StoreDatabase string        `toml:"store-database"`
-	StoreInterval toml.Duration `toml:"store-interval"`
-	StorePath     string        `toml:"store-path"`
-	Compress      bool          `toml:"compress"`
-	HttpsEnabled  bool          `toml:"https-enabled"`
-	HttpEndPoint  string        `toml:"http-endpoint"`
-	Username      string        `toml:"username"`
-	Password      string        `toml:"password"`
+	app             App
+	Pushers         string        `toml:"pushers"`
+	StoreEnabled    bool          `toml:"store-enabled"`
+	StoreDatabase   string        `toml:"store-database"`
+	StoreInterval   toml.Duration `toml:"store-interval"`
+	StorePath       string        `toml:"store-path"`
+	Compress        bool          `toml:"compress"`
+	HttpsEnabled    bool          `toml:"https-enabled"`
+	HttpEndPoint    string        `toml:"http-endpoint"`
+	Username        string        `toml:"username"`
+	Password        string        `toml:"password"`
+	RetentionPolicy string        `toml:"retention-policy"`
 }
 
 func NewMonitor(app App) Monitor {
 	return Monitor{
-		app:           app,
-		Pushers:       DefaultPushers,
-		StoreEnabled:  DefaultStoreEnabled,
-		StoreDatabase: DefaultStoreDatabase,
-		StoreInterval: toml.Duration(DefaultStoreInterval),
-		HttpEndPoint:  DefaultHttpEndpoint,
-		Compress:      false,
+		app:             app,
+		Pushers:         DefaultPushers,
+		StoreEnabled:    DefaultStoreEnabled,
+		StoreDatabase:   DefaultStoreDatabase,
+		StoreInterval:   toml.Duration(DefaultStoreInterval),
+		HttpEndPoint:    DefaultHttpEndpoint,
+		Compress:        false,
+		RetentionPolicy: MonitorRetentionPolicy,
 	}
 }
 

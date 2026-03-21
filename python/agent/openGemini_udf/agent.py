@@ -32,9 +32,7 @@ import logging
 from .metadata import MetaData
 from multiprocessing import Process, get_context, Lock, Value
 from multiprocessing.queues import Queue
-from .metrics_handler import MetricsHandler, consume_metric, UpDownCounterMetricPoint, CounterMetricPoint
-from .telemetry import METRIC_CASTOR_TASKS_ACTIVE, METRIC_CASTOR_TASKS, METRIC_CASTOR_RECEIVED_BYTES, metrics_handler, \
-    METRIC_CASTOR_SENT_BYTES, metrics_queue
+from .telemetry import init_telemetry_main_process, init_telemetry, MainProcessMetricsHandler
 
 # Setup default in/out io
 defaultIn = sys.stdin.buffer
@@ -112,6 +110,8 @@ class Agent(object):
             index=None,
             result=None,
             flusher=None,
+            metric_handler=None,
+            task_queue=None
     ):
         self._in_socket_file = in_socket.makefile(mode="rwb")
         self._out_socket_file = out_socket.makefile(mode="rwb")
@@ -123,6 +123,8 @@ class Agent(object):
         self._result = result
         self._flusher = flusher
         self.num_workers = len(flusher)
+        self.metric_handler: MainProcessMetricsHandler = metric_handler
+        self.task_queue: Queue = task_queue
 
     def start(self):
         self._read_thread = Thread(target=self._read_batch_loop)
@@ -160,9 +162,12 @@ class Agent(object):
                 if result == "stop":
                     return
                 if result is not None:
+                    if b"_errInfo" in result.schema.metadata:
+                        self.metric_handler.castor_tasks_fail.add(1)
+                    self.metric_handler.castor_tasks_success.add(1)
                     self.write_response(result, True)
-                    metrics_queue.put(UpDownCounterMetricPoint(METRIC_CASTOR_TASKS_ACTIVE, -1))
-                    metrics_queue.put(CounterMetricPoint(METRIC_CASTOR_SENT_BYTES, value=result.nbytes))
+                    self.metric_handler.castor_tasks_active.add(-1)
+                    self.metric_handler.castor_sent_bytes.add(result.nbytes)
             except Exception as e:
                 traceback.print_exc()
                 error = "error flush batch: %s" % e
@@ -184,17 +189,13 @@ class Agent(object):
                         msg = metadata[b"_msgType"]
                     taskID = metadata[b"_taskID"]
                 table = reader.read_all()
-                hashID = fnv1a_hash(taskID, self.num_workers)
                 if msg == b"data":
-                    logger.info(
-                        "data of task: %s is hashed to worker: %d" % (taskID, hashID)
-                    )
-                    metrics_queue.put(CounterMetricPoint(METRIC_CASTOR_RECEIVED_BYTES, value=table.nbytes))
-                    metrics_queue.put(CounterMetricPoint(METRIC_CASTOR_TASKS, 1))
-                    metrics_queue.put(UpDownCounterMetricPoint(METRIC_CASTOR_TASKS_ACTIVE, 1))
+                    self.metric_handler.castor_received_bytes.add(table.nbytes)
+                    self.metric_handler.castor_tasks.add(1)
+                    self.metric_handler.castor_tasks_active.add(1)
                     metadata[b"_connID"] = str(self._id).encode()
                     table = table.replace_schema_metadata(metadata=metadata)
-                    self._flusher[hashID].put_batch(table)
+                    self.task_queue.put(table)
                 else:
                     logger.error("received unhandled request %s", msg)
             except EOF:
@@ -245,7 +246,6 @@ def worker(
         version,
         data_in,
         data_out,
-        metric_queue,
 ):
     signal.signal(signal.SIGHUP, signal.SIG_DFL)
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
@@ -254,24 +254,25 @@ def worker(
     worker_bucket_size = bucket_size // num_workers
     meta_data = MetaData(worker_bucket_size, data_lifetime)
     cache = dict()
-    h = handler(data_dir, model_config_dir, version, meta_data, metric_queue)
+    metric_handler = init_telemetry()
+    h = handler(data_dir, model_config_dir, version, meta_data, metric_handler)
     hook = collections.deque()
-    for data, _ in iter(data_in.get, "stop"):
-        results = None
+    while True:
         try:
-            results = h.batch_data(data, cache, hook)
+            data = data_in.get(block=True)
+            results = None
+            try:
+                results = h.batch_data([data], cache, hook)
+            except Exception as e:
+                traceback.print_exc()
+                error = "pyworker processes data got exception: %s" % e
+                logger.error(error)
+            if results is not None:
+                data_out.put(results)
         except Exception as e:
             traceback.print_exc()
             error = "pyworker processes data got exception: %s" % e
             logger.error(error)
-        if results is not None:
-            data_out.put(results)
-    while True:
-        try:
-            func, d = hook.pop()
-            func(d)
-        except IndexError:
-            break
 
 
 def worker_daemon(
@@ -286,7 +287,6 @@ def worker_daemon(
         version,
         task_queue,
         results,
-        metric_queue,
 ):
     while True:
         process[worker_id].join()
@@ -296,7 +296,7 @@ def worker_daemon(
             task_queue._rlock.release()
         except ValueError:
             logger.debug("read lock of input queue has already released")
-        if alive.value is False:
+        if not alive.value:
             return
         else:
             p = Process(
@@ -311,7 +311,6 @@ def worker_daemon(
                     version,
                     task_queue,
                     results,
-                    metric_queue,
                 ),
             )
             p.daemon = True
@@ -339,12 +338,14 @@ def start_split(results, qs):
 
 
 class accepter(object):
-    def __init__(self, data_dir, model_config_dir, version):
+    def __init__(self, data_dir, model_config_dir, version, metric_handler, task_queue):
         self._count = 0
         self.data_dir = data_dir
         self.model_config_dir = model_config_dir
         self.version = version
         self._resource_lock = threading.Lock()
+        self.metric_handler = metric_handler
+        self.task_queue = task_queue
 
     def accept(self, conn, addr, dict, id, result, flushers):
         self._resource_lock.acquire()
@@ -352,7 +353,7 @@ class accepter(object):
         count = self._count
         self._resource_lock.release()
 
-        a = Agent(conn, conn, dict, id, result, flushers)
+        a = Agent(conn, conn, dict, id, result, flushers, self.metric_handler, self.task_queue)
 
         logger.info("Starting Agent for connection %d", count)
         a.start()
@@ -370,6 +371,8 @@ def write_pid(file: str, pid: str):
 class Server(object):
     def __init__(self, handler, params):
         os.setpgid(0, 0)
+        metric_handler = init_telemetry_main_process(params["monitor_addr"], params["monitor_database"],
+                                                     params["monitor_https_enabled"], params["sampling_interval"], params["path"])
         self._socket_path = params["path"]
         if isinstance(self._socket_path, str):
             self._listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -377,8 +380,9 @@ class Server(object):
             self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._listener.bind(self._socket_path)
+        self.center_task_queue = Queue(ctx=get_context())
         self._accepter = accepter(
-            params["data_dir"], params["model_config_dir"], params["version"]
+            params["data_dir"], params["model_config_dir"], params["version"], metric_handler, self.center_task_queue
         )
         self._max_connections = params["max_connections"]
         self._count = 0
@@ -387,29 +391,29 @@ class Server(object):
         self.tasks = []
         self.flushers = []
         self.results = Queue(ctx=get_context())
-        self.metrics_queue = metrics_queue
         self.process = []
         self.qs = dict()
 
         # pid
-        write_pid(params["pidfile"], str(os.getpid()))
+        if params["pidfile"] != "":
+            write_pid(params["pidfile"], str(os.getpid()))
 
         # sharing variable for workers to determine whether server is alive
         self.alive = Value("b", True)
 
         # terminate handler
         def handle_sigterm(signum, frame):
-            signal.signal(signal.SIGTERM, signal.SIG_DFL)
-            os.kill(0, signal.SIGHUP)
             self.alive.value = False
+            os.kill(0, signal.SIGHUP)
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
             sys.exit(1)
 
         # interrupt handler
         def handle_sigint(signum, frame):
             traceback.print_exc()
-            signal.signal(signal.SIGINT, signal.default_int_handler)
-            os.kill(0, signal.SIGHUP)
             self.alive.value = False
+            os.kill(0, signal.SIGHUP)
+            signal.signal(signal.SIGINT, signal.default_int_handler)
             sys.exit(1)
 
         signal.signal(signal.SIGTERM, handle_sigterm)
@@ -432,9 +436,8 @@ class Server(object):
                     params["data_dir"],
                     params["model_config_dir"],
                     params["version"],
-                    task_queue,
+                    self.center_task_queue,
                     self.results,
-                    self.metrics_queue,
                 ),
             )
             p.daemon = True
@@ -453,19 +456,13 @@ class Server(object):
                     params["data_dir"],
                     params["model_config_dir"],
                     params["version"],
-                    task_queue,
+                    self.center_task_queue,
                     self.results,
-                    self.metrics_queue,
                 ),
             )
             t.setDaemon(True)
             t.start()
 
-            flusher = Flusher(
-                task_queue, self.dict, params["batch_size"], params["timeout"]
-            )
-            self.flushers.append(flusher)
-            flusher.run()
 
     def listenConn(self):
         conn, addr = self._listener.accept()
@@ -483,11 +480,6 @@ class Server(object):
         thread = Thread(target=start_split, args=(self.results, self.qs))
         thread.setDaemon(True)
         thread.start()
-
-        # thread to record metrics from worker process
-        metric_thread = Thread(target=consume_metric, args=(self.metrics_queue, metrics_handler))
-        metric_thread.setDaemon(True)
-        metric_thread.start()
 
         self._listener.listen(self._max_connections)
         try:

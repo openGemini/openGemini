@@ -24,11 +24,13 @@ import (
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/smart_query"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -73,6 +75,7 @@ const (
 	SQL Role = iota
 	STORE
 	META
+	Task
 
 	algoVer01 = 1
 	algoVer02 = 2
@@ -139,14 +142,18 @@ type MetaClient interface {
 	RepManager
 	MeasurementManager
 	StreamManager
+	ResourceManager
+	TaskManager
 	OpenAtStore() error
 	RetryRegisterQueryIDOffset(host string) (uint64, error)
+	SmartQueryManager
 }
 
 type MeasurementManager interface {
 	CreateMeasurement(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo, numOfShards int32, indexR *influxql.IndexRelation, engineType config.EngineType,
 		colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error)
 	AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error
+	AlterShardsNum(database, retentionPolicy, mst string, numOfShards int32) error
 	MarkMeasurementDelete(database, policy, measurement string) error
 	GetMeasurementID(database string, rpName string, mstName string) (uint64, error)
 	QueryTagKeys(database string, ms influxql.Measurements, cond influxql.Expr) (map[string]map[string]struct{}, error)
@@ -170,7 +177,7 @@ type ContinuousQueryManager interface {
 	CreateContinuousQuery(database, name, query string) error
 	ShowContinuousQueries() (models.Rows, error)
 	DropContinuousQuery(name string, database string) error
-	SendSql2MetaHeartbeat(host string) error
+	SendCQ2MetaHeartbeat(host string) error
 }
 
 type SubscriptionManager interface {
@@ -181,7 +188,7 @@ type SubscriptionManager interface {
 
 type SystemManager interface {
 	SendSysCtrlToMeta(mod string, param map[string]string) (map[string]string, error)
-	SendBackupToMeta(mod string, param map[string]string) (map[string]string, error)
+	SendBackupToMeta(currentServer int, mod string, param map[string]string) string
 	IsSQLiteEnabled() bool
 	InsertFiles([]meta2.FileInfo) error
 	IsMasterPt(uint32, string) bool
@@ -221,6 +228,7 @@ type ShardManager interface {
 	UpdateShardInfoTier(shardID uint64, tier uint64, dbName, rpName string) error
 	UpdateShardDownSampleInfo(Ident *meta2.ShardIdentifier) error
 	ShardGroupsByTimeRange(database, policy string, min, max time.Time) (a []meta2.ShardGroupInfo, err error)
+	GetShardingPlan(dbName, rpName string) (*proto2.RPPTShardingPlan, error)
 }
 
 type MetadataManager interface {
@@ -240,6 +248,8 @@ type MetadataManager interface {
 	ShowShards(database string, rp string, mst string) models.Rows
 	ShowRetentionPolicies(database string) (models.Rows, error)
 	UpdateIndexInfoTier(indexID uint64, tier uint64, dbName, rpName string) error
+	StatisticDatabaseShards() []opsStat.OpsStatistic
+	GetAllRepNodePtsMap(database string) (map[uint64][]uint32, error)
 }
 
 type DatabaseManager interface {
@@ -261,6 +271,30 @@ type NodeManager interface {
 	AliveReadNodes() ([]meta2.DataNode, error)
 	DeleteMetaNode(id uint64) error
 	MetaNodes() ([]meta2.NodeInfo, error)
+	MetaServers() []string
+}
+
+type ResourceManager interface {
+	CreateResource(resourceName string, properties map[string]string) error
+	AlterResource(resourceName string, properties map[string]string) error
+	DropResource(resourceName string) error
+	GetResource(resourceName string) (map[string]string, bool)
+	GetResources() []string
+}
+
+type TaskManager interface {
+	CreateTask(taskName string, taskType influxql.TaskType, properties map[string]string) error
+	AlterTask(taskName string, taskType influxql.TaskType, properties map[string]string) error
+	DropTask(taskName string, taskType influxql.TaskType) error
+	GetTask(taskName string, taskType influxql.TaskType) (map[string]string, bool)
+	GetTasks(taskType influxql.TaskType) []string
+	GetTasksWithProperties(taskType influxql.TaskType) map[uint64]*meta2.TaskInfo
+	GetAllTaskCount() int
+}
+
+type SmartQueryManager interface {
+	CheckAndWriteSmartStmtSchema(*smart_query.SmartSelectStatement) error
+	GetSmartStmtETraits(stmt *smart_query.SmartSelectStatement, startTime time.Time, endTime time.Time) ([]smart_query.SmartRemoteQuery, error)
 }
 
 type LoadCtx struct {

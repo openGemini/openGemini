@@ -57,6 +57,7 @@ func TestOpenService(t *testing.T) {
 			OpsMonitor: opsConfig,
 		},
 		Sherlock: config.NewSherlockConfig(),
+		Common:   config.NewCommon(),
 	}
 	s.OpsService.Init(nil, nil)
 	s.config.Sherlock.SherlockEnable = true

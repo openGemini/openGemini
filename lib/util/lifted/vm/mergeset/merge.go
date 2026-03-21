@@ -6,7 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/openGemini/openGemini/lib/logger"
 )
 
 // PrepareBlockCallback can transform the passed items allocated at the given data.
@@ -176,16 +176,16 @@ func (bsm *blockStreamMerger) flushIB(bsw *blockStreamWriter, ph *partHeader, it
 		// Consistency checks after prepareBlock call.
 		firstItem := items[0].String(data)
 		if firstItem != string(bsm.firstItem) {
-			logger.Panicf("BUG: prepareBlock must return first item equal to the original first item;\ngot\n%X\nwant\n%X", firstItem, bsm.firstItem)
+			logger.GetLogger().Panic(fmt.Sprintf("BUG: prepareBlock must return first item equal to the original first item;\ngot\n%X\nwant\n%X", firstItem, bsm.firstItem))
 		}
 		lastItem := items[len(items)-1].String(data)
 		if lastItem != string(bsm.lastItem) {
-			logger.Panicf("BUG: prepareBlock must return last item equal to the original last item;\ngot\n%X\nwant\n%X", lastItem, bsm.lastItem)
+			logger.GetLogger().Panic(fmt.Sprintf("BUG: prepareBlock must return last item equal to the original last item;\ngot\n%X\nwant\n%X", lastItem, bsm.lastItem))
 		}
 		// Verify whether the bsm.ib.items are sorted only in tests, since this
 		// can be expensive check in prod for items with long common prefix.
 		if isInTest && !bsm.ib.isSorted() {
-			logger.Panicf("BUG: prepareBlock must return sorted items;\ngot\n%s", bsm.ib.debugItemsString())
+			logger.GetLogger().Panic(fmt.Sprintf("BUG: prepareBlock must return sorted items;\ngot\n%s", bsm.ib.debugItemsString()))
 		}
 	}
 	ph.itemsCount += uint64(len(items))

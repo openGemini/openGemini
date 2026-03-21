@@ -59,7 +59,11 @@ const (
 	// Enable SQLite for meta
 	DefalutSQLiteEnabled = false
 
-	DefaultSqlBindPort = 8012
+	DefaultSqlBindPort               = 8012
+	DefaultTaskBindPort              = 8013
+	DefaultShardGroupTimeZone        = "UTC"
+	DefaultMetaStatisticsPullEnabled = false
+	DefaultWriteTrafficCollectRatio  = 0.1
 )
 
 var DefaultMetaJoin = []string{"127.0.0.1:8092"}
@@ -136,6 +140,10 @@ func (c *TSMeta) GetCommon() *Common {
 	return c.Common
 }
 
+func (c *TSMeta) GetData() *Store {
+	return &c.Data
+}
+
 func (c *TSMeta) ShowConfigs() map[string]interface{} {
 	return nil
 }
@@ -201,6 +209,11 @@ type Meta struct {
 	ReplicaColdSelectEnable   bool          `toml:"replica_cold_select_enable"`
 	ReplicaColdSelectInterval toml.Duration `toml:"replica_cold_select_interval"`
 	MetaRecover               bool          `toml:"meta_recover_enable"`
+	ShardGroupTimeZone        string        `toml:"shard-group-time-zone"`
+	MetaStatisticsPullEnabled bool          `toml:"meta-statistics-pull-enabled"`
+	WriteTrafficCollectRatio  float64       `toml:"write-traffic-collect-ratio"`
+	AdaptiveShardingEnabled   bool          `toml:"adaptive-sharding-enabled"`
+	AdaptiveShardingInterval  toml.Duration `toml:"adaptive-sharding-interval"`
 }
 
 // NewMeta builds a new configuration with default values.
@@ -240,6 +253,9 @@ func NewMeta() *Meta {
 		ReplicaColdSelectInterval:  toml.Duration(DefaultReplicaColdSelectInterval),
 		ReplicaColdSelectEnable:    false,
 		MetaRecover:                false,
+		ShardGroupTimeZone:         DefaultShardGroupTimeZone,
+		MetaStatisticsPullEnabled:  DefaultMetaStatisticsPullEnabled,
+		WriteTrafficCollectRatio:   DefaultWriteTrafficCollectRatio,
 	}
 }
 
@@ -300,6 +316,7 @@ type Gossip struct {
 	MetaBindPort  int           `toml:"meta-bind-port"`
 	StoreBindPort int           `toml:"store-bind-port"`
 	SqlBindPort   int           `toml:"sql-bind-port"`
+	taskBindPort  int           `toml:"task-bind-port"`
 	ProbInterval  toml.Duration `toml:"prob-interval"`
 	SuspicionMult int           `toml:"suspicion-mult"`
 	Members       []string      `toml:"members"`
@@ -362,5 +379,43 @@ func NewGossip(enableGossip bool) *Gossip {
 		ProbInterval:  DefaultProbInterval,
 		SuspicionMult: DefaultSuspicionMult,
 		SqlBindPort:   DefaultSqlBindPort,
+		taskBindPort:  DefaultTaskBindPort,
 	}
+}
+
+var timeLoc = time.UTC
+
+func isSameZone(zoneName string) bool {
+	return timeLoc.String() == zoneName
+}
+
+func UpdateTimeZoneLoc(zoneName string) error {
+	loc, err := time.LoadLocation(zoneName)
+	if err != nil {
+		return err
+	}
+	if isSameZone(zoneName) {
+		return nil
+	}
+
+	timeLoc = loc
+	return nil
+}
+
+func GetTimeZoneLoc() *time.Location {
+	return timeLoc
+}
+
+func GetTimeZoneName() string {
+	return timeLoc.String()
+}
+
+var adaptiveShardEnabled bool
+
+func SetAdaptiveShardEnabled(enabled bool) {
+	adaptiveShardEnabled = enabled
+}
+
+func GetAdaptiveShardEnabled() bool {
+	return adaptiveShardEnabled
 }

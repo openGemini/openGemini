@@ -149,7 +149,9 @@ func Compile(stmt *influxql.SelectStatement, opt CompileOptions) (Statement, *in
 	c.stmt.RewriteDistinct()
 
 	// Remove "time" from fields list.
-	c.stmt.RewriteTimeFields()
+	if !c.stmt.IsQueryTypeSQL {
+		c.stmt.RewriteTimeFields()
+	}
 
 	c.stmt.RewriteJoinDims(nil)
 
@@ -220,7 +222,7 @@ var TimeFilterProtection bool
 
 func (c *compiledStatement) RewriteTimeRange(stmt *influxql.SelectStatement) error {
 	// if there are subqueries, check the timerange in the subqueries. If there are no subqueries, you need to check yourself.
-	if TimeFilterProtection && !stmt.IsCreateStream && !stmt.Sources.HasSubQuery() && c.TimeRange.Min.IsZero() && c.TimeRange.Max.IsZero() {
+	if TimeFilterProtection && !stmt.IsLastQuery() && !stmt.IsCreateStream && !stmt.Sources.HasSubQuery() && c.TimeRange.Min.IsZero() && c.TimeRange.Max.IsZero() {
 		return fmt.Errorf("disabled the query because without specifying the time filter")
 	}
 	// Resolve the min and max times now that we know if there is an interval or not.
@@ -361,7 +363,7 @@ func (c *compiledStatement) compileFields(stmt *influxql.SelectStatement) error 
 			}
 			continue
 		}
-
+		oriFieldName := f.Name()
 		// Append this field to the list of processed fields and compile it.
 		f.Expr = influxql.Reduce(f.Expr, &valuer)
 		field := &compiledField{
@@ -371,7 +373,14 @@ func (c *compiledStatement) compileFields(stmt *influxql.SelectStatement) error 
 		}
 		c.Fields = append(c.Fields, field)
 		if err := field.compileExpr(field.Field.Expr); err != nil {
-			if errno.Equal(err, errno.FieldIsLiteral) && field.Field.Alias != "" {
+			if errno.Equal(err, errno.FieldIsLiteral) {
+				if field.Field.Alias == "" {
+					if oriFieldName != "" {
+						field.Field.Alias = oriFieldName
+					} else {
+						field.Field.Alias = field.Field.Name()
+					}
+				}
 				return nil
 			}
 			return err
@@ -933,7 +942,7 @@ func (c *compiledStatement) validateFields() error {
 	// Ensure there are not multiple calls if top/bottom is present.
 	if len(c.FunctionCalls) > 1 && c.TopBottomFunction != "" {
 		return fmt.Errorf("selector function %s() cannot be combined with other functions", c.TopBottomFunction)
-	} else if len(c.FunctionCalls) == 0 {
+	} else if len(c.FunctionCalls) == 0 && !(len(c.stmt.DistinctFields) == 0 && c.stmt.DistinctFields != nil) {
 		switch c.FillOption {
 		case influxql.NoFill:
 			return errors.New("fill(none) must be used with a function")
@@ -967,6 +976,21 @@ func (c *compiledStatement) validateFields() error {
 	return nil
 }
 
+// validate Auxiliary Fields for column store engine,eg: f1,first(f2) is not supported
+func (c *compiledStatement) validateCSAuxiliaryFields() error {
+	if !c.HasAuxiliaryFields || len(c.FunctionCalls) != 1 || !c.OnlySelectors {
+		return nil
+	}
+
+	callName := c.FunctionCalls[0].Name
+	switch callName {
+	case "first", "last", "max", "min", "percentile":
+		return fmt.Errorf("mixing column and %s(column) queries for column store engine is not supported", callName)
+	default:
+		return nil
+	}
+}
+
 // validateCondition verifies that all elements in the condition are appropriate.
 // For example, aggregate calls don't work in the condition and should throw an
 // error as an invalid expression.
@@ -989,7 +1013,7 @@ func (c *compiledStatement) validateCondition(expr influxql.Expr) error {
 				if promFunc := GetPromTimeFunction(expr.Name); promFunc == nil {
 					return fmt.Errorf("invalid promfunction call in condition: %s", expr)
 				}
-			} else {
+			} else if expr.Name != influxql.ElementAtName {
 				return fmt.Errorf("invalid function call in condition: %s", expr)
 			}
 		}
@@ -999,6 +1023,9 @@ func (c *compiledStatement) validateCondition(expr influxql.Expr) error {
 		switch expr.Name {
 		case "atan2", "pow":
 			nargs = 2
+		case influxql.ElementAtName:
+			nargs = 2
+
 		}
 
 		// Did we get the expected number of args?
@@ -1067,6 +1094,7 @@ func (c *compiledStatement) validateUnnestSource() error {
 func (c *compiledStatement) subquery(stmt *influxql.SelectStatement) error {
 	subquery := newCompiler(c.Options)
 	subquery.stmt = stmt
+	subquery.stmt.IsQueryTypeSQL = c.stmt.IsQueryTypeSQL
 	if err := subquery.preprocess(stmt); err != nil {
 		return err
 	}
@@ -1097,6 +1125,10 @@ func (c *compiledStatement) subquery(stmt *influxql.SelectStatement) error {
 		return fmt.Errorf("multi inConditions in subquery where clause err")
 	}
 	for _, in := range stmt.InConditons {
+		conds, ok := in.Stmt.Condition.(*influxql.BinaryExpr)
+		if ok {
+			in.TimeCond = conds
+		}
 		in.Stmt.OmitTime = true
 		st, _, err := Compile(in.Stmt, CompileOptions{})
 		if err != nil {
@@ -1276,6 +1308,11 @@ func (c *compiledStatement) Prepare(shardMapper ShardMapper, sopt SelectOptions)
 		return nil, fmt.Errorf("query across multiple storage engines is not supported")
 	}
 
+	if !c.stmt.Sources.HaveOnlyTSStore() {
+		if err = c.validateCSAuxiliaryFields(); err != nil {
+			return nil, err
+		}
+	}
 	// Rewrite wildcards, if any exist.
 	// TODO: batchEn := atomic.LoadInt32(&batchMapTypeEn) == 1
 	batchEn := true
@@ -1337,5 +1374,71 @@ func (c *compiledStatement) Prepare(shardMapper ShardMapper, sopt SelectOptions)
 
 	columns := stmt.ColumnNames()
 	opt.IncQuery, opt.LogQueryCurrId, opt.IterID = sopt.IncQuery, sopt.QueryID, sopt.IterID
+	// The conditions of the upper layer are not strict. The conditions of the layer are improved.
+	if IsOutOfTimeProtection(stmt, opt, c.TimeRange) {
+		return nil, fmt.Errorf("disabled the query because without specifying the time filter")
+	}
 	return NewPreparedStatement(stmt, &opt, shards, columns, sopt.MaxPointN, c.Options.Now), nil
+}
+
+func IsOutOfTimeProtection(stmt *influxql.SelectStatement, opt ProcessorOptions, timeRange influxql.TimeRange) bool {
+	if !TimeFilterProtection {
+		return false
+	}
+	if IsLastPerfQuery(stmt, opt) {
+		return false
+	}
+	if stmt.IsCreateStream {
+		return false
+	}
+	if stmt.Sources.HasSubQuery() {
+		return false
+	}
+	return timeRange.MinTimeNano() == influxql.MinTime && timeRange.MaxTimeNano() == influxql.MaxTime
+}
+
+func IsLastPerfQuery(stmt *influxql.SelectStatement, opt ProcessorOptions) bool {
+	if !stmt.IsLastQuery() {
+		return false
+	}
+	if opt.HintType != hybridqp.FullSeriesQuery {
+		return false
+	}
+	if opt.HasInterval() {
+		return false
+	}
+	if !opt.GroupByAllDims {
+		return false
+	}
+	if opt.Condition != nil {
+		v := NewConditionExprVisitor()
+		influxql.Walk(v, opt.Condition)
+		if v.hasField {
+			return false
+		}
+	}
+	return true
+}
+
+type ConditionExprVisitor struct {
+	hasField bool
+}
+
+func NewConditionExprVisitor() *ConditionExprVisitor {
+	return &ConditionExprVisitor{
+		hasField: false,
+	}
+}
+
+func (c *ConditionExprVisitor) Visit(n influxql.Node) influxql.Visitor {
+	if _, ok := n.(influxql.Expr); !ok {
+		return c
+	}
+
+	if ref, ok := n.(*influxql.VarRef); ok && ref.Type != influxql.Tag {
+		c.hasField = true
+		return nil
+	}
+
+	return c
 }

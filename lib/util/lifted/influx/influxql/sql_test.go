@@ -99,6 +99,7 @@ func init() {
 		"SHOW TAG VALUES WITH KEY = region WHERE host !~ /server0[12]/",                             // add int
 		"explain analyze select * from a where b>0",                                                 // add explain analyze
 		"explain select * from a where b>0",                                                         // add explain
+		"explain analyze with t1 as (select * from mst limit 10) select * from t1",                  // add explain analyze for cte
 		"SHOW FIELD KEY CARDINALITY",                                                                // add show field key cardinality
 		"SHOW TAG VALUES EXACT CARDINALITY WITH KEY = host WHERE region =~ /ca.*/",                  // add show tag values cardinality
 		"SHOW TAG KEY EXACT CARDINALITY",                                                            // add show tag key cardinality
@@ -127,7 +128,12 @@ func init() {
 		"select * from db where a>0 tz('UTC')",                       //add time zone
 		"drop measurement m1",                                        //drop measurement
 		"select * from (select * from t1),(select * from t2)",
-		"alter measurement tb1", //alter measurement
+		"select * from (select * from t1;select * from t2)",
+		"select * from ((select * from t1);(select * from t2))",
+		"select * from (select * from t1;select * from t2;)",
+		"alter measurement tb1",                 //alter measurement
+		"alter measurement m1 with shards AUTO", //alter measurement with default shards num
+		"alter measurement m1 with shards 2",    //alter measurement with shards num 2
 		"create measurement cpu with indextype text indexlist msg shardkey hostname type range",
 		"create measurement cpu with indextype text indexlist msg",
 		"create measurement cpu with indextype text indexlist msg text indexlist msg1,msg2",
@@ -139,7 +145,12 @@ func init() {
 		"create measurement XXX with enginetype = columnstore property",         // empty property = OK
 		"create measurement XXX with enginetype = columnstore property x=y",     // one property = OK
 		"create measurement XXX with enginetype = columnstore property x=y,y=z", // list of properties = OK
-		"create user xxxxx with password 'xxxx' with partition privileges",      // add partition privileges.
+		"create measurement mst0 (column4 float64,column1 string,column0 string,column3 float64,column2 int64) with enginetype = columnstore  shardkey column2,column3 type hash  primarykey column3 sortkey column0,column1",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with enginetype = columnstore indextype bloomfilter indexlist tag1",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with enginetype = columnstore indextype text indexlist tag11",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with enginetype = columnstore indextype timecluster(1m) minmax indexlist field111",
+		"CREATE MEASUREMENT mstbftest(clientip TAG, size FLOAT64, status INT64, request STRING) WITH ENGINETYPE = columnstore INDEXTYPE bloomfilter_universal(1.1) INDEXLIST size,request TYPE hash PRIMARYKEY clientip SORTKEY clientip",
+		"create user xxxxx with password 'xxxx' with partition privileges", // add partition privileges.
 		// select into
 		"select a into bd.rp.mst from mst",
 		//continuous query
@@ -246,17 +257,34 @@ func init() {
 		// select with parens
 		"(select * from m1)",
 
-		// result union/union all/union by name/union all by name result
+		// result union (distinct)/union all/union (distinct) by name/union all by name result
 		"select * from m1 union select * from m2",
+		"select * from m1 union distinct select * from m2",
 		"(select * from m1) union (select * from m2)",
+		"(select * from m1) union distinct (select * from m2)",
 		"((select * from m1)) union ((select * from m2))",
+		"((select * from m1)) union distinct ((select * from m2))",
 		"select * from m1 union all select * from m2",
 		"select * from m1 union by name select * from m2",
+		"select * from m1 union distinct by name select * from m2",
 		"select * from m1 union all by name select * from m2",
 		// cascade union
 		"select * from m1 union select * from m2 union select * from m3",
+		"select * from m1 union distinct select * from m2 union distinct select * from m3",
 		"select * from m1 union all by name select * from m2 union select * from m3",
+		"select * from m1 union all by name select * from m2 union distinct select * from m3",
 		"select * from m1 union all (select * from m2 union by name (select * from m3))",
+		"select * from m1 union all (select * from m2 union distinct by name (select * from m3))",
+
+		// distinct
+		"select distinct * from m1",
+		"select distinct f1 from m1",
+		"select distinct (f1) from m1",
+		"select distinct(f1) from m1",
+		"select distinct f1,f2 from m1",
+		"select distinct on(f1) f2 from m1",
+		"select distinct on(f1) * from m1",
+		"select count(distinct(value)) from (select value from table3)",
 
 		// select from cte union select
 		"with t1 as (select * from m1) select * from t1 union all select * from m2",
@@ -264,6 +292,39 @@ func init() {
 		// udtf
 		"with t1 as (select * from m1) select * from test(t1)",
 		"select * from test(t1,'{}')",
+
+		// create obs databases
+		"create database obs01 WITH store obs bucket 'css-obs-fs' endpoint 'obs.cn-north-7.ulanqab.huawei.com' basepath 'cjc_test' access_key 'ak123' secret_access_key 'sk123'",
+
+		// create resource
+		"CREATE RESOURCE \"openai_gpt4\" PROPERTIES ( 'type' = 'llm', 'llm.provider_type' = 'openai', 'llm.endpoint' = 'https://api.openai.com/v1/chat/completions', 'llm.model_name' = 'gpt-4')",
+
+		// show resources
+		"SHOW  RESOURCES",
+
+		// show resource
+		"SHOW  RESOURCE \"openai_gpt4\"",
+
+		// drop resource
+		"DROP  RESOURCE \"openai_gpt4\"",
+
+		// alter resource
+		"ALTER RESOURCE \"openai_gpt4\" PROPERTIES ( 'type' = 'llm', 'llm.provider_type' = 'openai', 'llm.endpoint' = 'https://api.openai.com/v1/chat/completions', 'llm.model_name' = 'gpt-4pro')",
+
+		// create task
+		"CREATE TASK \"export_db0\" PROPERTIES ( 'type' = 'export', 'db' = 'db0', 'format' = 'parquet', 'source' = 'select * from mst', 'split_unit' = '1h', 'delay' = '10m')",
+
+		// alter task
+		"ALTER TASK \"export_db0\" PROPERTIES ( 'type' = 'export', 'db' = 'db0', 'format' = 'parquet', 'source' = 'select * from mst', 'split_unit' = '1h', 'delay' = '10m')",
+
+		// show tasks
+		"SHOW TASKS PROPERTIES ('type' = 'export')",
+
+		// show task
+		"SHOW TASK \"export_db0\" PROPERTIES ('type' = 'export')",
+
+		// drop task
+		"DROP TASK \"export_db0\" PROPERTIES ('type' = 'export')",
 	}
 
 	benchCases = []string{
@@ -467,6 +528,12 @@ func TestSingleParser(t *testing.T) {
 		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = tsstore indextype field indexlist tag1",
 		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = tsstore indextype field indexlist tag11",
 		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = tsstore indextype text indexlist tag11",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype bloomfilter_universal() indexlist tag1",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype bloomfilter_universal indexlist tag1",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype bloomfilter_universal indexlist tag1,field1",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype bloomfilter_universal(0.1) indexlist tag1",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype bloomfilter_universal(0.1) indexlist tag1 minmax INDEXLIST field1",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype minmax INDEXLIST field1 bloomfilter_universal(0.1) indexlist tag1",
 		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype bloomfilter indexlist tag1 compact block",
 		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype bloomfilter indexlist tag1 compact row",
 		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype timecluster(1m) minmax indexlist field1",
@@ -515,8 +582,6 @@ func TestSingleParserError(t *testing.T) {
 			"syntax error: unexpected TAG, expecting ',' or ')'"},
 		{"create measurement mst0 (column4 float,column1 string,column0 string,column3 float,column2 int) with enginetype = columnstore  shardkey column2,column3 type hash  primarykey column3,column4,column0,column1 sortkey column2,column3,column4,column0,column1",
 			"expect FLOAT64, INT64, BOOL, STRING for column data type"},
-		{"create measurement mst0 (column4 float64,column1 string,column0 string,column3 float64,column2 int64) with enginetype = columnstore  shardkey column2,column3 type hash  primarykey column3,column4,column0,column1 sortkey column2,column3,column4,column0,column1",
-			"PrimaryKey should be left prefix of SortKey"},
 		{"show sortkey1 from mst",
 			"SHOW command error, only support PRIMARYKEY, SORTKEY, SHARDKEY, ENGINETYPE, INDEXES, SCHEMA, COMPACT"},
 		{"show index from mst",
@@ -527,10 +592,6 @@ func TestSingleParserError(t *testing.T) {
 			"Invalid index type for TSSTORE"},
 		{"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with enginetype = columnstore indextype field indexlist tag1",
 			"Invalid index type for COLUMNSTORE"},
-		{"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with enginetype = columnstore indextype bloomfilter indexlist tag11",
-			"Invalid indexlist"},
-		{"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with enginetype = columnstore indextype text indexlist tag11",
-			"Invalid indexlist"},
 		{"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with enginetype = columnstore indextype bloomfilter indexlist tag1 compact row0",
 			"expect ROW or BLOCK for COMPACT type"},
 		{"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with enginetype = columnstore indextype timecluster(1y)",
@@ -539,8 +600,6 @@ func TestSingleParserError(t *testing.T) {
 			"syntax error: unexpected $end, expecting INDEXLIST"},
 		{"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with enginetype = columnstore indextype timecluster(1m) minmax1 indexlist field1",
 			"Invalid index type for COLUMNSTORE"},
-		{"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with enginetype = columnstore indextype timecluster(1m) minmax indexlist field111",
-			"Invalid indexlist"},
 		{"create measurement mst0 (tag1 tag, field1 int64 field) with enginetype = columnstore shardkey tag1 shards -1 type hash",
 			"syntax error: unexpected SUB, expecting AUTO or INTEGER"},
 		{"create measurement mst0 (tag1 tag, field1 int64 field) with enginetype = columnstore shardkey tag1 shards auto1 type hash",
@@ -557,6 +616,8 @@ func TestSingleParserError(t *testing.T) {
 			"Not support to set num-of-shards for range sharding"},
 		{"create measurement mst0 (tag1 tag, field1 int64 field) with enginetype = tsstore shardkey tag1 shards auto type range",
 			"Not support to set num-of-shards for range sharding"},
+		{"CREATE MEASUREMENT mstbftest(clientip TAG, size FLOAT64, status INT64, request STRING) WITH ENGINETYPE = columnstore INDEXTYPE bloomfilter_universal(0) INDEXLIST size,request TYPE hash PRIMARYKEY clientip SORTKEY clientip",
+			"syntax error: unexpected INTEGER, expecting ')'"},
 		// empty list via two empty props are wrong
 		{"create measurement xxx with enginetype = columnstore property ,",
 			"syntax error: unexpected ','"},
@@ -586,12 +647,12 @@ func TestSingleParserError(t *testing.T) {
 			"syntax error: unexpected WITH"},
 		{"select * from (select * from m1,select * from m2)",
 			"syntax error: unexpected SELECT"},
-		{"select * from m1 UNION DISTINCT select * from m2",
-			"syntax error: unexpected IDENT, expecting SELECT or MATCH or GRAPH or '('"},
 		{"create stream x on select value from x",
 			"syntax error: unexpected ON, expecting INTO"},
 		{"select a from table1 where EXISTS (SELECT * FROM TABLE1) AND NOT EXISTS (SELECT * FROM TABLE1)",
 			"syntax error: unexpected EXISTS"},
+		{"alter measurement table1 with shards -2",
+			"syntax error: unexpected SUB, expecting AUTO or INTEGER"},
 	}
 
 	for _, c := range c {

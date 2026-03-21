@@ -49,6 +49,7 @@ const (
 	DefaultShardTier                = "warm"
 	DefaultForceBroadcastQuery      = false
 	DefaultRetentionPolicyLimit     = 100
+	DefaultTaskLimit                = 10
 )
 
 /*
@@ -163,6 +164,19 @@ func (c *TSSql) Corrector(cpuNum, cpuAllocRatio int) {
 		c.ContinuousQuery.MaxProcessCQNumber = maxProcessCQNumber
 	}
 	c.ShelfMode.Corrector(cpuNum)
+
+	if c.Coordinator.DatabaseNumLimit == 0 {
+		switch cpuNum {
+		case 2, 4:
+			c.Coordinator.DatabaseNumLimit = 16
+		case 8, 16:
+			c.Coordinator.DatabaseNumLimit = 32
+		case 32, 64:
+			c.Coordinator.DatabaseNumLimit = 64
+		default:
+			c.Coordinator.DatabaseNumLimit = 16
+		}
+	}
 }
 
 // Validate returns an error if the config is invalid.
@@ -208,6 +222,10 @@ func (c *TSSql) GetSpdy() *Spdy {
 
 func (c *TSSql) GetCommon() *Common {
 	return c.Common
+}
+
+func (c *TSSql) GetData() *Store {
+	return &c.Data
 }
 
 func (c *TSSql) ShowConfigs() map[string]interface{} {
@@ -257,8 +275,11 @@ type Coordinator struct {
 	QueryLimitIntervalTime   int             `toml:"query-limit-interval-time"`
 	QueryLimitLevel          int             `toml:"query-limit-level"`
 	RetentionPolicyLimit     int             `toml:"rp-limit"`
+	DatabaseNumLimit         int32           `toml:"db-limit"`
+	TaskNumLimit             int             `toml:"task-limit"`
 	ShardTier                string          `toml:"shard-tier"`
 	TimeRangeLimit           []toml.Duration `toml:"time-range-limit"`
+	MeasurementBlacklist     []string        `toml:"measurement-blacklist"`
 
 	// Maximum number of tag keys in a measurement
 	TagLimit   int `toml:"tag-limit"`
@@ -268,7 +289,18 @@ type Coordinator struct {
 	QueryTimeCompareEnabled bool `toml:"query-time-compare-enabled"`
 	ForceBroadcastQuery     bool `toml:"force-broadcast-query"`
 
-	HardWrite bool `toml:"hard-write"`
+	HardWrite  bool `toml:"hard-write"`
+	SmartQuery bool `toml:"smart-query"`
+}
+
+var CoordinatorConfig = NewCoordinator()
+
+func SetCoordinatorConfig(conf Coordinator) {
+	CoordinatorConfig = conf
+}
+
+func GetCoordinatorConfig() *Coordinator {
+	return &CoordinatorConfig
 }
 
 // NewCoordinator returns an instance of Config with defaults.
@@ -287,8 +319,10 @@ func NewCoordinator() Coordinator {
 		QueryLimitLevel:          DefaultQueryLimitLevel,
 		ShardTier:                DefaultShardTier,
 		RetentionPolicyLimit:     DefaultRetentionPolicyLimit,
+		TaskNumLimit:             DefaultTaskLimit,
 		ForceBroadcastQuery:      DefaultForceBroadcastQuery,
 		HardWrite:                false,
+		SmartQuery:               false,
 	}
 }
 
@@ -323,6 +357,8 @@ func (c *Coordinator) ShowConfigs() map[string]interface{} {
 		"coordinator.force-broadcast-query":       c.ForceBroadcastQuery,
 		"coordinator.shard-tier":                  c.ShardTier,
 		"coordinator.rp-limit":                    c.RetentionPolicyLimit,
+		"coordinator.db-limit":                    c.DatabaseNumLimit,
+		"coordinator.task-limit":                  c.TaskNumLimit,
 		"coordinator.time-range-limit":            c.TimeRangeLimit,
 		"coordinator.tag-limit":                   c.TagLimit,
 		"coordinator.field-limit":                 c.FieldLimit,

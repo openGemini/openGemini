@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -21,6 +22,8 @@ import (
 	"time"
 
 	"github.com/agiledragon/gomonkey/v2"
+	set "github.com/deckarep/golang-set/v2"
+	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/lib/config"
@@ -34,12 +37,17 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/smart_query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/runtime/protoimpl"
 )
+
+const oneDay = time.Hour * 24
 
 func init() {
 	VerifyNodeEn = false
@@ -84,6 +92,8 @@ func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
 		return c.HandleCreateSqlNode(w, msg)
 	case *message.ShowClusterRequest:
 		return c.HandleShowCluster(w, msg)
+	case *message.GetShardingPlanRequest:
+		return c.HandleGetShardingPlan(w, msg)
 	}
 	return nil
 }
@@ -166,6 +176,55 @@ func (c *RPCServer) HandleShowCluster(w spdy.Responser, msg *message.ShowCluster
 		Err:  "",
 	}
 	return w.Response(message.NewMetaMessage(message.ShowClusterResponseMessage, rsp), true)
+}
+
+func (c *RPCServer) HandleGetShardingPlan(w spdy.Responser, msg *message.GetShardingPlanRequest) error {
+	if msg.RpName == "rp0" {
+		rsp := &message.GetShardingPlanResponse{
+			Err: "test error",
+		}
+		return w.Response(message.NewMetaMessage(message.GetShardingPlanResponseMessage, rsp), true)
+	}
+
+	if msg.RpName == "rp1" {
+		err := errno.NewError(errno.MetaIsNotLeader)
+		rsp := &message.GetShardingPlanResponse{
+			ErrCode: err.Errno(),
+			Err:     err.Error(),
+		}
+		return w.Response(message.NewMetaMessage(message.GetShardingPlanResponseMessage, rsp), true)
+	}
+
+	if msg.RpName == "rp2" {
+		rsp := &message.GetShardingPlanResponse{}
+		return w.Response(message.NewMetaMessage(message.ShowClusterResponseMessage, rsp), true)
+	}
+
+	if msg.RpName == "rp3" {
+		plan := meta2.RPPTShardingPlan{
+			DB: "db0",
+			RP: "rp3",
+			Idxes: map[string][]int{
+				"mst0": {0, 1},
+			},
+		}
+		plans, err := plan.MarshalBinaryPlans()
+		if err != nil {
+			return err
+		}
+		rsp := &message.GetShardingPlanResponse{
+			Data: plans,
+		}
+		return w.Response(message.NewMetaMessage(message.GetShardingPlanResponseMessage, rsp), true)
+	}
+
+	// Create a mock sharding plan response
+	shardingPlan := []byte("mock_sharding_plan_data")
+	rsp := &message.GetShardingPlanResponse{
+		Data: shardingPlan,
+		Err:  "",
+	}
+	return w.Response(message.NewMetaMessage(message.GetShardingPlanResponseMessage, rsp), true)
 }
 
 var server = &RPCServer{}
@@ -491,7 +550,35 @@ func (s *MockRPCMessageSender) SendRPCMsg(currentServer int, msg *message.MetaMe
 		Shards:    []meta2.ShardInfo{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}}, EngineType: config.COLUMNSTORE,
 	}
 	s.RPI.ShardGroups = []meta2.ShardGroupInfo{sgInfo1}
-
+	if msg.Type() == message.GetShardingPlanRequestMessage {
+		data, ok := msg.Data().(*message.GetShardingPlanRequest)
+		if !ok {
+			return errors.New("message error")
+		}
+		if data.RpName == "rp1" {
+			return errors.New("test error")
+		}
+		if data.RpName == "rp2" {
+			plan := meta2.RPPTShardingPlan{
+				DB: "db0",
+				RP: "rp3",
+				Idxes: map[string][]int{
+					"mst0": {0, 1},
+				},
+			}
+			plans, err := plan.MarshalBinaryPlans()
+			if err != nil {
+				return err
+			}
+			rsp := &message.GetShardingPlanResponse{
+				Data: plans,
+			}
+			err = callback.Handle(message.NewMetaMessage(message.GetShardingPlanResponseMessage, rsp))
+			if err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -561,6 +648,79 @@ func TestClient_CreateShardGroup2(t *testing.T) {
 	_, err := c.CreateShardGroup("db0", "rp0", time.Now(), 0, config.COLUMNSTORE)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestClient_CreateShardGroup3(t *testing.T) {
+	config.SetAdaptiveShardEnabled(true)
+	defer config.SetAdaptiveShardEnabled(false)
+	ts := time.Now()
+	sgInfo1 := meta2.ShardGroupInfo{
+		ID:        1,
+		StartTime: ts,
+		EndTime:   time.Now().Add(time.Duration(360000000000)),
+		DeletedAt: time.Now(),
+		Shards:    []meta2.ShardInfo{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}}, EngineType: config.COLUMNSTORE,
+	}
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:              "db0",
+				ShardKey:          meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: make(map[string]*meta2.RetentionPolicyInfo),
+			},
+			},
+		},
+		changed:     make(chan chan struct{}, 1),
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
+	}
+
+	testCases := []struct {
+		name       string
+		policyName string
+		rpInfo     *meta2.RetentionPolicyInfo
+	}{
+		{
+			name:       "Create shard group for policy rp0",
+			policyName: "rp0",
+			rpInfo: &meta2.RetentionPolicyInfo{
+				Name:         "rp0",
+				Duration:     72 * time.Hour,
+				Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+				ShardGroups:  []meta2.ShardGroupInfo{sgInfo1}},
+		},
+		{
+			name:       "Create shard group for policy rp1",
+			policyName: "rp1",
+			rpInfo: &meta2.RetentionPolicyInfo{
+				Name:         "rp1",
+				Duration:     72 * time.Hour,
+				Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+				ShardGroups:  []meta2.ShardGroupInfo{sgInfo1}},
+		},
+		{
+			name:       "Create shard group for policy rp2",
+			policyName: "rp2",
+			rpInfo: &meta2.RetentionPolicyInfo{
+				Name:         "rp2",
+				Duration:     72 * time.Hour,
+				Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+				ShardGroups:  []meta2.ShardGroupInfo{sgInfo1}},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockSender := &MockRPCMessageSender{RPI: tc.rpInfo}
+			c.SendRPCMessage = mockSender
+			c.cacheData.Databases["db0"].RetentionPolicies[tc.policyName] = tc.rpInfo
+			_, err := c.CreateShardGroup("db0", tc.policyName, time.Now(), 0, config.COLUMNSTORE)
+			if err != nil {
+				t.Fatalf("Test '%s': CreateShardGroup failed unexpectedly, error: %v", tc.name, err)
+			}
+			<-c.changed
+		})
 	}
 }
 
@@ -1312,8 +1472,8 @@ func TestDBPTCtx_String(t *testing.T) {
 		}, nil},
 	}
 
-	exp := `DB:"db0" PtID:100 RpStats:<RpName:"default" ShardStats:<ShardID:101 ShardSize:102 SeriesCount:103 MaxTime:104 > > RpStats:<nil> `
-	require.Equal(t, exp, ctx.String())
+	exp := `DB:"db0" PtID:100 RpStats:{RpName:"default" ShardStats:{ShardID:101 ShardSize:102 SeriesCount:103 MaxTime:104}} RpStats:{}`
+	require.Equal(t, exp, strings.ReplaceAll(ctx.String(), "  ", " "))
 	ctx.DBPTStat = nil
 	require.Equal(t, "", ctx.String())
 }
@@ -1565,6 +1725,85 @@ func TestClient_ThermalShards(t *testing.T) {
 			end:   time.Hour,
 			want: map[uint64]struct{}{
 				1: {},
+				2: {},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Client{
+				cacheData: tt.fields.cacheData,
+				logger:    logger.NewLogger(errno.ModuleMetaClient),
+			}
+
+			result := c.ThermalShards("db0", tt.start, tt.end)
+			assert.Equal(t, result, tt.want)
+		})
+	}
+}
+
+func TestClient_ThermalShardsInStream(t *testing.T) {
+	type fields struct {
+		cacheData *meta2.Data
+	}
+
+	tests := []struct {
+		name   string
+		fields fields
+		start  time.Duration
+		end    time.Duration
+		want   map[uint64]struct{}
+	}{
+		{
+			name: "in streams",
+			fields: fields{
+				cacheData: &meta2.Data{
+					Databases: map[string]*meta2.DatabaseInfo{
+						"db0": {
+							RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+								"rp0": {
+									ShardGroupDuration: 24 * time.Hour,
+									ShardGroups: []meta2.ShardGroupInfo{
+										{DeletedAt: time.Now()}, // deleted
+										{EndTime: time.Now().Add(-49 * time.Hour), Shards: []meta2.ShardInfo{{ID: 3}}},
+										{EndTime: time.Now().Add(-25 * time.Hour), Shards: []meta2.ShardInfo{{ID: 1}}},
+										{EndTime: time.Now(), Shards: []meta2.ShardInfo{{ID: 2}}},
+									},
+								},
+							},
+						},
+					},
+					Streams: map[string]*meta2.StreamInfo{"stream_name1": {
+						SrcMst: &meta2.StreamMeasurementInfo{Database: "db0", RetentionPolicy: "rp0"},
+					}},
+				},
+			},
+			want: map[uint64]struct{}{
+				1: {},
+				2: {},
+			},
+		},
+		{
+			name: "no stream",
+			fields: fields{
+				cacheData: &meta2.Data{
+					Databases: map[string]*meta2.DatabaseInfo{
+						"db0": {
+							RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+								"rp0": {
+									ShardGroupDuration: 24 * time.Hour,
+									ShardGroups: []meta2.ShardGroupInfo{
+										{DeletedAt: time.Now()}, // deleted
+										{EndTime: time.Now().Add(-25 * time.Hour), Shards: []meta2.ShardInfo{{ID: 1}}},
+										{EndTime: time.Now(), Shards: []meta2.ShardInfo{{ID: 2}}},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: map[uint64]struct{}{
 				2: {},
 			},
 		},
@@ -2215,18 +2454,18 @@ func MocTestCacheData(dbName, logStreamName string) (*meta2.Data, error) {
 	}
 
 	t := time.Now().UTC()
-	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-time.Hour*24*3), 0, config.COLUMNSTORE, 0); err != nil {
+	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-oneDay*3), 0, config.COLUMNSTORE, 0, "", nil); err != nil {
 		return nil, err
 	}
 
-	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-time.Hour*24*2), 0, config.COLUMNSTORE, 0); err != nil {
+	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-oneDay*2), 0, config.COLUMNSTORE, 0, "", nil); err != nil {
 		return nil, err
 	}
 	rp, _ := data.RetentionPolicy(dbName, logStreamName)
 	rp.ShardGroupDuration = time.Hour * 24
 	rp.ShardGroups[1].DeletedAt = t.Add(-time.Hour * 24 * 1).Truncate(rp.ShardGroupDuration).UTC()
 
-	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-time.Hour*24*1), 0, config.COLUMNSTORE, 0); err != nil {
+	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-oneDay*1), 0, config.COLUMNSTORE, 0, "", nil); err != nil {
 		return nil, err
 	}
 
@@ -2296,18 +2535,18 @@ func MocTestCacheDataForExpired() (*meta2.Data, error) {
 	}
 
 	t := time.Now().UTC()
-	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-time.Hour*24*3), 0, config.COLUMNSTORE, 0); err != nil {
+	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-oneDay*24*3), 0, config.COLUMNSTORE, 0, "", nil); err != nil {
 		return nil, err
 	}
 
-	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-time.Hour*24*2), 0, config.COLUMNSTORE, 0); err != nil {
+	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-oneDay*2), 0, config.COLUMNSTORE, 0, "", nil); err != nil {
 		return nil, err
 	}
 	rp, _ := data.RetentionPolicy(dbName, logStreamName)
 	rp.ShardGroupDuration = time.Hour * 24
 	rp.ShardGroups[1].DeletedAt = t.Add(-time.Hour * 24 * 1).Truncate(rp.ShardGroupDuration).UTC()
 
-	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-time.Hour*24*1), 0, config.COLUMNSTORE, 0); err != nil {
+	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-oneDay*1), 0, config.COLUMNSTORE, 0, "", nil); err != nil {
 		return nil, err
 	}
 
@@ -2516,9 +2755,7 @@ func TestSnapshotV2_GetData(t *testing.T) {
 	}
 	typ := proto2.Command_CreateDatabaseCommand
 	cmd2 := &proto2.Command{Type: &typ}
-	if err := proto.SetExtension(cmd2, proto2.E_CreateDatabaseCommand_Command, cmd1); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd2, proto2.E_CreateDatabaseCommand_Command, cmd1)
 	strOps, _ := proto.Marshal(cmd2)
 	server.ops = append(server.ops, string(strOps))
 	connectedServer = nodeId
@@ -2578,7 +2815,7 @@ func TestCreateSqlNode(t *testing.T) {
 	}
 }
 
-var newPbFunc = map[proto2.Command_Type]func() (interface{}, *proto.ExtensionDesc){
+var newPbFunc = map[proto2.Command_Type]func() (interface{}, *protoimpl.ExtensionInfo){
 	proto2.Command_CreateDatabaseCommand:            newCreateDatabasePb,
 	proto2.Command_DropDatabaseCommand:              newDropDatabasePb,
 	proto2.Command_CreateRetentionPolicyCommand:     newCreateRetentionPolicyPb,
@@ -2642,9 +2879,15 @@ var newPbFunc = map[proto2.Command_Type]func() (interface{}, *proto.ExtensionDes
 	proto2.Command_UpdateIndexInfoTierCommand:       newUpdateIndexInfoTierPb,
 	proto2.Command_ReplaceMergeShardsCommand:        newReplaceMergeShardsPb,
 	proto2.Command_RecoverMetaData:                  newRecoverMetaData,
+	proto2.Command_AlterShardsNumCommand:            newAlterShardsNum,
+	proto2.Command_CreateResourceCommand:            newCreateResource,
+	proto2.Command_DropResourceCommand:              newDropResource,
+	proto2.Command_CreateTaskCommand:                newCreateTask,
+	proto2.Command_DropTaskCommand:                  newDropTask,
+	proto2.Command_UpdateShardingPlanCommand:        newUpdateShardingPlan,
 }
 
-func newCreateDatabasePb() (interface{}, *proto.ExtensionDesc) {
+func newCreateDatabasePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.CreateDatabaseCommand{
 		Name:           proto.String("db0"),
 		EnableTagArray: proto.Bool(false),
@@ -2652,19 +2895,19 @@ func newCreateDatabasePb() (interface{}, *proto.ExtensionDesc) {
 	}, proto2.E_CreateDatabaseCommand_Command
 }
 
-func newDropDatabasePb() (interface{}, *proto.ExtensionDesc) {
+func newDropDatabasePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.DropDatabaseCommand{
 		Name: proto.String("db0"),
 	}, proto2.E_DropDatabaseCommand_Command
 }
 
-func newCreateRetentionPolicyPb() (interface{}, *proto.ExtensionDesc) {
+func newCreateRetentionPolicyPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.CreateRetentionPolicyCommand{
 		Database: proto.String("db0"),
 	}, proto2.E_CreateRetentionPolicyCommand_Command
 }
 
-func newDropRetentionPolicyPb() (interface{}, *proto.ExtensionDesc) {
+func newDropRetentionPolicyPb() (interface{}, *protoimpl.ExtensionInfo) {
 	rpName := "rp0"
 	return &proto2.DropRetentionPolicyCommand{
 		Database: proto.String("db0"),
@@ -2672,7 +2915,7 @@ func newDropRetentionPolicyPb() (interface{}, *proto.ExtensionDesc) {
 	}, proto2.E_DropRetentionPolicyCommand_Command
 }
 
-func newSetDefaultRetentionPolicyPb() (interface{}, *proto.ExtensionDesc) {
+func newSetDefaultRetentionPolicyPb() (interface{}, *protoimpl.ExtensionInfo) {
 	rpName := "rp0"
 	return &proto2.SetDefaultRetentionPolicyCommand{
 		Database: proto.String("db0"),
@@ -2680,7 +2923,7 @@ func newSetDefaultRetentionPolicyPb() (interface{}, *proto.ExtensionDesc) {
 	}, proto2.E_SetDefaultRetentionPolicyCommand_Command
 }
 
-func newUpdateRetentionPolicyPb() (interface{}, *proto.ExtensionDesc) {
+func newUpdateRetentionPolicyPb() (interface{}, *protoimpl.ExtensionInfo) {
 	rpName := "rp0"
 	newName := "rp1"
 	return &proto2.UpdateRetentionPolicyCommand{
@@ -2690,61 +2933,61 @@ func newUpdateRetentionPolicyPb() (interface{}, *proto.ExtensionDesc) {
 	}, proto2.E_UpdateRetentionPolicyCommand_Command
 }
 
-func newCreateShardGroupPb() (interface{}, *proto.ExtensionDesc) {
+func newCreateShardGroupPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.CreateShardGroupCommand{
 		Database: proto.String("db0"),
 	}, proto2.E_CreateShardGroupCommand_Command
 }
 
-func newDeleteShardGroupPb() (interface{}, *proto.ExtensionDesc) {
+func newDeleteShardGroupPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.DeleteShardGroupCommand{
 		Database: proto.String("db0"),
 	}, proto2.E_DeleteShardGroupCommand_Command
 }
 
-func newCreateSubscriptionPb() (interface{}, *proto.ExtensionDesc) {
+func newCreateSubscriptionPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.CreateSubscriptionCommand{
 		Database: proto.String("db0"),
 	}, proto2.E_CreateSubscriptionCommand_Command
 }
 
-func newDropSubscriptionPb() (interface{}, *proto.ExtensionDesc) {
+func newDropSubscriptionPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.DropSubscriptionCommand{
 		Database: proto.String("db0"),
 	}, proto2.E_DropSubscriptionCommand_Command
 }
 
-func newCreateUserPb() (interface{}, *proto.ExtensionDesc) {
+func newCreateUserPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.CreateUserCommand{
 		Name: proto.String("use0"),
 	}, proto2.E_CreateUserCommand_Command
 }
 
-func newDropUserPb() (interface{}, *proto.ExtensionDesc) {
+func newDropUserPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.DropUserCommand{
 		Name: proto.String("use0"),
 	}, proto2.E_DropUserCommand_Command
 }
 
-func newUpdateUserPb() (interface{}, *proto.ExtensionDesc) {
+func newUpdateUserPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.UpdateUserCommand{
 		Name: proto.String("use0"),
 	}, proto2.E_UpdateUserCommand_Command
 }
 
-func newSetPrivilegePb() (interface{}, *proto.ExtensionDesc) {
+func newSetPrivilegePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.SetPrivilegeCommand{
 		Username: proto.String("use0"),
 	}, proto2.E_SetPrivilegeCommand_Command
 }
 
-func newSetAdminPrivilegePb() (interface{}, *proto.ExtensionDesc) {
+func newSetAdminPrivilegePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.SetAdminPrivilegeCommand{
 		Username: proto.String("use0"),
 	}, proto2.E_SetAdminPrivilegeCommand_Command
 }
 
-func newSetDataPb() (interface{}, *proto.ExtensionDesc) {
+func newSetDataPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.SetDataCommand{
 		Data: &proto2.Data{
 			Databases: []*proto2.DatabaseInfo{{ReplicaN: proto.Int64(1), Name: proto.String("ds"), RetentionPolicies: []*proto2.RetentionPolicyInfo{{Name: proto.String("ds"), DownSamplePolicyInfo: &proto2.DownSamplePolicyInfo{}}}}},
@@ -2752,11 +2995,11 @@ func newSetDataPb() (interface{}, *proto.ExtensionDesc) {
 	}, proto2.E_SetDataCommand_Command
 }
 
-func newCreateMetaNodePb() (interface{}, *proto.ExtensionDesc) {
+func newCreateMetaNodePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.CreateMetaNodeCommand{}, proto2.E_CreateMetaNodeCommand_Command
 }
 
-func newSetMetaNodePb() (interface{}, *proto.ExtensionDesc) {
+func newSetMetaNodePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.SetMetaNodeCommand{
 		HTTPAddr: proto.String("127.0.0.1:8091"),
 		RPCAddr:  proto.String("127.0.0.1:8092"),
@@ -2764,91 +3007,111 @@ func newSetMetaNodePb() (interface{}, *proto.ExtensionDesc) {
 	}, proto2.E_SetMetaNodeCommand_Command
 }
 
-func newDeleteMetaNodePb() (interface{}, *proto.ExtensionDesc) {
+func newDeleteMetaNodePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.DeleteMetaNodeCommand{}, proto2.E_DeleteMetaNodeCommand_Command
 }
 
-func newCreateDataNodePb() (interface{}, *proto.ExtensionDesc) {
+func newCreateDataNodePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.CreateDataNodeCommand{}, proto2.E_CreateDataNodeCommand_Command
 }
 
-func newCreateSqlNodePb() (interface{}, *proto.ExtensionDesc) {
+func newCreateSqlNodePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.CreateSqlNodeCommand{}, proto2.E_CreateSqlNodeCommand_Command
 }
 
-func newUpdateSqlNodeStatusPb() (interface{}, *proto.ExtensionDesc) {
+func newUpdateSqlNodeStatusPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.UpdateSqlNodeStatusCommand{}, proto2.E_UpdateSqlNodeStatusCommand_Command
 }
 
-func newUpdateMetaNodeStatusPb() (interface{}, *proto.ExtensionDesc) {
+func newUpdateMetaNodeStatusPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.UpdateMetaNodeStatusCommand{}, proto2.E_UpdateMetaNodeStatusCommand_Command
 }
 
-func newDeleteDataNodePb() (interface{}, *proto.ExtensionDesc) {
+func newDeleteDataNodePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.DeleteDataNodeCommand{}, proto2.E_DeleteDataNodeCommand_Command
 }
 
-func newMarkDatabaseDeletePb() (interface{}, *proto.ExtensionDesc) {
+func newMarkDatabaseDeletePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.MarkDatabaseDeleteCommand{}, proto2.E_MarkDatabaseDeleteCommand_Command
 }
 
-func newMarkRetentionPolicyDeletePb() (interface{}, *proto.ExtensionDesc) {
+func newMarkRetentionPolicyDeletePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.MarkRetentionPolicyDeleteCommand{}, proto2.E_MarkRetentionPolicyDeleteCommand_Command
 }
 
-func newCreateMeasurementPb() (interface{}, *proto.ExtensionDesc) {
+func newCreateMeasurementPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.CreateMeasurementCommand{}, proto2.E_CreateMeasurementCommand_Command
 }
 
-func newReShardingPb() (interface{}, *proto.ExtensionDesc) {
+func newReShardingPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.ReShardingCommand{}, proto2.E_ReShardingCommand_Command
 }
 
-func newUpdateSchemaPb() (interface{}, *proto.ExtensionDesc) {
+func newUpdateSchemaPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.UpdateSchemaCommand{}, proto2.E_UpdateSchemaCommand_Command
 }
 
-func newAlterShardKeyPb() (interface{}, *proto.ExtensionDesc) {
+func newAlterShardKeyPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.AlterShardKeyCmd{}, proto2.E_AlterShardKeyCmd_Command
 }
 
-func newPruneGroupsPb() (interface{}, *proto.ExtensionDesc) {
+func newPruneGroupsPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.PruneGroupsCommand{}, proto2.E_PruneGroupsCommand_Command
 }
 
-func newMarkMeasurementDeletePb() (interface{}, *proto.ExtensionDesc) {
+func newMarkMeasurementDeletePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.MarkMeasurementDeleteCommand{}, proto2.E_MarkMeasurementDeleteCommand_Command
 }
 
-func newDropMeasurementPb() (interface{}, *proto.ExtensionDesc) {
+func newDropMeasurementPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.DropMeasurementCommand{}, proto2.E_DropMeasurementCommand_Command
 }
 
-func newDeleteIndexGroupPb() (interface{}, *proto.ExtensionDesc) {
+func newDeleteIndexGroupPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.DeleteIndexGroupCommand{}, proto2.E_DeleteIndexGroupCommand_Command
 }
 
-func newUpdateShardInfoTierPb() (interface{}, *proto.ExtensionDesc) {
+func newUpdateShardInfoTierPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.UpdateShardInfoTierCommand{}, proto2.E_UpdateShardInfoTierCommand_Command
 }
 
-func newUpdateIndexInfoTierPb() (interface{}, *proto.ExtensionDesc) {
+func newUpdateIndexInfoTierPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.UpdateIndexInfoTierCommand{}, proto2.E_UpdateIndexInfoTierCommand_Command
 }
 
-func newReplaceMergeShardsPb() (interface{}, *proto.ExtensionDesc) {
+func newReplaceMergeShardsPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.ReplaceMergeShardsCommand{}, proto2.E_ReplaceMergeShardsCommand_Command
 }
 
-func newRecoverMetaData() (interface{}, *proto.ExtensionDesc) {
+func newRecoverMetaData() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.RecoverMetaDataCommand{}, proto2.E_RecoverMetaDataCommand_Command
 }
 
-func newUpdateNodeStatusPb() (interface{}, *proto.ExtensionDesc) {
+func newAlterShardsNum() (interface{}, *protoimpl.ExtensionInfo) {
+	return &proto2.AlterShardsNumCommand{}, proto2.E_AlterShardsNumCommand_Command
+}
+
+func newCreateResource() (interface{}, *protoimpl.ExtensionInfo) {
+	return &proto2.CreateResourceCommand{}, proto2.E_CreateResourceCommand_Command
+}
+
+func newDropResource() (interface{}, *protoimpl.ExtensionInfo) {
+	return &proto2.DropResourceCommand{}, proto2.E_DropResourceCommand_Command
+}
+
+func newCreateTask() (interface{}, *protoimpl.ExtensionInfo) {
+	return &proto2.CreateTaskCommand{}, proto2.E_CreateTaskCommand_Command
+}
+
+func newDropTask() (interface{}, *protoimpl.ExtensionInfo) {
+	return &proto2.DropTaskCommand{}, proto2.E_DropTaskCommand_Command
+}
+
+func newUpdateNodeStatusPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.UpdateNodeStatusCommand{}, proto2.E_UpdateNodeStatusCommand_Command
 }
 
-func newCreateEventPb() (interface{}, *proto.ExtensionDesc) {
+func newCreateEventPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.CreateEventCommand{
 		EventInfo: &proto2.MigrateEventInfo{
 			Pti: &proto2.DbPt{},
@@ -2856,19 +3119,19 @@ func newCreateEventPb() (interface{}, *proto.ExtensionDesc) {
 	}, proto2.E_CreateEventCommand_Command
 }
 
-func newUpdateEventPb() (interface{}, *proto.ExtensionDesc) {
+func newUpdateEventPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.UpdateEventCommand{}, proto2.E_UpdateEventCommand_Command
 }
 
-func newUpdatePtInfoPb() (interface{}, *proto.ExtensionDesc) {
+func newUpdatePtInfoPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.UpdatePtInfoCommand{}, proto2.E_UpdatePtInfoCommand_Command
 }
 
-func newRemoveEventPb() (interface{}, *proto.ExtensionDesc) {
+func newRemoveEventPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.RemoveEventCommand{}, proto2.E_RemoveEventCommand_Command
 }
 
-func newCreateDownSamplePb() (interface{}, *proto.ExtensionDesc) {
+func newCreateDownSamplePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.CreateDownSamplePolicyCommand{
 		Database: proto.String("ds"),
 		Name:     proto.String("ds"),
@@ -2880,93 +3143,95 @@ func newCreateDownSamplePb() (interface{}, *proto.ExtensionDesc) {
 	}, proto2.E_CreateDownSamplePolicyCommand_Command
 }
 
-func newDropDownSamplePb() (interface{}, *proto.ExtensionDesc) {
+func newDropDownSamplePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.DropDownSamplePolicyCommand{
 		Database: proto.String("ds"),
 		RpName:   proto.String("ds"),
 	}, proto2.E_DropDownSamplePolicyCommand_Command
 }
 
-func newCreateDbPtViewPb() (interface{}, *proto.ExtensionDesc) {
+func newCreateDbPtViewPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.CreateDbPtViewCommand{}, proto2.E_CreateDbPtViewCommand_Command
 }
 
-func newUpdateShardDownSampleInfoPb() (interface{}, *proto.ExtensionDesc) {
+func newUpdateShardDownSampleInfoPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.UpdateShardDownSampleInfoCommand{}, proto2.E_UpdateShardDownSampleInfoCommand_Command
 }
 
-func newMarkTakeoverPb() (interface{}, *proto.ExtensionDesc) {
+func newMarkTakeoverPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.MarkTakeoverCommand{}, proto2.E_MarkTakeoverCommand_Command
 }
 
-func newMarkBalancerPb() (interface{}, *proto.ExtensionDesc) {
+func newMarkBalancerPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.MarkBalancerCommand{}, proto2.E_MarkBalancerCommand_Command
 }
 
-func newCreateStreamPb() (interface{}, *proto.ExtensionDesc) {
+func newCreateStreamPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.CreateStreamCommand{
 		StreamInfo: &proto2.StreamInfo{},
 	}, proto2.E_CreateStreamCommand_Command
 }
 
-func newDropStreamPb() (interface{}, *proto.ExtensionDesc) {
+func newDropStreamPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.DropStreamCommand{}, proto2.E_DropStreamCommand_Command
 }
 
-func newVerifyDataNodePb() (interface{}, *proto.ExtensionDesc) {
+func newVerifyDataNodePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.VerifyDataNodeCommand{}, proto2.E_VerifyDataNodeCommand_Command
 }
 
-func newExpandGroupsPb() (interface{}, *proto.ExtensionDesc) {
+func newExpandGroupsPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.ExpandGroupsCommand{}, proto2.E_ExpandGroupsCommand_Command
 }
 
-func newUpdatePtVersionPb() (interface{}, *proto.ExtensionDesc) {
+func newUpdatePtVersionPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.UpdatePtVersionCommand{}, proto2.E_UpdatePtVersionCommand_Command
 }
 
-func newRegisterQueryIDOffsetPb() (interface{}, *proto.ExtensionDesc) {
+func newRegisterQueryIDOffsetPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.RegisterQueryIDOffsetCommand{}, proto2.E_RegisterQueryIDOffsetCommand_Command
 }
 
-func newCreateContinuousQueryPb() (interface{}, *proto.ExtensionDesc) {
+func newCreateContinuousQueryPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.CreateContinuousQueryCommand{}, proto2.E_CreateContinuousQueryCommand_Command
 }
 
-func newContinuousQueryReportPb() (interface{}, *proto.ExtensionDesc) {
+func newContinuousQueryReportPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.ContinuousQueryReportCommand{}, proto2.E_ContinuousQueryReportCommand_Command
 }
 
-func newDropContinuousQueryPb() (interface{}, *proto.ExtensionDesc) {
+func newDropContinuousQueryPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.DropContinuousQueryCommand{}, proto2.E_DropContinuousQueryCommand_Command
 }
 
-func newNotifyCQLeaseChangedPb() (interface{}, *proto.ExtensionDesc) {
+func newNotifyCQLeaseChangedPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.NotifyCQLeaseChangedCommand{}, proto2.E_NotifyCQLeaseChangedCommand_Command
 }
 
-func newSetNodeSegregateStatusPb() (interface{}, *proto.ExtensionDesc) {
+func newSetNodeSegregateStatusPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.SetNodeSegregateStatusCommand{}, proto2.E_SetNodeSegregateStatusCommand_Command
 }
 
-func newRemoveNodePb() (interface{}, *proto.ExtensionDesc) {
+func newRemoveNodePb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.RemoveNodeCommand{}, proto2.E_RemoveNodeCommand_Command
 }
 
-func newUpdateReplicationPb() (interface{}, *proto.ExtensionDesc) {
+func newUpdateReplicationPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.UpdateReplicationCommand{}, proto2.E_UpdateReplicationCommand_Command
 }
 
-func newUpdateMeasurementPb() (interface{}, *proto.ExtensionDesc) {
+func newUpdateMeasurementPb() (interface{}, *protoimpl.ExtensionInfo) {
 	return &proto2.UpdateMeasurementCommand{}, proto2.E_UpdateMeasurementCommand_Command
+}
+
+func newUpdateShardingPlan() (interface{}, *protoimpl.ExtensionInfo) {
+	return &proto2.UpdateShardingPlanCommand{}, proto2.E_UpdateShardingPlanCommand_Command
 }
 
 func BuildCmd(t proto2.Command_Type) *proto2.Command {
 	cmd1, ext := newPbFunc[t]()
 	cmd2 := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(cmd2, ext, cmd1); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd2, ext, cmd1)
 	return cmd2
 }
 
@@ -2996,9 +3261,7 @@ func TestMetaClientApplyPanic(t *testing.T) {
 	cmd1 := &proto2.CreateEventCommand{}
 	typ := proto2.Command_CreateEventCommand
 	cmd := &proto2.Command{Type: &typ}
-	if err := proto.SetExtension(cmd, proto2.E_CreateEventCommand_Command, cmd1); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_CreateEventCommand_Command, cmd1)
 	var wg sync.WaitGroup
 	wg.Add(len(applyFunc))
 	for _, v := range applyFunc {
@@ -3181,9 +3444,7 @@ func TestCreateDatabase(t *testing.T) {
 	}
 	typ := proto2.Command_CreateDatabaseCommand
 	cmd := &proto2.Command{Type: &typ}
-	if err := proto.SetExtension(cmd, proto2.E_CreateDatabaseCommand_Command, cmd1); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_CreateDatabaseCommand_Command, cmd1)
 	err := applyFunc[proto2.Command_CreateDatabaseCommand](c, cmd)
 	if !errno.Equal(err, errno.ApplyFuncErr) {
 		t.Fatal("TestCreateDatabase1 err")
@@ -3196,9 +3457,7 @@ func TestCreateDatabase(t *testing.T) {
 		RetentionPolicy: &proto2.RetentionPolicyInfo{},
 	}
 	cmd = &proto2.Command{Type: &typ}
-	if err := proto.SetExtension(cmd, proto2.E_CreateDatabaseCommand_Command, cmd2); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_CreateDatabaseCommand_Command, cmd2)
 	err = applyFunc[proto2.Command_CreateDatabaseCommand](c, cmd)
 	if !errno.Equal(err, errno.ApplyFuncErr) {
 		t.Fatal("TestCreateDatabase2 err")
@@ -3220,9 +3479,7 @@ func TestDropDatabase(t *testing.T) {
 	}
 	typ := proto2.Command_DropDatabaseCommand
 	cmd := &proto2.Command{Type: &typ}
-	if err := proto.SetExtension(cmd, proto2.E_DropDatabaseCommand_Command, cmd1); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_DropDatabaseCommand_Command, cmd1)
 	err := applyFunc[proto2.Command_DropDatabaseCommand](c, cmd)
 	require.Equal(t, err, nil)
 }
@@ -3242,9 +3499,7 @@ func Test_CreateMeasurement(t *testing.T) {
 	}
 	typ := proto2.Command_CreateMeasurementCommand
 	cmd := &proto2.Command{Type: &typ}
-	if err := proto.SetExtension(cmd, proto2.E_CreateMeasurementCommand_Command, cmd1); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_CreateMeasurementCommand_Command, cmd1)
 	err := applyFunc[proto2.Command_CreateMeasurementCommand](c, cmd)
 	if !errno.Equal(err, errno.ApplyFuncErr) {
 		t.Fatal("TestCreateDatabase2 err")
@@ -3273,9 +3528,7 @@ func TestUpdateSchema(t *testing.T) {
 	}
 	typ := proto2.Command_UpdateSchemaCommand
 	cmd := &proto2.Command{Type: &typ}
-	if err := proto.SetExtension(cmd, proto2.E_UpdateSchemaCommand_Command, cmd1); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_UpdateSchemaCommand_Command, cmd1)
 	err := applyFunc[proto2.Command_UpdateSchemaCommand](c, cmd)
 	require.Equal(t, err, nil)
 	cmd2 := &proto2.UpdateSchemaCommand{
@@ -3285,9 +3538,7 @@ func TestUpdateSchema(t *testing.T) {
 		FieldToCreate: []*proto2.FieldSchema{{FieldName: proto.String("col3"), FieldType: proto.Int32(2)}},
 	}
 	cmd = &proto2.Command{Type: &typ}
-	if err := proto.SetExtension(cmd, proto2.E_UpdateSchemaCommand_Command, cmd2); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_UpdateSchemaCommand_Command, cmd2)
 	err = applyFunc[proto2.Command_UpdateSchemaCommand](c, cmd)
 	require.Equal(t, err, nil)
 }
@@ -3306,9 +3557,7 @@ func TestCreateDBPtView(t *testing.T) {
 	}
 	typ := proto2.Command_CreateDbPtViewCommand
 	cmd := &proto2.Command{Type: &typ}
-	if err := proto.SetExtension(cmd, proto2.E_CreateDbPtViewCommand_Command, cmd1); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_CreateDbPtViewCommand_Command, cmd1)
 	err := applyFunc[proto2.Command_CreateDbPtViewCommand](c, cmd)
 	require.Equal(t, err, nil)
 }
@@ -3327,9 +3576,7 @@ func TestCreateDataNode(t *testing.T) {
 	}
 	typ := proto2.Command_CreateDataNodeCommand
 	cmd := &proto2.Command{Type: &typ}
-	if err := proto.SetExtension(cmd, proto2.E_CreateDataNodeCommand_Command, cmd1); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_CreateDataNodeCommand_Command, cmd1)
 	err := applyFunc[proto2.Command_CreateDataNodeCommand](c, cmd)
 	require.Equal(t, err, nil)
 }
@@ -3347,9 +3594,7 @@ func Test_CreateSqlNode(t *testing.T) {
 	}
 	typ := proto2.Command_CreateSqlNodeCommand
 	cmd := &proto2.Command{Type: &typ}
-	if err := proto.SetExtension(cmd, proto2.E_CreateSqlNodeCommand_Command, cmd1); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_CreateSqlNodeCommand_Command, cmd1)
 	err := applyFunc[proto2.Command_CreateSqlNodeCommand](c, cmd)
 	require.Equal(t, err, nil)
 }
@@ -3372,7 +3617,7 @@ func TestOpenClientAtSql(t *testing.T) {
 		closing:       make(chan struct{}),
 	}
 	c.Close()
-	c.Open()
+	c.Open(SQL)
 	time.Sleep(time.Second)
 }
 
@@ -3500,6 +3745,51 @@ func TestClient_ShowClusterWithCondition(t *testing.T) {
 	ret2 := (clusterRows[1].Values[0][4]).(uint64)
 	assert.Equal(t, ret1, "unavailable")
 	assert.Equal(t, ret2, uint64(123))
+}
+
+func TestClient_GetShardingPlan(t *testing.T) {
+	address := "127.0.0.1:8491"
+	nodeId := 1
+	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
+
+	// Server
+	var err error
+	rrcServer, err := startServer(address)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	defer rrcServer.Stop()
+	time.Sleep(time.Second)
+
+	mc := Client{
+		logger:         logger.NewLogger(errno.ModuleUnknown),
+		SendRPCMessage: &RPCMessageSender{},
+		metaServers:    []string{"127.0.0.1:8491", "127.0.0.1:8492"},
+		cacheData:      &meta2.Data{},
+		closing:        make(chan struct{}),
+	}
+	connectedServer = nodeId
+
+	// Test case 1: Normal case
+	_, err = mc.GetShardingPlan("db0", "rp0")
+	assert.ErrorContains(t, err, "test error")
+
+	_, err = mc.GetShardingPlan("db0", "rp1")
+	assert.ErrorContains(t, err, "no node available")
+
+	_, err = mc.GetShardingPlan("db0", "rp2")
+	assert.ErrorContains(t, err, "data is not a GetShardingPlanResponse")
+
+	plan, err := mc.GetShardingPlan("db0", "rp3")
+	assert.NoError(t, err)
+	assert.Equal(t, []int32{0, 1}, plan.GetIdxes()["mst0"].GetIdx())
+
+	_, err = mc.GetShardingPlan("db0", "rp4")
+	assert.ErrorContains(t, err, "parse invalid wire-format data")
+
+	close(mc.closing)
+	_, err = mc.GetShardingPlan("db0", "rp4")
+	assert.ErrorContains(t, err, "GetShardingPlan fail")
 }
 
 func TestClient_ShowCluster_Err(t *testing.T) {
@@ -4426,4 +4716,1602 @@ func TestClient_GetMergeShardsList(t *testing.T) {
 
 	mergeShards := c.GetMergeShardsList()
 	assert.Equal(t, len(mergeShards), 2)
+}
+
+func TestClient_AlterShardsNum(t *testing.T) {
+	ts := time.Now()
+	sgInfo1 := meta2.ShardGroupInfo{
+		ID:        1,
+		StartTime: ts,
+		EndTime:   time.Now().Add(time.Duration(3600)),
+		DeletedAt: time.Time{},
+		Shards: []meta2.ShardInfo{
+			{ID: 1, Owners: []uint32{0}},
+			{ID: 2, Owners: []uint32{1}},
+			{ID: 3, Owners: []uint32{2}},
+			{ID: 4, Owners: []uint32{3}},
+		},
+		EngineType: config.TSSTORE,
+	}
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ReplicaN: 2,
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:         "rp0",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}, "rp0": {Name: "rp0"}},
+						ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+						MstVersions: map[string]meta2.MeasurementVer{
+							"mst0": {NameWithVersion: "mst0", Version: 1},
+						},
+					},
+				}},
+			},
+			PtView: map[string]meta2.DBPtInfos{
+				"db0": []meta2.PtInfo{
+					{PtId: 0, Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online, RGID: 0},
+					{PtId: 1, Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Online, RGID: 0},
+					{PtId: 2, Owner: meta2.PtOwner{NodeID: 2}, Status: meta2.Online, RGID: 1},
+					{PtId: 3, Owner: meta2.PtOwner{NodeID: 3}, Status: meta2.Online, RGID: 1},
+				},
+			},
+			ReplicaGroups: map[string][]meta2.ReplicaGroup{
+				"db0": {
+					{ID: 0, MasterPtID: 0, Peers: []meta2.Peer{{ID: 1, PtRole: meta2.Slave}}},
+					{ID: 1, MasterPtID: 2, Peers: []meta2.Peer{{ID: 3, PtRole: meta2.Slave}}},
+				},
+			},
+		},
+		metaServers:    []string{"127.0.0.1"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient),
+		SendRPCMessage: &RPCMessageSender{},
+	}
+
+	err := c.AlterShardsNum("db0", "rp0", "mst0", 1)
+	require.EqualError(t, err, "execute command timeout")
+
+	err = c.AlterShardsNum("db0", "rp0", "mst0", -2)
+	require.EqualError(t, err, "not valid numOfShards: -2")
+}
+
+func TestMetaClient_Show(t *testing.T) {
+	convey.Convey("TestMetaClient_ShowShards", t, func() {
+		cacheData := &meta2.Data{}
+		c := &Client{
+			cacheData: cacheData,
+		}
+		exp := models.Rows{
+			&models.Row{
+				Columns: []string{
+					"id", "database", "retention_policy", "shard_group", "start_time", "end_time", "expiry_time", "owners", "tier", "downSample_level"},
+				Name: "db0",
+				Values: [][]interface{}{
+					{1, "db0", "rp0", 1, "2025-01-01T00:00:00Z", "2025-01-02T00:00:00Z", "2025-01-03T00:00:00Z", []uint64{1}, "hot", 1},
+				},
+			},
+		}
+		patch1 := gomonkey.ApplyMethod(cacheData, "ShowShards",
+			func(data *meta2.Data) models.Rows {
+				return exp
+			})
+		defer patch1.Reset()
+		res := c.ShowShards("", "", "")
+		convey.So(res, convey.ShouldResemble, exp)
+	})
+
+	convey.Convey("TestMetaClient_ShowShardGroups", t, func() {
+		cacheData := &meta2.Data{}
+		c := &Client{
+			cacheData: cacheData,
+		}
+		exp := models.Rows{
+			&models.Row{
+				Columns: []string{"id", "database", "retention_policy", "start_time", "end_time", "expiry_time"},
+				Name:    "shard groups",
+				Values: [][]interface{}{
+					{1, "db0", "rp0", "2025-01-01T00:00:00Z", "2025-01-02T00:00:00Z", "2025-01-03T00:00:00Z"},
+				},
+			},
+		}
+		patch1 := gomonkey.ApplyMethod(cacheData, "ShowShardGroups",
+			func(data *meta2.Data) models.Rows {
+				return exp
+			})
+		defer patch1.Reset()
+		res := c.ShowShardGroups()
+		convey.So(res, convey.ShouldResemble, exp)
+	})
+
+	convey.Convey("TestMetaClient_ShowSubscriptions", t, func() {
+		cacheData := &meta2.Data{}
+		c := &Client{
+			cacheData: cacheData,
+		}
+		exp := models.Rows{
+			&models.Row{
+				Columns: []string{"retention_policy", "name", "mode", "destinations"},
+				Name:    "db0",
+				Values: [][]interface{}{
+					{"rp0", "test", "test_mode", []string{"destinations"}},
+				},
+			},
+		}
+		patch1 := gomonkey.ApplyMethod(cacheData, "ShowSubscriptions",
+			func(data *meta2.Data) models.Rows {
+				return exp
+			})
+		defer patch1.Reset()
+		res := c.ShowSubscriptions()
+		convey.So(res, convey.ShouldResemble, exp)
+	})
+
+	convey.Convey("TestMetaClient_ShowRetentionPolicies", t, func() {
+		cacheData := &meta2.Data{}
+		c := &Client{
+			cacheData: cacheData,
+		}
+		exp := models.Rows{
+			&models.Row{
+				Columns: []string{
+					"name", "duration", "shardGroupDuration", "hot duration", "warm duration", "index duration", "replicaN", "default"},
+				Values: [][]interface{}{
+					{"autogen", "0s", "168h", "0s", "48h", "168h", 1, true},
+				},
+			},
+		}
+		patch1 := gomonkey.ApplyMethod(cacheData, "ShowRetentionPolicies",
+			func(data *meta2.Data, database string) (models.Rows, error) {
+				return exp, nil
+			})
+		defer patch1.Reset()
+		res, err := c.ShowRetentionPolicies("db0")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(res, convey.ShouldResemble, exp)
+	})
+
+	convey.Convey("FieldKeys", t, func() {
+		client := &Client{}
+		patch1 := gomonkey.ApplyPrivateMethod(client, "matchMeasurements",
+			func(c *Client, database string, ms influxql.Measurements) (map[string]*meta2.MeasurementInfo, error) {
+				mstInfo := &meta2.MeasurementInfo{
+					Schema: &meta2.CleanSchema{
+						"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+						"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+					},
+				}
+				mstInfo.SetoriginName("testmst")
+				return map[string]*meta2.MeasurementInfo{
+					"testmst_0000": mstInfo,
+				}, nil
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+
+		exp := map[string]map[string]int32{
+			"testmst": {
+				"field_key_1": influx.Field_Type_Int,
+			},
+		}
+		fieldKeys, err := client.FieldKeys("db0", influxql.Measurements{})
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(fieldKeys, convey.ShouldResemble, exp)
+
+	})
+
+	convey.Convey("FieldKeys_Err", t, func() {
+		client := &Client{}
+		patch1 := gomonkey.ApplyPrivateMethod(client, "matchMeasurements",
+			func(c *Client, database string, ms influxql.Measurements) (map[string]*meta2.MeasurementInfo, error) {
+				return nil, fmt.Errorf("mock error")
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+
+		_, err := client.FieldKeys("db0", influxql.Measurements{})
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("TagKeys", t, func() {
+		client := &Client{
+			cacheData: &meta2.Data{
+				Databases: map[string]*meta2.DatabaseInfo{
+					"db0": {
+						RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+							"rp0": {
+								Measurements: map[string]*meta2.MeasurementInfo{
+									"testmst_0000": {
+										Name: "testmst_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+								},
+							},
+						},
+					},
+				}},
+		}
+
+		exp := map[string]set.Set[string]{
+			"testmst_0000": set.NewSet("tag_key_1"),
+		}
+		tagKeys := client.TagKeys("db0")
+		convey.So(tagKeys, convey.ShouldResemble, exp)
+	})
+
+	convey.Convey("GetMeasurements", t, func() {
+		client := &Client{
+			cacheData: &meta2.Data{
+				Databases: map[string]*meta2.DatabaseInfo{
+					"db0": {
+						RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+							"rp0": {
+								Measurements: map[string]*meta2.MeasurementInfo{
+									"testmst_0000": {
+										Name: "testmst_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+									"testmst1_0000": {
+										Name: "testmst1_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+								},
+								MstVersions: map[string]meta2.MeasurementVer{
+									"testmst": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst_0000",
+									},
+									"testmst1": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst1_0000",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		msts, err := client.GetMeasurements(&influxql.Measurement{
+			Database:        "db0",
+			RetentionPolicy: "rp0",
+			Name:            "testmst",
+		})
+		exp := []*meta2.MeasurementInfo{
+			{
+				Name: "testmst_0000",
+				Schema: &meta2.CleanSchema{
+					"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+					"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+				},
+			},
+		}
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(msts, convey.ShouldResemble, exp)
+	})
+
+	convey.Convey("GetMeasurements_Regex", t, func() {
+		client := &Client{
+			cacheData: &meta2.Data{
+				Databases: map[string]*meta2.DatabaseInfo{
+					"db0": {
+						RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+							"rp0": {
+								Measurements: map[string]*meta2.MeasurementInfo{
+									"testmst_0000": {
+										Name: "testmst_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+									"testmst1_0000": {
+										Name: "testmst1_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+								},
+								MstVersions: map[string]meta2.MeasurementVer{
+									"testmst": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst_0000",
+									},
+									"testmst1": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst1_0000",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		reg, _ := regexp.Compile("testmst*")
+		msts, err := client.GetMeasurements(&influxql.Measurement{
+			Database:        "db0",
+			RetentionPolicy: "rp0",
+			Regex:           &influxql.RegexLiteral{Val: reg},
+		})
+		exp := []*meta2.MeasurementInfo{
+			{
+				Name: "testmst_0000",
+				Schema: &meta2.CleanSchema{
+					"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+					"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+				},
+			},
+			{
+				Name: "testmst1_0000",
+				Schema: &meta2.CleanSchema{
+					"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+					"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+				},
+			},
+		}
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(msts, convey.ShouldResemble, exp)
+	})
+
+	convey.Convey("GetAllMst", t, func() {
+		client := &Client{
+			cacheData: &meta2.Data{
+				Databases: map[string]*meta2.DatabaseInfo{
+					"db0": {
+						RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+							"rp0": {
+								Measurements: map[string]*meta2.MeasurementInfo{
+									"testmst_0000": {
+										Name: "testmst_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+									"testmst1_0000": {
+										Name: "testmst1_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+								},
+								MstVersions: map[string]meta2.MeasurementVer{
+									"testmst": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst_0000",
+									},
+									"testmst1": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst1_0000",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		msts := client.GetAllMst("db0")
+		sort.Strings(msts)
+		exp := []string{"testmst_0000", "testmst1_0000"}
+		sort.Strings(exp)
+		convey.So(msts, convey.ShouldResemble, exp)
+	})
+
+	convey.Convey("GetShardDurationInfo", t, func() {
+		client := &Client{
+			cacheData: &meta2.Data{
+				Databases: map[string]*meta2.DatabaseInfo{
+					"db0": {
+						RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+							"rp0": {
+								Measurements: map[string]*meta2.MeasurementInfo{
+									"testmst_0000": {
+										Name: "testmst_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+									"testmst1_0000": {
+										Name: "testmst1_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+								},
+								MstVersions: map[string]meta2.MeasurementVer{
+									"testmst": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst_0000",
+									},
+									"testmst1": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst1_0000",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		exp := &meta2.ShardDurationResponse{DataIndex: 1, Durations: make([]meta2.ShardDurationInfo, 0)}
+		patch1 := gomonkey.ApplyMethod(client, "RetryGetShardAuxInfo",
+			func(c *Client, cmd *proto2.Command) ([]byte, error) {
+				return exp.MarshalBinary()
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+		res, err := client.GetShardDurationInfo(1)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(res, convey.ShouldResemble, exp)
+	})
+
+	convey.Convey("GetShardDurationInfo_Err_1", t, func() {
+		client := &Client{
+			cacheData: &meta2.Data{
+				Databases: map[string]*meta2.DatabaseInfo{
+					"db0": {
+						RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+							"rp0": {
+								Measurements: map[string]*meta2.MeasurementInfo{
+									"testmst_0000": {
+										Name: "testmst_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+									"testmst1_0000": {
+										Name: "testmst1_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+								},
+								MstVersions: map[string]meta2.MeasurementVer{
+									"testmst": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst_0000",
+									},
+									"testmst1": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst1_0000",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		patch1 := gomonkey.ApplyMethod(client, "RetryGetShardAuxInfo",
+			func(c *Client, cmd *proto2.Command) ([]byte, error) {
+				return nil, fmt.Errorf("mock err")
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+		res, err := client.GetShardDurationInfo(1)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(res, convey.ShouldBeNil)
+	})
+
+	convey.Convey("GetShardDurationInfo_Err_2", t, func() {
+		client := &Client{
+			cacheData: &meta2.Data{
+				Databases: map[string]*meta2.DatabaseInfo{
+					"db0": {
+						RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+							"rp0": {
+								Measurements: map[string]*meta2.MeasurementInfo{
+									"testmst_0000": {
+										Name: "testmst_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+									"testmst1_0000": {
+										Name: "testmst1_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+								},
+								MstVersions: map[string]meta2.MeasurementVer{
+									"testmst": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst_0000",
+									},
+									"testmst1": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst1_0000",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		patch1 := gomonkey.ApplyMethod(client, "RetryGetShardAuxInfo",
+			func(c *Client, cmd *proto2.Command) ([]byte, error) {
+				return []byte{1, 2, 3, 4}, nil
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+		res, err := client.GetShardDurationInfo(1)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(res, convey.ShouldBeNil)
+	})
+
+	convey.Convey("GetShardRangeInfo", t, func() {
+		client := &Client{
+			cacheData: &meta2.Data{
+				Databases: map[string]*meta2.DatabaseInfo{
+					"db0": {
+						RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+							"rp0": {
+								Measurements: map[string]*meta2.MeasurementInfo{
+									"testmst_0000": {
+										Name: "testmst_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+									"testmst1_0000": {
+										Name: "testmst1_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+								},
+								MstVersions: map[string]meta2.MeasurementVer{
+									"testmst": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst_0000",
+									},
+									"testmst1": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst1_0000",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		exp := &meta2.ShardTimeRangeInfo{
+			TimeRange:     meta2.TimeRangeInfo{},
+			OwnerIndex:    meta2.IndexDescriptor{},
+			ShardDuration: &meta2.ShardDurationInfo{},
+			ShardType:     "test",
+		}
+		patch1 := gomonkey.ApplyMethod(client, "RetryGetShardAuxInfo",
+			func(c *Client, cmd *proto2.Command) ([]byte, error) {
+				return exp.MarshalBinary()
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+		res, err := client.GetShardRangeInfo("db0", "rp0", 1)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(res, convey.ShouldResemble, exp)
+	})
+
+	convey.Convey("GetShardRangeInfo_Err_1", t, func() {
+		client := &Client{
+			cacheData: &meta2.Data{
+				Databases: map[string]*meta2.DatabaseInfo{
+					"db0": {
+						RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+							"rp0": {
+								Measurements: map[string]*meta2.MeasurementInfo{
+									"testmst_0000": {
+										Name: "testmst_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+									"testmst1_0000": {
+										Name: "testmst1_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+								},
+								MstVersions: map[string]meta2.MeasurementVer{
+									"testmst": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst_0000",
+									},
+									"testmst1": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst1_0000",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		patch1 := gomonkey.ApplyMethod(client, "RetryGetShardAuxInfo",
+			func(c *Client, cmd *proto2.Command) ([]byte, error) {
+				return nil, fmt.Errorf("mock error")
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+		res, err := client.GetShardRangeInfo("db0", "rp0", 1)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(res, convey.ShouldBeNil)
+	})
+
+	convey.Convey("GetShardRangeInfo_Err_2", t, func() {
+		client := &Client{
+			cacheData: &meta2.Data{
+				Databases: map[string]*meta2.DatabaseInfo{
+					"db0": {
+						RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+							"rp0": {
+								Measurements: map[string]*meta2.MeasurementInfo{
+									"testmst_0000": {
+										Name: "testmst_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+									"testmst1_0000": {
+										Name: "testmst1_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+								},
+								MstVersions: map[string]meta2.MeasurementVer{
+									"testmst": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst_0000",
+									},
+									"testmst1": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst1_0000",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		patch1 := gomonkey.ApplyMethod(client, "RetryGetShardAuxInfo",
+			func(c *Client, cmd *proto2.Command) ([]byte, error) {
+				return []byte{1, 2, 3, 4}, nil
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+		res, err := client.GetShardRangeInfo("db0", "rp0", 1)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(res, convey.ShouldBeNil)
+	})
+
+	convey.Convey("getShardInfo", t, func() {
+		mockRpc := &MockSendRpcMsg{}
+		client := &Client{
+			cacheData: &meta2.Data{
+				Databases: map[string]*meta2.DatabaseInfo{
+					"db0": {
+						RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+							"rp0": {
+								Measurements: map[string]*meta2.MeasurementInfo{
+									"testmst_0000": {
+										Name: "testmst_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+									"testmst1_0000": {
+										Name: "testmst1_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+								},
+								MstVersions: map[string]meta2.MeasurementVer{
+									"testmst": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst_0000",
+									},
+									"testmst1": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst1_0000",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			SendRPCMessage: mockRpc,
+		}
+		exp := []byte{1, 2, 3, 4}
+		patch1 := gomonkey.ApplyMethod(mockRpc, "SendRPCMsg",
+			func(c *MockSendRpcMsg, currentServer int, msg *message.MetaMessage, callback transport.Callback) error {
+				cb := callback.(*GetShardInfoCallback)
+				cb.Data = []byte{1, 2, 3, 4}
+				return nil
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+		cmdT := proto2.Command_TimeRangeCommand
+		cmd := &proto2.Command{Type: &cmdT}
+		res, err := client.getShardInfo(1, cmd)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(res, convey.ShouldResemble, exp)
+	})
+
+	convey.Convey("getShardInfo_Err_1", t, func() {
+		mockRpc := &MockSendRpcMsg{}
+		client := &Client{
+			cacheData: &meta2.Data{
+				Databases: map[string]*meta2.DatabaseInfo{
+					"db0": {
+						RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+							"rp0": {
+								Measurements: map[string]*meta2.MeasurementInfo{
+									"testmst_0000": {
+										Name: "testmst_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+									"testmst1_0000": {
+										Name: "testmst1_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+								},
+								MstVersions: map[string]meta2.MeasurementVer{
+									"testmst": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst_0000",
+									},
+									"testmst1": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst1_0000",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			SendRPCMessage: mockRpc,
+		}
+		patch1 := gomonkey.ApplyMethod(mockRpc, "SendRPCMsg",
+			func(c *MockSendRpcMsg, currentServer int, msg *message.MetaMessage, callback transport.Callback) error {
+				cb := callback.(*GetShardInfoCallback)
+				cb.Data = []byte{1, 2, 3, 4}
+				return nil
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+
+		res, err := client.getShardInfo(1, &proto2.Command{})
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(res, convey.ShouldBeNil)
+	})
+
+	convey.Convey("getShardInfo_Err_2", t, func() {
+		mockRpc := &MockSendRpcMsg{}
+		client := &Client{
+			cacheData: &meta2.Data{
+				Databases: map[string]*meta2.DatabaseInfo{
+					"db0": {
+						RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+							"rp0": {
+								Measurements: map[string]*meta2.MeasurementInfo{
+									"testmst_0000": {
+										Name: "testmst_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+									"testmst1_0000": {
+										Name: "testmst1_0000",
+										Schema: &meta2.CleanSchema{
+											"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+											"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+										},
+									},
+								},
+								MstVersions: map[string]meta2.MeasurementVer{
+									"testmst": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst_0000",
+									},
+									"testmst1": meta2.MeasurementVer{
+										Version:         0,
+										NameWithVersion: "testmst1_0000",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			SendRPCMessage: mockRpc,
+		}
+		patch1 := gomonkey.ApplyMethod(mockRpc, "SendRPCMsg",
+			func(c *MockSendRpcMsg, currentServer int, msg *message.MetaMessage, callback transport.Callback) error {
+				cb := callback.(*GetShardInfoCallback)
+				cb.Data = []byte{1, 2, 3, 4}
+				return fmt.Errorf("mock error")
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+		cmdT := proto2.Command_TimeRangeCommand
+		cmd := &proto2.Command{Type: &cmdT}
+		res, err := client.getShardInfo(1, cmd)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(res, convey.ShouldBeNil)
+	})
+}
+
+func TestMetaClient_Exec(t *testing.T) {
+	convey.Convey("AlterShardKey", t, func() {
+		c := &Client{}
+		patch1 := gomonkey.ApplyPrivateMethod(c, "retryUntilExec",
+			func(c *Client, typ proto2.Command_Type, desc *protoimpl.ExtensionInfo, value interface{}) error {
+				return nil
+			})
+		patch2 := gomonkey.ApplyMethod(c, "Measurement",
+			func(c *Client, database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
+				return &meta2.MeasurementInfo{}, nil
+			})
+		defer func() {
+			patch1.Reset()
+			patch2.Reset()
+		}()
+		err := c.AlterShardKey("db0", "rp0", "mst", &meta2.ShardKeyInfo{})
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("AlterShardKey_Err", t, func() {
+		c := &Client{}
+		patch1 := gomonkey.ApplyPrivateMethod(c, "retryUntilExec",
+			func(c *Client, typ proto2.Command_Type, desc *protoimpl.ExtensionInfo, value interface{}) error {
+				return nil
+			})
+		patch2 := gomonkey.ApplyMethod(c, "Measurement",
+			func(c *Client, database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
+				return nil, fmt.Errorf("mock error")
+			})
+		defer func() {
+			patch1.Reset()
+			patch2.Reset()
+		}()
+		err := c.AlterShardKey("db0", "rp0", "mst", &meta2.ShardKeyInfo{})
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("UpdateSchema", t, func() {
+		c := &Client{}
+		patch1 := gomonkey.ApplyPrivateMethod(c, "retryUntilExec",
+			func(c *Client, typ proto2.Command_Type, desc *protoimpl.ExtensionInfo, value interface{}) error {
+				return nil
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+		err := c.UpdateSchema("db0", "rp0", "mst", []*proto2.FieldSchema{})
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("Schema", t, func() {
+		c := &Client{}
+		patch1 := gomonkey.ApplyMethod(c, "Measurement",
+			func(c *Client, database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
+				return &meta2.MeasurementInfo{
+					Schema: &meta2.CleanSchema{
+						"tag_key_1":   meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+						"field_key_1": meta2.SchemaVal{Typ: influx.Field_Type_Float},
+					},
+				}, nil
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+		field, dim, err := c.Schema("db0", "rp0", "mst")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(field, convey.ShouldResemble, map[string]int32{"field_key_1": influx.Field_Type_Float})
+		convey.So(dim, convey.ShouldResemble, map[string]struct{}{"tag_key_1": {}})
+	})
+
+	convey.Convey("Schema_Err", t, func() {
+		c := &Client{}
+		patch1 := gomonkey.ApplyMethod(c, "Measurement",
+			func(c *Client, database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
+				return nil, fmt.Errorf("mock error")
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+		_, _, err := c.Schema("db0", "rp0", "mst")
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("DeleteDataNode", t, func() {
+		c := &Client{}
+		patch1 := gomonkey.ApplyPrivateMethod(c, "retryUntilExec",
+			func(c *Client, typ proto2.Command_Type, desc *protoimpl.ExtensionInfo, value interface{}) error {
+				return nil
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+		err := c.DeleteDataNode(1)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("Ping", t, func() {
+		c := &Client{
+			SendRPCMessage: &MockSendRpcMsg{},
+		}
+		patch1 := gomonkey.ApplyPrivateMethod(c, "SendRPCMsg", func(c *Client, role Role) {})
+		defer func() {
+			patch1.Reset()
+		}()
+
+		err := c.Ping(true)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+type MockSendRpcMsg struct {
+}
+
+func (m *MockSendRpcMsg) SendRPCMsg(currentServer int, msg *message.MetaMessage, callback transport.Callback) error {
+	return nil
+}
+
+func TestMetaClientCreateDatabaseShardMap(t *testing.T) {
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:         "rp0",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+						ShardGroups: []meta2.ShardGroupInfo{
+							{DeletedAt: time.Now().Add(-time.Hour)},
+							{EndTime: time.Now().Add(-2 * 24 * time.Hour)},
+							{EndTime: time.Now().Add(12 * time.Hour), Shards: []meta2.ShardInfo{{ID: 2}, {ID: 3}}},
+						},
+					},
+				}},
+			},
+		},
+		metaServers:    []string{"127.0.0.1"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient),
+		SendRPCMessage: &RPCMessageSender{},
+	}
+	r := c.StatisticDatabaseShards()
+	assert.Equal(t, "shard_count", r[0].Name)
+	assert.Equal(t, "db0", r[0].Tags["database"])
+	assert.Equal(t, int64(2), r[0].Values["Count"])
+}
+
+func TestMetaClient_ResourceManager(t *testing.T) {
+	convey.Convey("CreateResource", t, func() {
+		defer initEnv()()
+		cacheData := &meta2.Data{Resources: map[string]*meta2.ResourceInfo{}}
+		c := &Client{
+			cacheData:      cacheData,
+			metaServers:    []string{"127.0.0.1"},
+			logger:         logger.NewLogger(errno.ModuleMetaClient),
+			SendRPCMessage: &RPCMessageSender{},
+		}
+		patch1 := gomonkey.ApplyPrivateMethod(c, "retryUntilExec",
+			func(typ proto2.Command_Type, desc *protoimpl.ExtensionInfo, value interface{}) error {
+				return nil
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+		err := c.CreateResource("gemini", map[string]string{"type": "llm"})
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("CreateResource_with_ResourceExists", t, func() {
+		defer initEnv()()
+		cacheData := &meta2.Data{Resources: map[string]*meta2.ResourceInfo{
+			"gemini": {Properties: map[string]string{"type": "llm"}},
+		}}
+		c := &Client{
+			cacheData:      cacheData,
+			metaServers:    []string{"127.0.0.1"},
+			logger:         logger.NewLogger(errno.ModuleMetaClient),
+			SendRPCMessage: &RPCMessageSender{},
+		}
+		err := c.CreateResource("gemini", map[string]string{"type": "llm"})
+		convey.So(err, convey.ShouldBeError, errno.NewError(errno.ResourceExists, "gemini"))
+	})
+
+	convey.Convey("AlterResource", t, func() {
+		defer initEnv()()
+		cacheData := &meta2.Data{Resources: map[string]*meta2.ResourceInfo{
+			"gemini": {Name: "gemini", Properties: map[string]string{"type": "llm"}},
+		}}
+		c := &Client{
+			cacheData:      cacheData,
+			metaServers:    []string{"127.0.0.1"},
+			logger:         logger.NewLogger(errno.ModuleMetaClient),
+			SendRPCMessage: &RPCMessageSender{},
+		}
+		patch1 := gomonkey.ApplyPrivateMethod(c, "retryUntilExec",
+			func(typ proto2.Command_Type, desc *protoimpl.ExtensionInfo, value interface{}) error {
+				return nil
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+		err := c.AlterResource("gemini", map[string]string{"type": "obs"})
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("AlterResource_with_ResourceNotFound", t, func() {
+		defer initEnv()()
+		cacheData := &meta2.Data{Resources: map[string]*meta2.ResourceInfo{}}
+		c := &Client{
+			cacheData:      cacheData,
+			metaServers:    []string{"127.0.0.1"},
+			logger:         logger.NewLogger(errno.ModuleMetaClient),
+			SendRPCMessage: &RPCMessageSender{},
+		}
+		err := c.AlterResource("gemini", map[string]string{"type": "obs"})
+		convey.So(err, convey.ShouldBeError, errno.NewError(errno.ResourceNotFound, "gemini"))
+	})
+
+	convey.Convey("GetResources", t, func() {
+		cacheData := &meta2.Data{Resources: map[string]*meta2.ResourceInfo{
+			"gemini": {Name: "gemini", Properties: map[string]string{"type": "llm"}},
+		}}
+		c := &Client{
+			cacheData: cacheData,
+		}
+		res := c.GetResources()
+		convey.So(res, convey.ShouldResemble, []string{"gemini"})
+	})
+
+	convey.Convey("DropResource", t, func() {
+		defer initEnv()()
+		cacheData := &meta2.Data{Resources: map[string]*meta2.ResourceInfo{
+			"gemini": {Name: "gemini", Properties: map[string]string{"type": "llm"}},
+		}}
+		c := &Client{
+			cacheData:      cacheData,
+			metaServers:    []string{"127.0.0.1"},
+			logger:         logger.NewLogger(errno.ModuleMetaClient),
+			SendRPCMessage: &RPCMessageSender{},
+		}
+		patch1 := gomonkey.ApplyPrivateMethod(c, "retryUntilExec",
+			func(typ proto2.Command_Type, desc *protoimpl.ExtensionInfo, value interface{}) error {
+				return nil
+			})
+		defer func() {
+			patch1.Reset()
+		}()
+		err := c.DropResource("gemini")
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("applyCreateResource", t, func() {
+		patch := gomonkey.ApplyFunc(meta2.ApplyCreateResource, func(data *meta2.Data, cmd *proto2.Command) error {
+			return fmt.Errorf("invalid resource")
+		})
+		defer patch.Reset()
+		mc := &Client{cacheData: &meta2.Data{}}
+		err := applyCreateResource(mc, nil)
+		convey.So(err, convey.ShouldBeError, errno.NewError(errno.ApplyFuncErr, "applyCreateResource", "invalid resource"))
+	})
+
+	convey.Convey("applyDropResource", t, func() {
+		patch := gomonkey.ApplyFunc(meta2.ApplyDropResource, func(data *meta2.Data, cmd *proto2.Command) error {
+			return fmt.Errorf("invalid resource")
+		})
+		defer patch.Reset()
+		mc := &Client{cacheData: &meta2.Data{}}
+		err := applyDropResource(mc, nil)
+		convey.So(err, convey.ShouldBeError, errno.NewError(errno.ApplyFuncErr, "applyDropResource", "invalid resource"))
+	})
+
+	convey.Convey("GetResource_With_NotFound", t, func() {
+		mc := &Client{cacheData: &meta2.Data{}}
+		patch := gomonkey.ApplyMethod(mc, "Resource", func(mc *Client, name string) (*meta2.ResourceInfo, bool) {
+			return nil, false
+		})
+		defer patch.Reset()
+		_, ok := mc.GetResource("gemini")
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+
+	convey.Convey("GetResource_With_Exists", t, func() {
+		mc := &Client{cacheData: &meta2.Data{}}
+		patch := gomonkey.ApplyMethod(mc, "Resource", func(mc *Client, name string) (*meta2.ResourceInfo, bool) {
+			return &meta2.ResourceInfo{Properties: map[string]string{"type": "llm"}}, true
+		})
+		defer patch.Reset()
+		_, ok := mc.GetResource("gemini")
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+}
+
+func TestClient_TaskOperations(t *testing.T) {
+	convey.Convey("CreateTask", t, func() {
+		defer initEnv()()
+		cacheData := &meta2.Data{TaskGroups: map[string]*meta2.TaskGroup{}}
+		c := &Client{
+			cacheData:      cacheData,
+			metaServers:    []string{"127.0.0.1"},
+			logger:         logger.NewLogger(errno.ModuleMetaClient),
+			SendRPCMessage: &RPCMessageSender{},
+		}
+		patch := gomonkey.ApplyPrivateMethod(c, "retryUntilExec",
+			func(_ proto2.Command_Type, _ *protoimpl.ExtensionInfo, _ interface{}) error {
+				return nil
+			})
+		defer func() {
+			patch.Reset()
+		}()
+		err := c.CreateTask("task1", influxql.TaskExport, map[string]string{"db": "testDB"})
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("AlterTask", t, func() {
+		defer initEnv()()
+		tasks := []struct {
+			ID         uint64
+			Name       string
+			Type       string
+			Properties map[string]string
+		}{
+			{
+				Name: "task1",
+				Type: "EXPORT",
+				Properties: map[string]string{
+					"db": "testDB",
+				},
+			},
+		}
+		cacheData := createTaskCacheData(tasks)
+		c := &Client{
+			cacheData:      cacheData,
+			metaServers:    []string{"127.0.0.1"},
+			logger:         logger.NewLogger(errno.ModuleMetaClient),
+			SendRPCMessage: &RPCMessageSender{},
+		}
+		patch := gomonkey.ApplyPrivateMethod(c, "retryUntilExec",
+			func(_ proto2.Command_Type, _ *protoimpl.ExtensionInfo, _ interface{}) error {
+				return nil
+			})
+		defer func() {
+			patch.Reset()
+		}()
+		err := c.AlterTask("task1", influxql.TaskExport, map[string]string{"db": "testDB"})
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("AlterTask_with_TaskNotFound", t, func() {
+		defer initEnv()()
+		cacheData := &meta2.Data{TaskGroups: map[string]*meta2.TaskGroup{}}
+		c := &Client{
+			cacheData:      cacheData,
+			metaServers:    []string{"127.0.0.1"},
+			logger:         logger.NewLogger(errno.ModuleMetaClient),
+			SendRPCMessage: &RPCMessageSender{},
+		}
+		err := c.AlterTask("task1", influxql.TaskExport, map[string]string{"db": "testDB"})
+		convey.So(err, convey.ShouldBeError, errno.NewError(errno.TaskNotFound, "task1", influxql.TaskExport))
+	})
+
+	convey.Convey("GetTask", t, func() {
+		tasks := []struct {
+			ID         uint64
+			Name       string
+			Type       string
+			Properties map[string]string
+		}{
+			{
+				Name: "task1",
+				Type: "EXPORT",
+				Properties: map[string]string{
+					"db": "testDB",
+				},
+			},
+		}
+		cacheData := createTaskCacheData(tasks)
+		c := &Client{
+			cacheData: cacheData,
+		}
+		props, ok := c.GetTask("task1", influxql.TaskExport)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(props, convey.ShouldResemble, map[string]string{"db": "testDB"})
+	})
+
+	convey.Convey("GetTask_with_NotFound", t, func() {
+		cacheData := &meta2.Data{TaskGroups: map[string]*meta2.TaskGroup{}}
+		c := &Client{
+			cacheData: cacheData,
+		}
+		props, ok := c.GetTask("task1", influxql.TaskExport)
+		convey.So(ok, convey.ShouldBeFalse)
+		convey.So(props, convey.ShouldBeNil)
+	})
+
+	convey.Convey("GetTasks", t, func() {
+		tasks := []struct {
+			ID         uint64
+			Name       string
+			Type       string
+			Properties map[string]string
+		}{
+			{
+				Name: "task1",
+				Type: "EXPORT",
+				Properties: map[string]string{
+					"db": "testDB1",
+				},
+			},
+			{
+				Name: "task2",
+				Type: "EXPORT",
+				Properties: map[string]string{
+					"db": "testDB2",
+				},
+			},
+		}
+		cacheData := createTaskCacheData(tasks)
+		c := &Client{
+			cacheData: cacheData,
+		}
+		tasksRes := c.GetTasks(influxql.TaskExport)
+		convey.So(tasksRes, convey.ShouldResemble, []string{"task1", "task2"})
+	})
+	convey.Convey("GetTasks_with_NotFound", t, func() {
+		tasks := []struct {
+			ID         uint64
+			Name       string
+			Type       string
+			Properties map[string]string
+		}{
+			{
+				ID:   0,
+				Name: "task1",
+				Type: "EXPORT",
+				Properties: map[string]string{
+					"db": "testDB1",
+				},
+			},
+			{
+				ID:   1,
+				Name: "task2",
+				Type: "EXPORT",
+				Properties: map[string]string{
+					"db": "testDB2",
+				},
+			},
+		}
+		cacheData := createTaskCacheData(tasks)
+		c := &Client{
+			cacheData: cacheData,
+		}
+		tasksRes := c.GetTasksWithProperties(influxql.TaskExport)
+
+		convey.So(tasksRes, convey.ShouldNotBeNil)
+		byName := make(map[string]*meta2.TaskInfo, len(tasksRes))
+		for _, task := range tasksRes {
+			byName[task.Name] = task
+		}
+
+		for i, want := range tasks {
+			got, ok := byName[want.Name]
+			convey.So(ok, convey.ShouldBeTrue)
+			convey.So(got.ID, convey.ShouldEqual, uint64(i))
+			convey.So(got.Type, convey.ShouldEqual, want.Type)
+			convey.So(got.Properties, convey.ShouldResemble, want.Properties)
+		}
+	})
+
+	convey.Convey("GetTasks_with_NotFound", t, func() {
+		cacheData := &meta2.Data{TaskGroups: map[string]*meta2.TaskGroup{}}
+		c := &Client{
+			cacheData: cacheData,
+		}
+		tasksRes := c.GetTasks(influxql.TaskExport)
+		convey.So(tasksRes, convey.ShouldBeNil)
+	})
+
+	convey.Convey("GetAllTaskCount", t, func() {
+		tasks := []struct {
+			ID         uint64
+			Name       string
+			Type       string
+			Properties map[string]string
+		}{
+			{
+				ID:   0,
+				Name: "task1",
+				Type: "EXPORT",
+				Properties: map[string]string{
+					"db": "testDB1",
+				},
+			},
+			{
+				ID:   1,
+				Name: "task2",
+				Type: "EXPORT",
+				Properties: map[string]string{
+					"db": "testDB2",
+				},
+			},
+		}
+		cacheData := createTaskCacheData(tasks)
+		c := &Client{
+			cacheData: cacheData,
+		}
+		count := c.GetAllTaskCount()
+		convey.So(count, convey.ShouldEqual, len(tasks))
+	})
+
+	convey.Convey("DropTask", t, func() {
+		defer initEnv()()
+		tasks := []struct {
+			ID         uint64
+			Name       string
+			Type       string
+			Properties map[string]string
+		}{
+			{
+				Name: "task1",
+				Type: "EXPORT",
+				Properties: map[string]string{
+					"db": "testDB1",
+				},
+			},
+		}
+		cacheData := createTaskCacheData(tasks)
+		c := &Client{
+			cacheData:      cacheData,
+			metaServers:    []string{"127.0.0.1"},
+			logger:         logger.NewLogger(errno.ModuleMetaClient),
+			SendRPCMessage: &RPCMessageSender{},
+		}
+		patch := gomonkey.ApplyPrivateMethod(c, "retryUntilExec",
+			func(_ proto2.Command_Type, _ *protoimpl.ExtensionInfo, _ interface{}) error {
+				return nil
+			})
+		defer func() {
+			patch.Reset()
+		}()
+		err := c.DropTask("task1", influxql.TaskExport)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("applyCreateTask", t, func() {
+		patch := gomonkey.ApplyFunc(meta2.ApplyCreateTask, func(data *meta2.Data, cmd *proto2.Command) error {
+			return errors.New("invalid task")
+		})
+		defer patch.Reset()
+		mc := &Client{cacheData: &meta2.Data{}}
+		err := applyCreateTask(mc, nil)
+		convey.So(err, convey.ShouldBeError, errno.NewError(errno.ApplyFuncErr, "applyCreateTask", "invalid task"))
+	})
+
+	convey.Convey("applyDropTask", t, func() {
+		patch := gomonkey.ApplyFunc(meta2.ApplyDropTask, func(data *meta2.Data, cmd *proto2.Command) error {
+			return errors.New("invalid task")
+		})
+		defer patch.Reset()
+		mc := &Client{cacheData: &meta2.Data{}}
+		err := applyDropTask(mc, nil)
+		convey.So(err, convey.ShouldBeError, errno.NewError(errno.ApplyFuncErr, "applyDropTask", "invalid task"))
+	})
+}
+
+func createTaskCacheData(tasks []struct {
+	ID         uint64
+	Name       string
+	Type       string
+	Properties map[string]string
+}) *meta2.Data {
+	cacheData := &meta2.Data{
+		TaskGroups: make(map[string]*meta2.TaskGroup),
+	}
+
+	for _, task := range tasks {
+		if _, exists := cacheData.TaskGroups[task.Type]; !exists {
+			cacheData.TaskGroups[task.Type] = &meta2.TaskGroup{
+				Tasks: make(map[string]*meta2.TaskInfo),
+			}
+		}
+
+		taskInfo := &meta2.TaskInfo{
+			ID:         task.ID,
+			Name:       task.Name,
+			Type:       task.Type,
+			Properties: task.Properties,
+		}
+
+		cacheData.TaskGroups[task.Type].Tasks[task.Name] = taskInfo
+	}
+
+	return cacheData
+}
+
+func TestClient_GetAllRepNodePtsMap(t *testing.T) {
+	c := &Client{
+		cacheData: &meta2.Data{
+			PtView: map[string]meta2.DBPtInfos{
+				"db0": []meta2.PtInfo{
+					{PtId: 0, Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online, RGID: 0},
+					{PtId: 1, Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Offline, RGID: 0},
+					{PtId: 2, Owner: meta2.PtOwner{NodeID: 2}, Status: meta2.Online, RGID: 1},
+					{PtId: 3, Owner: meta2.PtOwner{NodeID: 3}, Status: meta2.Offline, RGID: 1},
+				},
+			},
+		},
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
+	}
+	nodePtMap, err := c.GetAllRepNodePtsMap("db1")
+	assert.Equal(t, true, errno.Equal(err, errno.DatabaseNotFound))
+	nodePtMap, err = c.GetAllRepNodePtsMap("db0")
+	assert.Equal(t, nil, err)
+	assert.Equal(t, 2, len(nodePtMap))
+}
+
+func TestClient_SmartQuery(t *testing.T) {
+	schema := meta2.NewCleanSchema(0)
+	schema.SetTyp("f1", influx.Field_Type_Int)
+	schema.SetTyp("tag1", influx.Field_Type_Tag)
+	c := &Client{
+		cacheData: &meta2.Data{
+			PtView: map[string]meta2.DBPtInfos{
+				"db0": []meta2.PtInfo{
+					{PtId: 0, Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Online, RGID: 0},
+					{PtId: 1, Owner: meta2.PtOwner{NodeID: 2}, Status: meta2.Online, RGID: 0},
+					{PtId: 2, Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Online, RGID: 0},
+					{PtId: 3, Owner: meta2.PtOwner{NodeID: 2}, Status: meta2.Online, RGID: 0},
+				},
+			},
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": &meta2.DatabaseInfo{
+					RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+						"rp0": &meta2.RetentionPolicyInfo{
+							Measurements: map[string]*meta2.MeasurementInfo{
+								"mst_0000": &meta2.MeasurementInfo{
+									Schema: &schema,
+								},
+							},
+							ShardGroups: []meta2.ShardGroupInfo{
+								{
+									ID:        1,
+									StartTime: time.Unix(1, 0),
+									EndTime:   time.Unix(10, 0),
+									Shards: []meta2.ShardInfo{
+										{
+											ID:     1,
+											Owners: []uint32{3},
+										},
+										{
+											ID:     2,
+											Owners: []uint32{3},
+										},
+									},
+								},
+							},
+						},
+					},
+					ShardKey: meta2.ShardKeyInfo{
+						ShardKey: []string{"tag1"},
+					},
+				},
+			},
+		},
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
+	}
+	stmt := &smart_query.SmartSelectStatement{
+		Source: smart_query.Measurement{
+			Database:        "db0",
+			RetentionPolicy: "rp0",
+			NameVersion:     "mst_0000",
+			Name:            "mst",
+		},
+		Fields: []smart_query.Field{
+			{
+				Call: "max",
+				Val:  "f1",
+			},
+		},
+		Condition: smart_query.OrCond{
+			Cond: []smart_query.EqCond{
+				{
+					Key: "tag1",
+					Val: "1",
+				},
+			},
+		},
+	}
+	err := c.CheckAndWriteSmartStmtSchema(stmt)
+	assert.Equal(t, err, nil)
+	assert.Equal(t, stmt.Fields[0].Typ, influxql.Integer)
+	rqs, err := c.GetSmartStmtETraits(stmt, time.Unix(2, 0), time.Unix(4, 0))
+	assert.Equal(t, err, nil)
+	assert.Equal(t, len(rqs), 1)
+	stmt.Condition.Cond = append(stmt.Condition.Cond, smart_query.EqCond{Key: "tag2", Val: "2"})
+	rqs, err = c.GetSmartStmtETraits(stmt, time.Unix(2, 0), time.Unix(4, 0))
+	assert.Equal(t, err, nil)
+	assert.Equal(t, len(rqs), 1)
+
+	c.cacheData.PtView = nil
+	_, err = c.GetSmartStmtETraits(stmt, time.Unix(2, 0), time.Unix(4, 0))
+	assert.Equal(t, err.Error(), "pt not found")
+
+	stmt.Source.NameVersion = "mst2_0000"
+	err = c.CheckAndWriteSmartStmtSchema(stmt)
+	assert.Equal(t, err.Error(), "measurement not found%!(EXTRA string=mst)")
+	stmt.Source.RetentionPolicy = "rp1"
+	err = c.CheckAndWriteSmartStmtSchema(stmt)
+	assert.Equal(t, err.Error(), "retention policy is not found%!(EXTRA string=rp1)")
+	stmt.Source.Database = "db1"
+	err = c.CheckAndWriteSmartStmtSchema(stmt)
+	assert.Equal(t, err.Error(), "database not found: db1")
+	_, err = c.GetSmartStmtETraits(stmt, time.Unix(2, 0), time.Unix(4, 0))
+	assert.Equal(t, err.Error(), "database not found: db1")
 }

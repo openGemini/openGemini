@@ -213,20 +213,25 @@ const (
 	LTE
 	EQ
 	NEQ
+	IN
 	MATHCHPHRASE
 	IPINRANGE
+	UNMATHCHPHRASE
 	BOTTOM
 )
 
 var operationMap = map[influxql.Token]int{
-	influxql.GT:          GT,
-	influxql.LT:          LT,
-	influxql.GTE:         GTE,
-	influxql.LTE:         LTE,
-	influxql.EQ:          EQ,
-	influxql.NEQ:         NEQ,
-	influxql.MATCHPHRASE: MATHCHPHRASE,
-	influxql.IPINRANGE:   IPINRANGE,
+	influxql.GT:            GT,
+	influxql.LT:            LT,
+	influxql.GTE:           GTE,
+	influxql.LTE:           LTE,
+	influxql.EQ:            EQ,
+	influxql.NEQ:           NEQ,
+	influxql.IN:            IN,
+	influxql.MATCH:         MATHCHPHRASE,
+	influxql.MATCHPHRASE:   MATHCHPHRASE,
+	influxql.UNMATCHPHRASE: UNMATHCHPHRASE,
+	influxql.IPINRANGE:     IPINRANGE,
 }
 
 var switchOpMap = map[int]int{
@@ -263,8 +268,10 @@ func initIdxTypeFun() {
 		{GetStringLTEConditionBitMap, GetFloatLTEConditionBitMap, GetIntegerLTEConditionBitMap, nilFunc},
 		{GetStringEQConditionBitMap, GetFloatEQConditionBitMap, GetIntegerEQConditionBitMap, GetBooleanEQConditionBitMap},
 		{GetStringNEQConditionBitMap, GetFloatNEQConditionBitMap, GetIntegerNEQConditionBitMap, GetBooleanNEQConditionBitMap},
+		{GetStringINConditionBitMap, GetFloatINConditionBitMap, GetIntegerINConditionBitMap, nilFunc},
 		{GetStringMatchPhraseConditionBitMap, nilFunc, nilFunc, nilFunc},
 		{GetStringIPInRangeBitMap, nilFunc, nilFunc, nilFunc},
+		{GetStringUnMatchPhraseConditionBitMap, nilFunc, nilFunc, nilFunc},
 	}
 }
 
@@ -493,7 +500,7 @@ func (c *ConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr, opt hybridqp.Opti
 			case influxql.OR:
 				c.isSimpleExpr = false
 				c.rpn = append(c.rpn, &RPNElement{op: rpn.OR})
-			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ, influxql.MATCHPHRASE, influxql.MATCH, influxql.LIKE, influxql.IPINRANGE:
+			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ, influxql.IN, influxql.MATCHPHRASE, influxql.UNMATCHPHRASE, influxql.MATCH, influxql.LIKE, influxql.IPINRANGE:
 			default:
 				return errno.NewError(errno.ErrRPNOp, v)
 			}
@@ -519,7 +526,8 @@ func (c *ConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr, opt hybridqp.Opti
 			if err := c.genRPNElementByVal(value, op, idx, opt); err != nil {
 				return err
 			}
-		case *influxql.StringLiteral, *influxql.NumberLiteral, *influxql.IntegerLiteral, *influxql.BooleanLiteral:
+		case *influxql.StringLiteral, *influxql.NumberLiteral, *influxql.IntegerLiteral,
+			*influxql.BooleanLiteral, *influxql.SetLiteral:
 		default:
 			return errno.NewError(errno.ErrRPNExpr, v)
 		}
@@ -548,23 +556,27 @@ func (c *ConditionImpl) genRPNElementByFullText(value interface{}, op influxql.T
 }
 
 func (c *ConditionImpl) genRPNElementByVal(value interface{}, op influxql.Token, idx int, opt hybridqp.Options) error {
+	typeIdx, ok := operationMap[op]
+	if !ok {
+		return errno.NewError(errno.ErrRPNOp, op)
+	}
 	elem := &RPNElement{op: rpn.InRange, rg: IdxFunction{Idx: idx, Op: op}}
 	elem.rg.Opt = opt
 	switch val := value.(type) {
 	case *influxql.StringLiteral:
 		elem.rg.Compare = val.Val
-		elem.rg.Function = idxTypeFun[operationMap[op]][StringFunc]
+		elem.rg.Function = idxTypeFun[typeIdx][StringFunc]
 	case *influxql.BooleanLiteral:
 		elem.rg.Compare = val.Val
-		elem.rg.Function = idxTypeFun[operationMap[op]][BoolFunc]
+		elem.rg.Function = idxTypeFun[typeIdx][BoolFunc]
 	case *influxql.IntegerLiteral:
 		switch c.schema[idx].Type {
 		case influx.Field_Type_Int:
 			elem.rg.Compare = val.Val
-			elem.rg.Function = idxTypeFun[operationMap[op]][IntFunc]
+			elem.rg.Function = idxTypeFun[typeIdx][IntFunc]
 		case influx.Field_Type_Float:
 			elem.rg.Compare = float64(val.Val)
-			elem.rg.Function = idxTypeFun[operationMap[op]][FloatFunc]
+			elem.rg.Function = idxTypeFun[typeIdx][FloatFunc]
 		default:
 			return errno.NewError(errno.ErrRPNElement, value)
 		}
@@ -577,7 +589,20 @@ func (c *ConditionImpl) genRPNElementByVal(value interface{}, op influxql.Token,
 			return errno.NewError(errno.ErrRPNElement, value)
 		}
 		elem.rg.Compare = val.Val
-		elem.rg.Function = idxTypeFun[operationMap[op]][FloatFunc]
+		elem.rg.Function = idxTypeFun[typeIdx][FloatFunc]
+	case *influxql.SetLiteral:
+		elem.rg.Compare = val.Vals
+		switch c.schema[idx].Type {
+		case influx.Field_Type_Int:
+			elem.rg.Int2Float = true
+			elem.rg.Function = idxTypeFun[typeIdx][IntFunc]
+		case influx.Field_Type_Float:
+			elem.rg.Function = idxTypeFun[typeIdx][FloatFunc]
+		case influx.Field_Type_String:
+			elem.rg.Function = idxTypeFun[typeIdx][StringFunc]
+		default:
+			return errno.NewError(errno.ErrRPNElement, value)
+		}
 	default:
 		return errno.NewError(errno.ErrRPNElement, value)
 	}

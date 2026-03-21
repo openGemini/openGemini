@@ -18,9 +18,10 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
-var taskUUID uint64 = 0
+var taskUUID = uint64(time.Now().Nanosecond())
 
 type Task interface {
 	Key() string
@@ -30,6 +31,9 @@ type Task interface {
 	Stop()
 	Finish()
 	OnFinish(event Event)
+	MarshalBinary(buf []byte) ([]byte, error)
+	UnmarshalBinary(buf []byte) ([]byte, error)
+	ExecuteOnTN() (interface{}, error)
 }
 
 type Event func()
@@ -93,6 +97,9 @@ func (t *BaseTask) Key() string {
 func (t *BaseTask) UUID() uint64 {
 	return t.uuid
 }
+func (t *BaseTask) SetUUID(id uint64) {
+	t.uuid = id
+}
 
 func (t *BaseTask) Finish() {
 	t.em.Dispatch()
@@ -104,6 +111,18 @@ func (t *BaseTask) OnFinish(event Event) {
 
 func (t *BaseTask) Stop() {
 
+}
+
+func (t *BaseTask) MarshalBinary(buf []byte) ([]byte, error) {
+	return []byte{}, nil
+}
+
+func (t *BaseTask) UnmarshalBinary(buf []byte) ([]byte, error) {
+	return []byte{}, nil
+}
+
+func (t *BaseTask) ExecuteOnTN() (interface{}, error) {
+	return nil, nil
 }
 
 type TaskGroup struct {
@@ -145,4 +164,8 @@ func (tg *TaskGroup) Finish() {
 
 func (tg *TaskGroup) OnFinish(event Event) {
 	tg.em.Register(event)
+}
+
+func (tg *TaskGroup) GetTasks() []Task {
+	return tg.tasks
 }

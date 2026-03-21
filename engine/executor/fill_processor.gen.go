@@ -36,13 +36,20 @@ func (f *FloatLinearFillProcessor) fillHelperFunc(input, output, prev Chunk, fil
 	if (prev != nil && fillItem.inputReadAt >= fillItem.prevReadAt) &&
 		(fillItem.prevReadAt < prev.Len() && !prev.Column(f.inOrdinal).IsNilV2(fillItem.prevReadAt)) &&
 		(fillItem.inputReadAt < input.Len() && !input.Column(f.inOrdinal).IsNilV2(fillItem.inputReadAt)) {
+		// prevent case that preTime equals to nextTime, lead to NaN in result
+		preTime := prev.TimeByIndex(fillItem.prevReadAt) / fillItem.interval
+		nextTime := input.TimeByIndex(fillItem.inputReadAt) / fillItem.interval
+		if preTime == nextTime {
+			output.Column(f.outOrdinal).AppendNil()
+			return
+		}
 		inputValueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.inputReadAt)
 		prevValueIndex := prev.Column(f.inOrdinal).GetValueIndexV2(fillItem.prevReadAt)
 		output.Column(f.outOrdinal).AppendFloatValue(
 			hybridqp.LinearInterpolateFloat(
 				fillItem.start,
-				prev.TimeByIndex(fillItem.prevReadAt)/fillItem.interval,
-				input.TimeByIndex(fillItem.inputReadAt)/fillItem.interval,
+				preTime,
+				nextTime,
 				prev.Column(f.inOrdinal).FloatValue(prevValueIndex),
 				input.Column(f.inOrdinal).FloatValue(inputValueIndex),
 			),
@@ -85,13 +92,20 @@ func (f *IntegerLinearFillProcessor) fillHelperFunc(input, output, prev Chunk, f
 	if (prev != nil && fillItem.inputReadAt >= fillItem.prevReadAt) &&
 		(fillItem.prevReadAt < prev.Len() && !prev.Column(f.inOrdinal).IsNilV2(fillItem.prevReadAt)) &&
 		(fillItem.inputReadAt < input.Len() && !input.Column(f.inOrdinal).IsNilV2(fillItem.inputReadAt)) {
+		// prevent case that preTime equals to nextTime, lead to NaN in result
+		preTime := prev.TimeByIndex(fillItem.prevReadAt) / fillItem.interval
+		nextTime := input.TimeByIndex(fillItem.inputReadAt) / fillItem.interval
+		if preTime == nextTime {
+			output.Column(f.outOrdinal).AppendNil()
+			return
+		}
 		inputValueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.inputReadAt)
 		prevValueIndex := prev.Column(f.inOrdinal).GetValueIndexV2(fillItem.prevReadAt)
 		output.Column(f.outOrdinal).AppendIntegerValue(
 			hybridqp.LinearInterpolateInteger(
 				fillItem.start,
-				prev.TimeByIndex(fillItem.prevReadAt)/fillItem.interval,
-				input.TimeByIndex(fillItem.inputReadAt)/fillItem.interval,
+				preTime,
+				nextTime,
 				prev.Column(f.inOrdinal).IntegerValue(prevValueIndex),
 				input.Column(f.inOrdinal).IntegerValue(inputValueIndex),
 			),

@@ -15,10 +15,13 @@
 package colstore
 
 import (
+	"bytes"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/openGemini/openGemini/lib/codec"
+	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -28,7 +31,7 @@ type PrimaryKeyFetcher struct {
 	dec codec.BinaryDecoder
 }
 
-func (pke *PrimaryKeyFetcher) Fetch(rec *record.Record, pk []record.Field) (*record.Record, *OffsetsMap, [][]byte) {
+func (pke *PrimaryKeyFetcher) Fetch(rec *record.Record, pk []record.Field, tcDuration int64) (*record.Record, *OffsetsMap, [][]byte) {
 	ks := &KeySorter{}
 	om := NewOffsetsMap()
 	var buf []byte
@@ -39,7 +42,7 @@ func (pke *PrimaryKeyFetcher) Fetch(rec *record.Record, pk []record.Field) (*rec
 
 	pkCols := record.FetchColVals(rec, pk)
 	for i := range rec.RowNums() {
-		buf = FetchKeyAtRow(buf[:0], pkCols, pk, i)
+		buf = FetchKeyAtRow(buf[:0], pkCols, pk, i, tcDuration)
 		ok := om.Add(util.Bytes2str(buf), int64(i))
 		if ok {
 			// new primary key
@@ -51,13 +54,13 @@ func (pke *PrimaryKeyFetcher) Fetch(rec *record.Record, pk []record.Field) (*rec
 	sort.Sort(ks)
 
 	for i := range ks.Keys {
-		BuildPkRecord(&pke.dec, pkRec, ks.Keys[i])
+		AppendKeyToRecord(&pke.dec, pkRec, ks.Keys[i])
 	}
 
 	return pkRec, om, ks.Keys
 }
 
-func BuildPkRecord(dec *codec.BinaryDecoder, rec *record.Record, buf []byte) {
+func AppendKeyToRecord(dec *codec.BinaryDecoder, rec *record.Record, buf []byte) {
 	dec.Reset(buf)
 
 	for i := range rec.Len() {
@@ -83,10 +86,9 @@ func BuildPkRecord(dec *codec.BinaryDecoder, rec *record.Record, buf []byte) {
 		n := record.GetTypeSize(typ)
 		col.AppendValue(dec.BytesNoCopyN(n), false)
 	}
-
 }
 
-func FetchKeyAtRow(dst []byte, cols []*record.ColVal, schema record.Schemas, rowNum int) []byte {
+func FetchKeyAtRow(dst []byte, cols []*record.ColVal, schema record.Schemas, rowNum int, tcDuration int64) []byte {
 	if len(cols) != schema.Len() {
 		panic("[BUG] lengths of parameters 'cols' and 'schema' are different")
 	}
@@ -107,6 +109,17 @@ func FetchKeyAtRow(dst []byte, cols []*record.ColVal, schema record.Schemas, row
 		}
 
 		dst = append(dst, 1)
+
+		if tcDuration > 0 && schema[i].Name == record.TimeField {
+			var tm int64 = 0
+			util.Bytes2Value(b, &tm)
+			if tm > 0 {
+				tm -= tm % tcDuration
+			}
+			dst = encoding.BinaryEndianIns().AppendUint64(dst, uint64(tm))
+			continue
+		}
+
 		if typ == influx.Field_Type_String || typ == influx.Field_Type_Tag {
 			dst = codec.AppendBytes(dst, b)
 		} else {
@@ -180,8 +193,7 @@ func (o *Offsets) AppendTo(dst []int64) []int64 {
 
 type KeySorter struct {
 	desc bool
-	decI codec.BinaryDecoder
-	decJ codec.BinaryDecoder
+	kc   KeyComparator
 
 	Keys [][]byte
 }
@@ -195,66 +207,13 @@ func (ks *KeySorter) Len() int {
 }
 
 func (ks *KeySorter) Less(i, j int) bool {
+	less := ks.kc.Less(ks.Keys[i], ks.Keys[j])
+
 	if ks.desc {
-		return !ks.less(i, j)
+		return !less
 	}
 
-	return ks.less(i, j)
-}
-
-func (ks *KeySorter) less(i, j int) bool {
-	decI, decJ := &ks.decI, &ks.decJ
-
-	decI.Reset(ks.Keys[i])
-	decJ.Reset(ks.Keys[j])
-
-	for {
-		if decI.RemainSize() == 0 {
-			break
-		}
-		flag1 := decI.Uint16()
-		flag2 := decJ.Uint16()
-
-		if flag1&1 == 0 && flag2&1 == 0 {
-			continue
-		}
-		if flag2&1 == 0 {
-			return false
-		}
-		if flag1&1 == 0 {
-			return true
-		}
-
-		switch flag1 >> 8 {
-		case influx.Field_Type_String, influx.Field_Type_Tag:
-			s1, s2 := util.Bytes2str(decI.BytesNoCopy()), util.Bytes2str(decJ.BytesNoCopy())
-			if s1 != s2 {
-				return s1 < s2
-			}
-		case influx.Field_Type_Int:
-			var i1, i2 int64
-			util.Bytes2Value(decI.BytesNoCopyN(8), &i1)
-			util.Bytes2Value(decJ.BytesNoCopyN(8), &i2)
-			if i1 != i2 {
-				return i1 < i2
-			}
-		case influx.Field_Type_Float:
-			var f1, f2 float64
-			util.Bytes2Value(decI.BytesNoCopyN(8), &f1)
-			util.Bytes2Value(decJ.BytesNoCopyN(8), &f2)
-			if f1 != f2 {
-				return f1 < f2
-			}
-		case influx.Field_Type_Boolean:
-			b1, b2 := decI.Uint8(), decJ.Uint8()
-			if b1 != b2 {
-				return b1 == 0
-			}
-		default:
-			panic(fmt.Sprintf("[BUG] invalid type: %d", flag1>>8))
-		}
-	}
-	return false
+	return less
 }
 
 func (ks *KeySorter) Swap(i, j int) {
@@ -269,18 +228,90 @@ func (ks *KeySorter) Reset() {
 	ks.Keys = ks.Keys[:0]
 }
 
+func (ks *KeySorter) DeleteLast() {
+	if len(ks.Keys) > 0 {
+		ks.Keys = ks.Keys[:len(ks.Keys)-1]
+	}
+}
+
+func (ks *KeySorter) LastKey() []byte {
+	if len(ks.Keys) == 0 {
+		return nil
+	}
+	return ks.Keys[len(ks.Keys)-1]
+}
+
+type KeyComparator struct {
+	decA codec.BinaryDecoder
+	decB codec.BinaryDecoder
+}
+
+func (kc *KeyComparator) Less(a, b []byte) bool {
+	decA, decB := &kc.decA, &kc.decB
+
+	decA.Reset(a)
+	decB.Reset(b)
+
+	for {
+		if decA.RemainSize() == 0 {
+			break
+		}
+		flag1 := decA.Uint16()
+		flag2 := decB.Uint16()
+
+		if flag1&1 == 0 && flag2&1 == 0 {
+			continue
+		}
+		if flag2&1 == 0 {
+			return false
+		}
+		if flag1&1 == 0 {
+			return true
+		}
+
+		switch flag1 >> 8 {
+		case influx.Field_Type_String, influx.Field_Type_Tag:
+			s1, s2 := util.Bytes2str(decA.BytesNoCopy()), util.Bytes2str(decB.BytesNoCopy())
+			if s1 != s2 {
+				return s1 < s2
+			}
+		case influx.Field_Type_Int:
+			var i1, i2 int64
+			util.Bytes2Value(decA.BytesNoCopyN(8), &i1)
+			util.Bytes2Value(decB.BytesNoCopyN(8), &i2)
+			if i1 != i2 {
+				return i1 < i2
+			}
+		case influx.Field_Type_Float:
+			var f1, f2 float64
+			util.Bytes2Value(decA.BytesNoCopyN(8), &f1)
+			util.Bytes2Value(decB.BytesNoCopyN(8), &f2)
+			if f1 != f2 {
+				return f1 < f2
+			}
+		case influx.Field_Type_Boolean:
+			b1, b2 := decA.Uint8(), decB.Uint8()
+			if b1 != b2 {
+				return b1 == 0
+			}
+		default:
+			panic(fmt.Sprintf("[BUG] invalid type: %d", flag1>>8))
+		}
+	}
+	return false
+}
+
 type OffsetKeySorter struct {
 	KeySorter
 	Times   []int64
 	Offsets []int64
 
-	// Divide Offsets into multiple segments,
-	// and this variable records the end position (line number) of each segment
-	segmentIndex []int
+	// Records the end position (line number) of each fragment
+	fragmentOffset []int
 }
 
 func (oks *OffsetKeySorter) Len() int {
-	return len(oks.Times)
+	return max(len(oks.Times), len(oks.Keys))
 }
 
 func (oks *OffsetKeySorter) Swap(i, j int) {
@@ -304,37 +335,194 @@ func (oks *OffsetKeySorter) Less(i, j int) bool {
 	return oks.Times[i] < oks.Times[j]
 }
 
-func (oks *OffsetKeySorter) Append(other *OffsetKeySorter, maxRowPreSegment int) int {
+func (oks *OffsetKeySorter) Append(other *OffsetKeySorter) {
+	oks.Keys = append(oks.Keys, other.Keys...)
 	oks.Times = append(oks.Times, other.Times...)
 	oks.Offsets = append(oks.Offsets, other.Offsets...)
 
-	rowIdx := 0
-	if len(oks.segmentIndex) > 0 {
-		rowIdx = oks.segmentIndex[len(oks.segmentIndex)-1]
-	}
-
-	n := util.DivisionCeil(len(other.Times), maxRowPreSegment)
-	segRow := len(other.Times) / n
-	remain := len(other.Times) - segRow*n
-
-	for i := range n {
-		rowIdx += segRow
-		if i < remain {
-			rowIdx++
-		}
-
-		oks.segmentIndex = append(oks.segmentIndex, rowIdx)
-	}
-	return n
+	oks.AddFragmentOffset(len(oks.Times))
 }
 
-func (oks *OffsetKeySorter) IteratorSegment(fn func([]int64, []int64) bool) {
+func (oks *OffsetKeySorter) AddFragmentOffset(offset int) {
+	oks.fragmentOffset = append(oks.fragmentOffset, offset)
+}
+
+func (oks *OffsetKeySorter) IteratorFragment(fn func(int, int) bool) {
 	start := 0
-	for _, end := range oks.segmentIndex {
-		ok := fn(oks.Times[start:end], oks.Offsets[start:end])
+	for _, end := range oks.fragmentOffset {
+		ok := fn(start, end)
 		if !ok {
 			return
 		}
 		start = end
 	}
+}
+
+type ColValPicker interface {
+	Pick(src *record.ColVal, typ, start, end int) (*record.ColVal, *record.ColVal)
+	IteratorSegment(maxRowsPreSeg int, fn func(start, end int) bool)
+}
+
+func NewColValPicker(oks *OffsetKeySorter, unique bool) ColValPicker {
+	if unique {
+		picker := &UniquePicker{}
+		picker.oks = oks
+		picker.MarkDuplicates()
+		return picker
+	}
+
+	return &LinePicker{oks: oks}
+}
+
+type LinePicker struct {
+	oks *OffsetKeySorter
+
+	timeCol record.ColVal
+	dataCol record.ColVal
+
+	nc  record.NilCount
+	ptr *record.ColVal
+}
+
+func (p *LinePicker) getSwapCol() (*record.ColVal, *record.ColVal) {
+	dataCol := &p.dataCol
+	timeCol := &p.timeCol
+	dataCol.Init()
+	timeCol.Init()
+	return dataCol, timeCol
+}
+
+func (p *LinePicker) IteratorSegment(maxRowsPreSeg int, fn func(start, end int) bool) {
+	p.oks.IteratorFragment(func(start int, end int) bool {
+		segStart := start
+		for segStart < end {
+			segEnd := min(segStart+maxRowsPreSeg, end)
+			ok := fn(segStart, segEnd)
+			if !ok {
+				return false
+			}
+			segStart = segEnd
+		}
+		return true
+	})
+}
+
+func (p *LinePicker) buildNilCount(src *record.ColVal) {
+	if src != p.ptr {
+		p.ptr = src
+		p.nc.Build(src)
+	}
+}
+
+func (p *LinePicker) Pick(src *record.ColVal, typ, start, end int) (*record.ColVal, *record.ColVal) {
+	p.buildNilCount(src)
+
+	dataCol, timeCol := p.getSwapCol()
+
+	timeCol.AppendTimes(p.oks.Times[start:end])
+	for i := start; i < end; i++ {
+		ofs := p.oks.Offsets[i]
+		dataCol.AppendWithNilCount(src, typ, int(ofs), int(ofs+1), &p.nc)
+	}
+	return dataCol, timeCol
+}
+
+type UniquePicker struct {
+	LinePicker
+
+	samePre []bool
+	swap    []int64
+}
+
+func (p *UniquePicker) MarkDuplicates() {
+	n := p.oks.Len()
+	if n == 0 {
+		return
+	}
+
+	p.samePre = slices.Grow(p.samePre[:0], n)[:n]
+	p.samePre[0] = false
+	keys, times := p.oks.Keys, p.oks.Times
+
+	if len(keys) == 0 {
+		// Sort by time only
+		for i := 1; i < n; i++ {
+			p.samePre[i] = times[i] == times[i-1]
+		}
+		return
+	}
+
+	for i := 1; i < n; i++ {
+		p.samePre[i] = times[i] == times[i-1] && bytes.Equal(keys[i], keys[i-1])
+	}
+}
+
+func (p *UniquePicker) IteratorSegment(maxRowsPreSeg int, fn func(start, end int) bool) {
+	p.oks.IteratorFragment(func(start int, end int) bool {
+		if end <= start {
+			return true
+		}
+
+		k := util.DivisionCeil(end-start, maxRowsPreSeg)
+		rowsPreSeg := util.DivisionCeil(end-start, k)
+
+		segStart := start
+		for segStart < end {
+			segEnd := min(segStart+rowsPreSeg, end)
+			for segEnd < end {
+				if !p.samePre[segEnd] {
+					break
+				}
+				segEnd++
+			}
+
+			ok := fn(segStart, segEnd)
+			if !ok {
+				return false
+			}
+			segStart = segEnd
+		}
+		return true
+	})
+}
+
+func (p *UniquePicker) Pick(src *record.ColVal, typ, start, end int) (*record.ColVal, *record.ColVal) {
+	p.buildNilCount(src)
+
+	dataCol, timeCol := p.getSwapCol()
+	times := p.swap[:0]
+
+	var appendRow = func(start, end int) {
+		if end-start == 1 {
+			ofs := int(p.oks.Offsets[start])
+			dataCol.AppendWithNilCount(src, typ, ofs, ofs+1, &p.nc)
+			times = append(times, p.oks.Times[start])
+			return
+		}
+
+		for i := end - 1; i >= start; i-- {
+			// From back to front, newly written data overwrites older data
+			ofs := int(p.oks.Offsets[i])
+			if !src.IsNil(ofs) || i == start {
+				dataCol.AppendColVal(src, typ, ofs, ofs+1)
+				times = append(times, p.oks.Times[i])
+				break
+			}
+		}
+	}
+
+	j := start
+	for i := start; i < end-1; i++ {
+		if p.samePre[i+1] {
+			continue
+		}
+
+		appendRow(j, i+1)
+		j = i + 1
+	}
+
+	appendRow(j, end)
+	timeCol.AppendTimes(times)
+	p.swap = times
+	return dataCol, timeCol
 }

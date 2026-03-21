@@ -15,10 +15,10 @@
 package compress_test
 
 import (
+	"math/rand/v2"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/compress"
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +37,7 @@ func init() {
 	for i := 1; i < 1000; i++ {
 		sameData[i] = 1.1
 		randData[i] = rand.Float64() * 10000
-		randIntData[i] = float64(rand.Int63())
+		randIntData[i] = float64(rand.Int64())
 
 		rleData[i] = rleData[i-1]
 		if i%200 == 0 {

@@ -200,7 +200,7 @@ func TestReplay(t *testing.T) {
 		},
 	}
 	err = mockNode.replay(snapshot2)
-	require.NotNilf(t, err, "err is not nil")
+	require.Nil(t, err)
 
 	snapshot3 := raftpb.Snapshot{
 		Metadata: raftpb.SnapshotMetadata{
@@ -208,7 +208,7 @@ func TestReplay(t *testing.T) {
 		},
 	}
 	err = mockNode.replay(snapshot3)
-	require.NotNilf(t, err, "err is not nil")
+	require.Nil(t, err)
 
 	snapshot4 := raftpb.Snapshot{
 		Metadata: raftpb.SnapshotMetadata{
@@ -217,7 +217,37 @@ func TestReplay(t *testing.T) {
 	}
 	err = mockNode.replay(snapshot4)
 	require.NoError(t, err)
+}
 
+func TestReplayOverLast(t *testing.T) {
+	tmpDir := t.TempDir()
+	rds, err := raftlog.Init(tmpDir, 0)
+	if err != nil {
+		t.Errorf("Test replay failed, raft disk storage init failed, err is %v", err)
+	}
+	mockNode := &RaftNode{
+		proposeC: make(chan []byte, 1),
+		Store:    rds,
+	}
+	mockNode.WithLogger(logger.NewLogger(errno.ModuleUnknown))
+	ents := []raftpb.Entry{{Index: 3, Term: 3}}
+	hardState := &raftpb.HardState{
+		Term:   1,
+		Vote:   1,
+		Commit: 5,
+	}
+	err = rds.Save(hardState, ents, nil)
+	defer rds.Close()
+	if err != nil {
+		t.Errorf("raft disk storage save failed")
+	}
+	snapshot := raftpb.Snapshot{
+		Metadata: raftpb.SnapshotMetadata{
+			Index: 3,
+		},
+	}
+	err = mockNode.replay(snapshot)
+	require.Nil(t, err)
 }
 
 func TestInitAndStartNode(t *testing.T) {
@@ -355,6 +385,8 @@ func TestForceDeleteEntryLog(t *testing.T) {
 	if err != nil {
 		t.Errorf("raft disk storage save failed")
 	}
+	globalStore := config.GetStoreConfig()
+	defer config.SetStoreConfig(*globalStore)
 	store := config.Store{
 		ClearEntryLogTolerateTime: toml.Duration(1 * time.Second),
 	}
@@ -686,6 +718,8 @@ func TestSendRaftMessages1(t *testing.T) {
 	if err != nil {
 		t.Errorf("raft disk storage save failed")
 	}
+	globalStore := config.GetStoreConfig()
+	defer config.SetStoreConfig(*globalStore)
 	store := config.Store{
 		ClearEntryLogTolerateTime: toml.Duration(1 * time.Second),
 	}

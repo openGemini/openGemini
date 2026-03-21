@@ -154,11 +154,21 @@ func (trans *InTransform) checkOuterFieldType() error {
 		trans.workHelper = trans.AddGraphChunkToBufColumn
 		return trans.checkGraphFieldType(innerVarRef)
 	}
-	if innerVarRef.Type != outVarRef.Type {
+	if !isSameType(innerVarRef, outVarRef) {
 		return fmt.Errorf("InTransform inner.type != outer.type err")
 	}
 	trans.OuterVarRef = outVarRef
 	return nil
+}
+
+func isSameType(innerVarRef *influxql.VarRef, outVarRef *influxql.VarRef) bool {
+	if (innerVarRef.Type == influxql.String || innerVarRef.Type == influxql.Tag) && (outVarRef.Type == influxql.String || outVarRef.Type == influxql.Tag) {
+		return true
+	}
+	if innerVarRef.Type == outVarRef.Type {
+		return true
+	}
+	return false
 }
 
 // todo: use static graphschema

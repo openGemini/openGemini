@@ -17,8 +17,8 @@ package clv
 import (
 	"bytes"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 )
 

@@ -192,6 +192,10 @@ func (b *IndexBuilder) GetEncodeChunkSize() uint32 {
 	return uint32(len(b.encodeChunk))
 }
 
+func (b *IndexBuilder) FilePath() string {
+	return b.fd.Name()
+}
+
 func (b *IndexBuilder) Reset() {
 	b.encodeChunk = b.encodeChunk[:0]
 	b.meta = b.meta[:0]
@@ -227,4 +231,31 @@ func getSchemaInfo(schemas record.Schemas) *schemaInfo {
 		sInfo.fields += fieldName
 	}
 	return sInfo
+}
+
+type SkipIndexInfo struct {
+	name string
+}
+
+func NewSkipIndexInfo(name string) *SkipIndexInfo {
+	return &SkipIndexInfo{name: name}
+}
+
+func (si *SkipIndexInfo) Name() string {
+	return si.name
+}
+
+func (si *SkipIndexInfo) MustRemove(lock fileops.FileLockOption) {
+	util.MustRun(func() error {
+		return fileops.Remove(si.name, lock)
+	})
+}
+
+func (si *SkipIndexInfo) Rename(to string, lock fileops.FileLockOption) error {
+	err := fileops.RenameFile(si.name, to, lock)
+	if err != nil {
+		return err
+	}
+	si.name = to
+	return nil
 }

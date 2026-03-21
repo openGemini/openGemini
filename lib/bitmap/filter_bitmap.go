@@ -34,6 +34,19 @@ func NewFilterBitmap(length int) *FilterBitmap {
 	return f
 }
 
+// Reinit is used for reuse. The bitmap has the same length and capacity, so only the length needs to be checked.
+func (f *FilterBitmap) Reinit(length int) {
+	fLen := len(f.Bitmap)
+	if length <= fLen {
+		f.Bitmap = f.Bitmap[:length]
+	} else {
+		f.Bitmap = make([]*BitMap, length)
+		for i := range f.Bitmap {
+			f.Bitmap[i] = &BitMap{}
+		}
+	}
+}
+
 func (f *FilterBitmap) Reset() {
 	for i := range f.Bitmap {
 		f.Bitmap[i].Val = f.Bitmap[i].Val[:0]

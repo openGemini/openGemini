@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/indirect/valyala/fastjson"
 	"github.com/influxdata/influxdb/uuid"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/cache"
@@ -44,7 +45,6 @@ import (
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	query2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
-	"github.com/valyala/fastjson"
 	"go.uber.org/zap"
 )
 

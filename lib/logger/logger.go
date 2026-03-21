@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	Log "github.com/influxdata/influxdb/logger"
+	"github.com/influxdata/influxdb/pkg/snowflake"
 	"github.com/openGemini/openGemini/lib/errno"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -148,9 +150,16 @@ type SuppressLogger struct {
 	observerMutex   sync.Mutex
 }
 
-func NewSuppressLogger() *SuppressLogger {
-	logger := &SuppressLogger{
-		logger:        GetLogger().WithOptions(zap.AddCallerSkip(2)),
+func NewSuppressLogger(loggerType LoggerType) *SuppressLogger {
+	var zapLogger *zap.Logger
+	switch loggerType {
+	case LoggerTypeCompact:
+		zapLogger = compactLogger.WithOptions(zap.AddCallerSkip(2))
+	default:
+		zapLogger = GetLogger().WithOptions(zap.AddCallerSkip(2))
+	}
+	sLogger := &SuppressLogger{
+		logger:        zapLogger,
 		logSuppressor: NewLogSuppressor(),
 		timer:         nil,
 		// check in every 3 seconds
@@ -162,9 +171,9 @@ func NewSuppressLogger() *SuppressLogger {
 		closed:          make(chan struct{}),
 	}
 
-	go logger.run()
+	go sLogger.run()
 
-	return logger
+	return sLogger
 }
 
 func (l *SuppressLogger) run() {
@@ -400,18 +409,26 @@ func (l *SuppressLogger) makeErrno(err *errno.Error, n errno.Node, m errno.Modul
 }
 
 var (
-	singletonLogger *SuppressLogger
-	once            sync.Once
+	singletonLogger        *SuppressLogger
+	singletonCompactLogger *SuppressLogger
+	once                   sync.Once
 )
 
-func GetSuppressLogger() *SuppressLogger {
+func GetSuppressLogger(loggerType LoggerType) *SuppressLogger {
 	once.Do(func() {
-		singletonLogger = NewSuppressLogger()
+		singletonLogger = NewSuppressLogger(LoggerTypeDefault)
 		SetInitLoggerHandler(func(logger *zap.Logger) {
 			singletonLogger.SetZapLogger(logger)
 		})
+		singletonCompactLogger = NewSuppressLogger(LoggerTypeCompact)
 	})
-	return singletonLogger
+
+	switch loggerType {
+	case LoggerTypeCompact:
+		return singletonCompactLogger
+	default:
+		return singletonLogger
+	}
 }
 
 type Logger struct {
@@ -430,8 +447,15 @@ func NewLogger(module errno.Module) *Logger {
 		return log
 	}
 	// ignore concurrent situation, repeat store same module logger
+	var spLogger *SuppressLogger
+	switch module {
+	case errno.ModuleCompact:
+		spLogger = GetSuppressLogger(LoggerTypeCompact)
+	default:
+		spLogger = GetSuppressLogger(LoggerTypeDefault)
+	}
 	log := &Logger{
-		logger: GetSuppressLogger(),
+		logger: spLogger,
 		node:   errno.GetNode(),
 		module: module,
 	}
@@ -490,4 +514,26 @@ func (l *Logger) clone(zapLogger *zap.Logger) *Logger {
 		node:      l.node,
 		module:    l.module,
 	}
+}
+
+func GetSlowQueryLogger() *zap.Logger {
+	return slowQueryLogger
+}
+
+func GetQueryLogger() *zap.Logger {
+	return queryLogger
+}
+
+func GetAuditLogger() *zap.Logger {
+	return auditLogger
+}
+
+func GetCompactLogger(msg, name string, fields ...zapcore.Field) (*zap.Logger, func()) {
+	return Log.NewOperation(compactLogger, msg, name, fields...)
+}
+
+var gen = snowflake.New(0)
+
+func GenTraceID() string {
+	return gen.NextString()
 }

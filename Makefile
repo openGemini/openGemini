@@ -46,21 +46,7 @@ go-version-check:
 	bash ./scripts/ci/go_version_check.sh
 
 style-check: install-goimports-reviser
-	@echo "run style check for import pkg order"
-	@for file in $(STYLE_CHECK_GOFILE); do goimports-reviser -project-name none-pjn $$file; done
-	@GIT_STATUS=`git status | grep "Changes not staged for commit"`; \
-		if [ "$$GIT_STATUS" = "" ]; \
-		then \
-			echo "code already go formatted"; \
-		else \
-			echo "style check failed, please format your code using goimports-reviser"; \
-			echo "ref: github.com/incu6us/goimports-reviser"; \
-			echo "git diff files:"; \
-			git diff --stat | tee; \
-			echo "git diff details: "; \
-			git diff | tee; \
-			exit 1; \
-		fi
+	bash ./scripts/ci/style_check.sh
 
 go-vet-check:
 	bash ./scripts/ci/go_vet.sh
@@ -74,9 +60,9 @@ go-generate: install-tmpl install-goyacc install-exhaustruct install-protoc inst
 golangci-lint-check: install-golangci-lint
 	bash ./scripts/ci/golangci_lint_check.sh
 
-gotest: install-failpoint failpoint-enable
+gotest:
 	@echo "running gotest begin."
-	@index=0; for s in $(PACKAGES_OPEN_GEMINI_TESTS); do index=$$(($$index+1)); if ! $(GOTEST) -failfast -short -v -count 1 -p 1 -timeout 10m -coverprofile coverage_$$index.txt -coverpkg ./... $$s; then $(FAILPOINT_DISABLE); exit 1; fi; done
+	@index=0; for s in $(PACKAGES_OPEN_GEMINI_TESTS); do index=$$(($$index+1)); if ! $(GOTEST) -tags "failpoint" -failfast -short -v -count 1 -p 1 -timeout 10m -coverprofile coverage_$$index.txt -coverpkg ./... $$s; then $(FAILPOINT_DISABLE); exit 1; fi; done
 	@$(FAILPOINT_DISABLE)
 
 build-check:

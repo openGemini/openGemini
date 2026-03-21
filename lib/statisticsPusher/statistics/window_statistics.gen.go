@@ -103,6 +103,11 @@ type StreamWindowStatItem struct {
 	WindowStartTime        int64
 	WindowEndTime          int64
 	WindowGroupKeyCount    int64
+	ReplayIn               int64
+	ReplayProcess          int64
+	ReplaySkip             int64
+	ReplayCacheIn          int64
+	ConsumeCacheIn         int64
 
 	StreamID string
 
@@ -142,6 +147,11 @@ func (s *StreamWindowStatItem) Values() map[string]interface{} {
 		"WindowStartTime":        s.WindowStartTime,
 		"WindowEndTime":          s.WindowEndTime,
 		"WindowGroupKeyCount":    s.WindowGroupKeyCount,
+		"ReplayIn":               s.ReplayIn,
+		"ReplayProcess":          s.ReplayProcess,
+		"ReplaySkip":             s.ReplaySkip,
+		"ReplayCacheIn":          s.ReplayCacheIn,
+		"ConsumeCacheIn":         s.ConsumeCacheIn,
 		"Duration":               s.Duration(),
 	}
 }

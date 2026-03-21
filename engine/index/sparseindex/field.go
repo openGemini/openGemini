@@ -16,8 +16,13 @@ package sparseindex
 
 import (
 	"bytes"
+	"fmt"
 	"math"
+	"sort"
 
+	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
@@ -67,6 +72,123 @@ func (f *FieldRef) Equals(rhs *FieldRef) bool {
 		return (!isNil1 && !isNil2 && lhsVal == rhsVal) || (isNil1 && isNil2)
 	default:
 		panic("not support the data type")
+	}
+}
+
+func (f *FieldRef) MatchedIndices(ColVal *record.ColVal, compOp influxql.Token, isFirstPK bool) ([]int, error) {
+	// f.cols[f.column] is valid
+	switch f.cols[f.column].dataType {
+	case influx.Field_Type_String:
+		threshold, _ := f.cols[f.column].column.StringValueSafe(f.row)
+		pkValues := ColVal.StringValues(nil)
+		if isFirstPK {
+			return matchedIndicesWithBinarySearch(pkValues, compOp, threshold)
+		} else {
+			return matchedIndicesWithLinearSearch(pkValues, compOp, threshold)
+		}
+	case influx.Field_Type_Int:
+		threshold, _ := f.cols[f.column].column.IntegerValue(f.row)
+		pkValues := ColVal.IntegerValues()
+		if isFirstPK {
+			return matchedIndicesWithBinarySearch(pkValues, compOp, threshold)
+		} else {
+			return matchedIndicesWithLinearSearch(pkValues, compOp, threshold)
+		}
+	case influx.Field_Type_Float:
+		threshold, _ := f.cols[f.column].column.FloatValue(f.row)
+		pkValues := ColVal.FloatValues()
+		if isFirstPK {
+			return matchedIndicesWithBinarySearch(pkValues, compOp, threshold)
+		} else {
+			return matchedIndicesWithLinearSearch(pkValues, compOp, threshold)
+		}
+	case influx.Field_Type_Boolean:
+		threshold, _ := f.cols[f.column].column.BooleanValue(f.row)
+		pkValues := ColVal.BooleanValues()
+		thresholdInt64 := util.Bool2Int64(threshold)
+		pkValuesInt64 := make([]int64, len(pkValues))
+		for i, val := range pkValues {
+			pkValuesInt64[i] = util.Bool2Int64(val)
+		}
+		if isFirstPK {
+			return matchedIndicesWithBinarySearch(pkValuesInt64, compOp, thresholdInt64)
+		} else {
+			return matchedIndicesWithLinearSearch(pkValuesInt64, compOp, thresholdInt64)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported primary key data type: %d", f.cols[f.column].dataType)
+	}
+}
+
+// the first PK column is sorted
+func matchedIndicesWithBinarySearch[T util.ExceptBool](pkValues []T, compOp influxql.Token, threshold T) ([]int, error) {
+	n := len(pkValues)
+	var indices []int
+	switch compOp {
+	case influxql.EQ:
+		first := sort.Search(n, func(i int) bool { return pkValues[i] >= threshold })
+		if first < n && pkValues[first] == threshold {
+			last := sort.Search(n, func(i int) bool { return pkValues[i] > threshold }) - 1
+			indices = makeRange(first, last)
+		}
+	case influxql.LT:
+		idx := sort.Search(n, func(i int) bool { return pkValues[i] >= threshold })
+		indices = makeRange(0, idx-1)
+	case influxql.LTE:
+		idx := sort.Search(n, func(i int) bool { return pkValues[i] > threshold })
+		indices = makeRange(0, idx-1)
+	case influxql.GT:
+		idx := sort.Search(n, func(i int) bool { return pkValues[i] > threshold })
+		indices = makeRange(idx, n-1)
+	case influxql.GTE:
+		idx := sort.Search(n, func(i int) bool { return pkValues[i] >= threshold })
+		indices = makeRange(idx, n-1)
+	default:
+		return nil, ErrUnknownOperator(compOp.String())
+	}
+	return indices, nil
+}
+
+func makeRange(start, end int) []int {
+	if start > end {
+		return nil
+	}
+	rangeLen := end - start + 1
+	rangeIndices := make([]int, rangeLen)
+	for i := range rangeLen {
+		rangeIndices[i] = start + i
+	}
+	return rangeIndices
+}
+
+func matchedIndicesWithLinearSearch[T util.ExceptBool](pkValues []T, compOp influxql.Token, threshold T) ([]int, error) {
+	var indices []int
+	for i, s := range pkValues {
+		isOK, err := compareVal(compOp, s, threshold)
+		if err != nil {
+			return nil, err
+		}
+		if isOK {
+			indices = append(indices, i)
+		}
+	}
+	return indices, nil
+}
+
+func compareVal[T util.ExceptBool](compOp influxql.Token, val1, val2 T) (bool, error) {
+	switch compOp {
+	case influxql.EQ:
+		return val1 == val2, nil
+	case influxql.LT:
+		return val1 < val2, nil
+	case influxql.LTE:
+		return val1 <= val2, nil
+	case influxql.GT:
+		return val1 > val2, nil
+	case influxql.GTE:
+		return val1 >= val2, nil
+	default:
+		return false, ErrUnknownOperator(compOp.String())
 	}
 }
 

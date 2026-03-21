@@ -373,6 +373,17 @@ func TestReWriteArgs(t *testing.T) {
 	aggCp := agg.Clone()
 	executor.ReWriteArgs(agg, false)
 	assert.Equal(t, agg.Digest(), aggCp.Digest())
+
+	// Test case 1: best is nil
+	executor.ReWriteArgs(nil, false) // Test nil input
+
+	// Test case 2: best has children and is a LogicalHashAgg node with isUnifyPlan
+	node := executor.NewLogicalHashAgg(reader, schema, executor.UNKNOWN_EXCHANGE, nil)
+	executor.ReWriteArgs(node, true) // Test unify plan with eType == UNKNOWN_EXCHANGE
+
+	// Test case 3: best has children and is a LogicalHashAgg node without isUnifyPlan
+	node = executor.NewLogicalHashAgg(reader, schema, executor.READER_EXCHANGE, nil)
+	executor.ReWriteArgs(node, false)
 }
 
 func TestMarshalQueryNodeOfPlanTemplateMatch(t *testing.T) {

@@ -15,17 +15,24 @@
 package msgservice
 
 import (
+	"encoding/binary"
 	"fmt"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/cockroachdb/errors"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
 	internal2 "github.com/openGemini/openGemini/lib/msgservice/data"
+	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/scheduler"
+	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"go.etcd.io/etcd/raft/v3/raftpb"
+	"google.golang.org/protobuf/proto"
 )
 
 type DeleteType int
@@ -55,7 +62,7 @@ type DeleteRequest struct {
 
 func (ddr *DeleteRequest) MarshalBinary() ([]byte, error) {
 	dr := &internal2.DeleteRequest{DB: proto.String(ddr.Database)}
-	dr.DeleteType = proto.Int(int(ddr.Type))
+	dr.DeleteType = proto.Int32(int32(ddr.Type))
 	switch ddr.Type {
 	case MeasurementDelete:
 		dr.Mst = proto.String(ddr.Measurement)
@@ -214,6 +221,18 @@ func (r *ExactCardinalityResponse) Error() error {
 	return NormalizeError(r.Err)
 }
 
+type SmarterQueryRequest struct {
+	internal2.SmarterQueryRequest
+}
+
+func (r *SmarterQueryRequest) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&r.SmarterQueryRequest)
+}
+
+func (r *SmarterQueryRequest) UnmarshalBinary(buf []byte) error {
+	return proto.Unmarshal(buf, &r.SmarterQueryRequest)
+}
+
 type ShowTagValuesRequest struct {
 	internal2.ShowTagValuesRequest
 }
@@ -339,6 +358,78 @@ func (r *ShowTagValuesResponse) SetTagValuesSlice(s influxql.TablesTagSets) {
 			Values:      values,
 		})
 	}
+}
+
+const (
+	errorFlagHas = 1
+	errorFlagNil = 0
+)
+
+type SmarterQueryResponse struct {
+	Err  *string
+	Data []byte
+
+	result *record.SmartQueryResult
+}
+
+func (r *SmarterQueryResponse) Release() {
+	bufferpool.PutSmartQuery(r.Data)
+	r.Data = nil
+}
+
+func (r *SmarterQueryResponse) MarshalBinary() ([]byte, error) {
+	if r.Err != nil {
+		return append([]byte{errorFlagHas}, *r.Err...), nil
+	}
+
+	return r.Data, nil
+}
+
+func (r *SmarterQueryResponse) UnmarshalBinary(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+
+	if buf[0] == errorFlagHas {
+		r.Err = proto.String(string(buf[1:]))
+		return nil
+	}
+	buf = buf[1:]
+
+	if len(buf) < util.Uint32SizeBytes {
+		return errors.New("cannot unmarshal empty byte slice")
+	}
+
+	n := len(buf)
+	size := int(binary.BigEndian.Uint32(buf[n-util.Uint32SizeBytes:]))
+
+	buf = buf[:n-util.Uint32SizeBytes]
+	if size != len(buf) {
+		return fmt.Errorf("invalid message, exp size: %d, actual size: %d", size, len(buf))
+	}
+
+	r.result = &record.SmartQueryResult{}
+	r.result.Unmarshal(buf)
+	return nil
+}
+
+func (r *SmarterQueryResponse) Error() error {
+	return NormalizeError(r.Err)
+}
+
+func (r *SmarterQueryResponse) GetResult() *record.SmartQueryResult {
+	return r.result
+}
+
+func (r *SmarterQueryResponse) SetResult(res *record.SmartQueryResult) {
+	if res == nil || len(res.GetData()) == 0 {
+		return
+	}
+
+	buf := bufferpool.GetSmartQuery()
+	buf = append(buf[:0], errorFlagNil)
+	buf = res.Marshal(buf)
+	r.Data = buf
 }
 
 type ExecuteStatementMessage struct {
@@ -512,27 +603,58 @@ type RaftMessagesRequest struct {
 	Database    string
 	PtId        uint32
 	RaftMessage raftpb.Message
+	Data        []byte
 }
 
 func (r *RaftMessagesRequest) MarshalBinary() ([]byte, error) {
-	msg, _ := r.RaftMessage.Marshal()
-	dr := &internal2.RaftMessagesRequest{
-		Database:     proto.String(r.Database),
-		PtId:         proto.Uint32(r.PtId),
-		RaftMessages: msg,
+	msg, err := r.RaftMessage.Marshal()
+	if err != nil {
+		return nil, err
 	}
-	return proto.Marshal(dr)
+	r.Data = codec.AppendString(r.Data[:0], r.Database)
+	r.Data = codec.AppendUint32(r.Data, r.PtId)
+	r.Data = codec.AppendBytes(r.Data, msg)
+
+	// used for r.Data verification
+	r.Data = binary.BigEndian.AppendUint32(r.Data, uint32(len(r.Data)))
+	return r.Data, nil
 }
 
-func (r *RaftMessagesRequest) UnmarshalBinary(data []byte) error {
-	var pb internal2.RaftMessagesRequest
-	if err := proto.Unmarshal(data, &pb); err != nil {
-		return err
+func (r *RaftMessagesRequest) UnmarshalBinary(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
 	}
-	r.Database = pb.GetDatabase()
-	r.PtId = pb.GetPtId()
-	err := r.RaftMessage.Unmarshal(pb.GetRaftMessages())
-	return errors.Wrapf(err, "unmarshal raft message error")
+	if len(buf) < util.Uint32SizeBytes {
+		return errors.New("cannot unmarshal empty byte slice")
+	}
+
+	n := len(buf)
+	size := int(binary.BigEndian.Uint32(buf[n-util.Uint32SizeBytes:]))
+	buf = buf[:n-util.Uint32SizeBytes]
+	if size != len(buf) {
+		return fmt.Errorf("invalid message, exp size: %d, actual size: %d", size, len(buf))
+	}
+
+	dec := codec.NewBinaryDecoder(buf)
+	r.Database = dec.String()
+	r.PtId = dec.Uint32()
+	raftMsg := dec.BytesNoCopy()
+	if err := r.RaftMessage.Unmarshal(raftMsg); err != nil {
+		return errors.Wrapf(err, "unmarshal raft message error")
+	}
+	return nil
+}
+
+func (r *RaftMessagesRequest) Reset() {
+	r.Data = nil
+	r.Database = ""
+	r.PtId = 0
+	r.RaftMessage.Reset()
+}
+
+func (r *RaftMessagesRequest) Release() {
+	r.Reset()
+	RaftMsgRequestPool.PutWithMemSize(r, 0)
 }
 
 type RaftMessagesResponse struct {
@@ -573,4 +695,203 @@ func (r *DropSeriesResponse) UnmarshalBinary(buf []byte) error {
 
 func (r *DropSeriesResponse) Error() error {
 	return NormalizeError(r.Err)
+}
+
+type ShowLastIndexRequest struct {
+	internal2.ShowLastIndexRequest
+}
+
+func (r *ShowLastIndexRequest) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&r.ShowLastIndexRequest)
+}
+
+func (r *ShowLastIndexRequest) UnmarshalBinary(buf []byte) error {
+	return proto.Unmarshal(buf, &r.ShowLastIndexRequest)
+}
+
+type ShowLastIndexResponse struct {
+	meta.ShowLastInfoResponse
+}
+
+type PullRPPTWriteStatusRequest struct {
+	internal2.PullRPPTWriteStatusRequest
+}
+
+func (r *PullRPPTWriteStatusRequest) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&r.PullRPPTWriteStatusRequest)
+}
+
+func (r *PullRPPTWriteStatusRequest) UnmarshalBinary(buf []byte) error {
+	return proto.Unmarshal(buf, &r.PullRPPTWriteStatusRequest)
+}
+
+type PullRPPTWriteStatusResponse struct {
+	meta.RPPTWriteStatusResponse
+}
+
+type GetTaskRequest struct {
+	Type scheduler.TaskType
+}
+
+func (r *GetTaskRequest) MarshalBinary() ([]byte, error) {
+	buf := make([]byte, 0)
+	// type
+	buf = encoding.MarshalInt16(buf, int16(r.Type))
+	return buf, nil
+}
+
+func (r *GetTaskRequest) UnmarshalBinary(buf []byte) error {
+	if len(buf) < 2 {
+		return errno.NewError(errno.ShortBufferSize, 2, len(buf))
+	}
+	r.Type = scheduler.TaskType(encoding.UnmarshalInt16(buf[:2]))
+
+	return nil
+}
+
+type GetTaskResponse struct {
+	err    string
+	result scheduler.Task
+}
+
+func (r *GetTaskResponse) MarshalBinary() ([]byte, error) {
+	buf := []byte{}
+	// err
+	buf = encoding.MarshalUint16(buf, uint16(len(r.err)))
+	buf = append(buf, r.err...)
+
+	// result
+	if r.result == nil {
+		return buf, nil
+	}
+	buf, err := r.result.MarshalBinary(buf)
+
+	return buf, err
+}
+
+func (r *GetTaskResponse) UnmarshalBinary(buf []byte) error {
+	var err error
+	if len(buf) < 2 {
+		return errno.NewError(errno.ShortBufferSize, 2, len(buf))
+	}
+	errLen := encoding.UnmarshalUint16(buf[:2])
+	buf = buf[2:]
+	if errLen > 0 && len(buf) >= int(errLen) {
+		r.err = bytesutil.ToUnsafeString(buf[:errLen])
+		buf = buf[errLen:]
+	}
+
+	if len(buf) == 0 {
+		return nil
+	}
+	r.result = &immutable.CompactTask{}
+	_, err = r.result.UnmarshalBinary(buf)
+
+	return err
+}
+
+func (r *GetTaskResponse) Result() scheduler.Task {
+	return r.result
+}
+
+func (r *GetTaskResponse) Error() error {
+	if r.err == "" {
+		return nil
+	}
+	return errors.New(r.err)
+}
+
+func (r *GetTaskResponse) SetTask(task scheduler.Task) {
+	r.result = task
+}
+
+func (r *GetTaskResponse) SetError(err string) {
+	r.err = err
+}
+
+type SendTaskResultRequest struct {
+	Uuid uint64
+	Type scheduler.TaskType
+	Info interface{}
+}
+
+func (r *SendTaskResultRequest) MarshalBinary() ([]byte, error) {
+	buf := make([]byte, 0)
+	// uuid
+	buf = encoding.MarshalUint64(buf, r.Uuid)
+	// type
+	buf = encoding.MarshalInt16(buf, int16(r.Type))
+	// info
+	switch r.Type {
+	case scheduler.CompactTask:
+		info, ok := r.Info.(*immutable.CompactedFileInfo)
+		if !ok {
+			return buf, errors.New("invalid type,exp *immutable.CompactedFileInfo")
+		}
+		buf = info.Marshal(buf)
+	default:
+		return buf, errors.New("wrong task type")
+	}
+
+	return buf, nil
+}
+
+func (r *SendTaskResultRequest) UnmarshalBinary(buf []byte) error {
+	if len(buf) < 8 {
+		return errno.NewError(errno.ShortBufferSize, 8, len(buf))
+	}
+	r.Uuid = encoding.UnmarshalUint64(buf[:8])
+	buf = buf[8:]
+	if len(buf) < 2 {
+		return errno.NewError(errno.ShortBufferSize, 2, len(buf))
+	}
+	r.Type = scheduler.TaskType(encoding.UnmarshalInt16(buf[:2]))
+	buf = buf[2:]
+	switch r.Type {
+	case scheduler.CompactTask:
+		info := &immutable.CompactedFileInfo{}
+		err := info.Unmarshal(buf)
+		if err != nil {
+			return err
+		}
+		r.Info = info
+	default:
+		return errors.New("wrong task type")
+	}
+
+	return nil
+}
+
+type SendTaskResultResponse struct {
+	err string
+}
+
+func (r *SendTaskResultResponse) MarshalBinary() ([]byte, error) {
+	buf := make([]byte, 0)
+	// err
+	buf = encoding.MarshalUint16(buf, uint16(len(r.err)))
+	buf = append(buf, r.err...)
+
+	return buf, nil
+}
+
+func (r *SendTaskResultResponse) UnmarshalBinary(buf []byte) error {
+	if len(buf) < 2 {
+		return errno.NewError(errno.ShortBufferSize, 2, len(buf))
+	}
+	errLen := encoding.UnmarshalUint16(buf[:2])
+	buf = buf[2:]
+	if errLen > 0 && len(buf) >= int(errLen) {
+		r.err = bytesutil.ToUnsafeString(buf[:errLen])
+	}
+
+	return nil
+}
+
+func (r *SendTaskResultResponse) SetError(err string) {
+	r.err = err
+}
+
+func (r *SendTaskResultResponse) Error() string {
+	return r.err
 }

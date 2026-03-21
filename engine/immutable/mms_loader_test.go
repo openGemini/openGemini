@@ -23,11 +23,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
 
@@ -315,4 +317,26 @@ func TestMmsReloadSpecifiedFiles(t *testing.T) {
 	if len(ctx.reloadFiles) != 0 {
 		t.Fatalf("there are still %d files that have not been loaded", len(ctx.reloadFiles))
 	}
+}
+
+func TestMmsTables_RecoverParquetLog(t *testing.T) {
+	convey.Convey("test memTable recover parquet Log", t, func() {
+		m := MmsTables{path: "./"}
+		p := gomonkey.ApplyFunc(fileops.Stat, func(string) (os.FileInfo, error) {
+			return nil, os.ErrInvalid
+		})
+		err := m.RecoverParquetLog()
+		convey.So(err, convey.ShouldNotBeNil)
+		p.Reset()
+
+		p = gomonkey.ApplyFunc(fileops.Stat, func(string) (os.FileInfo, error) {
+			return nil, nil
+		})
+		defer p.Reset()
+
+		p2 := gomonkey.ApplyFunc(ProcParquetLog, func(logDir string, lockPath *string, ctx *EventContext) error { return nil })
+		defer p2.Reset()
+		err = m.RecoverParquetLog()
+		convey.So(err, convey.ShouldBeNil)
+	})
 }

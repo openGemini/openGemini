@@ -17,15 +17,21 @@ package msgservice
 import (
 	"fmt"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/codec"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	netdata "github.com/openGemini/openGemini/lib/msgservice/data"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
+	"google.golang.org/protobuf/proto"
 )
+
+var RaftMsgRequestPool = pool.NewUnionPool(cpu.GetCpuNum(), 0, 0, func() *RaftMessagesRequest {
+	return &RaftMessagesRequest{}
+})
 
 type BaseMessage struct {
 	Typ  uint8
@@ -84,6 +90,9 @@ func (m *DDLMessage) Instance() transport.Codec {
 type SysCtrlRequest struct {
 	mod   string
 	param map[string]string
+
+	localDomain      string
+	localBindAddress string
 }
 
 func (s *SysCtrlRequest) Marshal(buf []byte) ([]byte, error) {
@@ -132,6 +141,22 @@ func (s *SysCtrlRequest) SetParam(m map[string]string) {
 	for k, v := range m {
 		s.param[k] = v
 	}
+}
+
+func (s *SysCtrlRequest) SetLocalDomain(domain string) {
+	s.localDomain = domain
+}
+
+func (s *SysCtrlRequest) LocalDomain() string {
+	return s.localDomain
+}
+
+func (s *SysCtrlRequest) SetLocalBindAddress(addr string) {
+	s.localBindAddress = addr
+}
+
+func (s *SysCtrlRequest) LocalBindAddress() string {
+	return s.localBindAddress
 }
 
 func (s *SysCtrlRequest) Instance() transport.Codec {
@@ -773,6 +798,11 @@ func (m *RaftMsgMessage) Unmarshal(buf []byte) error {
 	}
 	m.Typ = buf[0]
 
+	if m.Typ == RaftMessagesRequestMessage {
+		m.Data = RaftMsgRequestPool.Get()
+		return m.Data.UnmarshalBinary(buf[1:])
+	}
+
 	msgFn, ok := MessageBinaryCodec[m.Typ]
 	if msgFn == nil || !ok {
 		return fmt.Errorf("unknown message type: %d", m.Typ)
@@ -874,4 +904,33 @@ func (r *SendClearEventsResponse) Error() error {
 		return nil
 	}
 	return NormalizeError(r.Err)
+}
+
+type TaskMessage struct {
+	BaseMessage
+}
+
+func NewTaskMessage(typ uint8, data codec.BinaryCodec) *TaskMessage {
+	msg := &TaskMessage{}
+	msg.init(typ, data)
+	return msg
+}
+
+func (m *TaskMessage) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return errno.NewError(errno.ShortBufferSize, 0, 0)
+	}
+	m.Typ = buf[0]
+
+	msgFn, ok := MessageBinaryCodec[m.Typ]
+	if msgFn == nil || !ok {
+		return fmt.Errorf("unknown message type: %d", m.Typ)
+	}
+
+	m.Data = msgFn()
+	return m.Data.UnmarshalBinary(buf[1:])
+}
+
+func (m *TaskMessage) Instance() transport.Codec {
+	return &TaskMessage{}
 }

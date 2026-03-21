@@ -51,7 +51,7 @@ func NewLimitPushdownToExchangeRule(description string) *LimitPushdownToExchange
 	return mr
 }
 
-func (r *LimitPushdownToExchangeRule) Catagory() OptRuleCatagory {
+func (r *LimitPushdownToExchangeRule) Category() OptRuleCategory {
 	return RULE_PUSHDOWN_LIMIT
 }
 
@@ -70,7 +70,7 @@ func (r *LimitPushdownToExchangeRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -92,7 +92,7 @@ func (r *LimitPushdownToExchangeRule) OnMatch(call *OptRuleCall) {
 		return
 	}
 
-	if exchange.Schema().Options().HaveOnlyCSStore() {
+	if exchange.Schema().Sources().HaveOnlyCSStore() {
 		return
 	}
 
@@ -131,7 +131,7 @@ func NewLimitPushdownToReaderRule(description string) *LimitPushdownToReaderRule
 	return mr
 }
 
-func (r *LimitPushdownToReaderRule) Catagory() OptRuleCatagory {
+func (r *LimitPushdownToReaderRule) Category() OptRuleCategory {
 	return RULE_PUSHDOWN_LIMIT
 }
 
@@ -150,7 +150,7 @@ func (r *LimitPushdownToReaderRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -202,7 +202,7 @@ func NewLimitPushdownToSeriesRule(description string) *LimitPushdownToSeriesRule
 	return mr
 }
 
-func (r *LimitPushdownToSeriesRule) Catagory() OptRuleCatagory {
+func (r *LimitPushdownToSeriesRule) Category() OptRuleCategory {
 	return RULE_PUSHDOWN_LIMIT
 }
 
@@ -221,7 +221,7 @@ func (r *LimitPushdownToSeriesRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -273,7 +273,7 @@ func NewAggPushdownToExchangeRule(description string) *AggPushdownToExchangeRule
 	return mr
 }
 
-func (r *AggPushdownToExchangeRule) Catagory() OptRuleCatagory {
+func (r *AggPushdownToExchangeRule) Category() OptRuleCategory {
 	return RULE_PUSHDOWN_AGG
 }
 
@@ -292,7 +292,7 @@ func (r *AggPushdownToExchangeRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -365,7 +365,7 @@ func NewAggPushdownToReaderRule(description string) *AggPushdownToReaderRule {
 	return mr
 }
 
-func (r *AggPushdownToReaderRule) Catagory() OptRuleCatagory {
+func (r *AggPushdownToReaderRule) Category() OptRuleCategory {
 	return RULE_PUSHDOWN_AGG
 }
 
@@ -384,7 +384,7 @@ func (r *AggPushdownToReaderRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -461,7 +461,7 @@ func NewAggPushDownToColumnStoreReaderRule(description string) *AggPushDownToCol
 	return mr
 }
 
-func (r *AggPushDownToColumnStoreReaderRule) Catagory() OptRuleCatagory {
+func (r *AggPushDownToColumnStoreReaderRule) Category() OptRuleCategory {
 	return RULE_PUSHDOWN_AGG
 }
 
@@ -480,7 +480,7 @@ func (r *AggPushDownToColumnStoreReaderRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -503,6 +503,10 @@ func (r *AggPushDownToColumnStoreReaderRule) OnMatch(call *OptRuleCall) {
 	}
 
 	if series.Schema().ContainSeriesIgnoreCall() {
+		return
+	}
+
+	if series.Schema().IsColumnStoreCount() {
 		return
 	}
 
@@ -536,7 +540,7 @@ func NewAggPushdownToSeriesRule(description string) *AggPushdownToSeriesRule {
 	return mr
 }
 
-func (r *AggPushdownToSeriesRule) Catagory() OptRuleCatagory {
+func (r *AggPushdownToSeriesRule) Category() OptRuleCategory {
 	return RULE_PUSHDOWN_AGG
 }
 
@@ -555,7 +559,7 @@ func (r *AggPushdownToSeriesRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -618,7 +622,7 @@ func NewAggSpreadToExchangeRule(description string) *AggSpreadToExchangeRule {
 	return mr
 }
 
-func (r *AggSpreadToExchangeRule) Catagory() OptRuleCatagory {
+func (r *AggSpreadToExchangeRule) Category() OptRuleCategory {
 	return RULE_SPREAD_AGG
 }
 
@@ -637,7 +641,7 @@ func (r *AggSpreadToExchangeRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -668,7 +672,9 @@ func (r *AggSpreadToExchangeRule) OnMatch(call *OptRuleCall) {
 		logger.GetLogger().Warn("AggSpreadToReaderRule OnMatch failed, after clone isn't *LogicalAggregate")
 		return
 	}
-	clone.ForwardCallArgs()
+	if !(agg.schema.IsColumnStoreCount() && agg.Children()[0].(*HeuVertex).Node().(*LogicalExchange).EType() == READER_EXCHANGE) {
+		clone.ForwardCallArgs()
+	}
 	clone.CountToSum()
 	call.TransformTo(clone)
 }
@@ -692,7 +698,7 @@ func NewAggSpreadToSortAppendRule(description string) *AggSpreadToSortAppendRule
 	return mr
 }
 
-func (r *AggSpreadToSortAppendRule) Catagory() OptRuleCatagory {
+func (r *AggSpreadToSortAppendRule) Category() OptRuleCategory {
 	return RULE_SPREAD_AGG
 }
 
@@ -711,7 +717,7 @@ func (r *AggSpreadToSortAppendRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -772,7 +778,7 @@ func NewAggSpreadToReaderRule(description string) *AggSpreadToReaderRule {
 	return mr
 }
 
-func (r *AggSpreadToReaderRule) Catagory() OptRuleCatagory {
+func (r *AggSpreadToReaderRule) Category() OptRuleCategory {
 	return RULE_SPREAD_AGG
 }
 
@@ -791,7 +797,7 @@ func (r *AggSpreadToReaderRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -852,7 +858,7 @@ func NewAggPushDownToSubQueryRule(description string) *AggPushDownToSubQueryRule
 	return mr
 }
 
-func (r *AggPushDownToSubQueryRule) Catagory() OptRuleCatagory {
+func (r *AggPushDownToSubQueryRule) Category() OptRuleCategory {
 	return RULE_SUBQUERY
 }
 
@@ -871,7 +877,7 @@ func (r *AggPushDownToSubQueryRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -1091,7 +1097,7 @@ func NewAggToProjectInSubQueryRule(description string) *AggToProjectInSubQueryRu
 	return mr
 }
 
-func (r *AggToProjectInSubQueryRule) Catagory() OptRuleCatagory {
+func (r *AggToProjectInSubQueryRule) Category() OptRuleCategory {
 	return RULE_SUBQUERY
 }
 
@@ -1110,7 +1116,7 @@ func (r *AggToProjectInSubQueryRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -1194,7 +1200,7 @@ func NewReaderUpdateInSubQueryRule(description string) *ReaderUpdateInSubQueryRu
 	return mr
 }
 
-func (r *ReaderUpdateInSubQueryRule) Catagory() OptRuleCatagory {
+func (r *ReaderUpdateInSubQueryRule) Category() OptRuleCategory {
 	return RULE_SUBQUERY
 }
 
@@ -1213,7 +1219,7 @@ func (r *ReaderUpdateInSubQueryRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -1282,7 +1288,7 @@ func NewIntervalToProjectInSubQueryRule(description string) *IntervalToProjectIn
 	return mr
 }
 
-func (r *IntervalToProjectInSubQueryRule) Catagory() OptRuleCatagory {
+func (r *IntervalToProjectInSubQueryRule) Category() OptRuleCategory {
 	return RULE_SUBQUERY
 }
 
@@ -1301,7 +1307,7 @@ func (r *IntervalToProjectInSubQueryRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -1358,7 +1364,7 @@ func NewSlideWindowSpreadRule(description string) *SlideWindowSpreadRule {
 	return mr
 }
 
-func (r *SlideWindowSpreadRule) Catagory() OptRuleCatagory {
+func (r *SlideWindowSpreadRule) Category() OptRuleCategory {
 	return RULE_SPREAD_AGG
 }
 
@@ -1377,7 +1383,7 @@ func (r *SlideWindowSpreadRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -1426,7 +1432,7 @@ func NewCastorAggCutRule(description string) *CastorAggCutRule {
 	return mr
 }
 
-func (r *CastorAggCutRule) Catagory() OptRuleCatagory {
+func (r *CastorAggCutRule) Category() OptRuleCategory {
 	return RULE_HEIMADLL_PUSHDOWN
 }
 
@@ -1445,7 +1451,7 @@ func (r *CastorAggCutRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -1500,7 +1506,7 @@ func NewIncAggRule(description string) *IncAggRule {
 	return mr
 }
 
-func (r *IncAggRule) Catagory() OptRuleCatagory {
+func (r *IncAggRule) Category() OptRuleCategory {
 	return RULE_SPREAD_AGG
 }
 
@@ -1519,7 +1525,7 @@ func (r *IncAggRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -1568,7 +1574,7 @@ func NewIncHashAggRule(description string) *IncHashAggRule {
 	return mr
 }
 
-func (r *IncHashAggRule) Catagory() OptRuleCatagory {
+func (r *IncHashAggRule) Category() OptRuleCategory {
 	return RULE_SPREAD_AGG
 }
 
@@ -1587,7 +1593,7 @@ func (r *IncHashAggRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -1636,7 +1642,7 @@ func NewDistinctPushDownToExchangeRule(description string) *DistinctPushDownToEx
 	return mr
 }
 
-func (r *DistinctPushDownToExchangeRule) Catagory() OptRuleCatagory {
+func (r *DistinctPushDownToExchangeRule) Category() OptRuleCategory {
 	return RULE_PUSHDOWN_DISTINCT
 }
 
@@ -1655,7 +1661,7 @@ func (r *DistinctPushDownToExchangeRule) Equals(rhs OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 

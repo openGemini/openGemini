@@ -49,6 +49,9 @@ func genRPNElementByOp(logicalOp influxql.Token, value *FieldRef, res *RPNElemen
 	case influxql.MATCHPHRASE, influxql.IPINRANGE:
 		res.op = rpn.InRange
 		res.rg = NewRange(value, value, true, true)
+	case influxql.UNMATCHPHRASE:
+		res.op = rpn.OutRange
+		res.rg = NewRange(value, value, true, true)
 	default:
 		res.op = rpn.UNKNOWN
 		return false
@@ -87,6 +90,17 @@ type RPNElement struct {
 
 func NewRPNElement(op rpn.Op) *RPNElement {
 	return &RPNElement{op: op}
+}
+
+func (rpnElem *RPNElement) IsFirstPrimaryKey() bool {
+	return rpnElem.op <= rpn.NotInSet && rpnElem.keyColumn == 0
+}
+
+func (rpnElem *RPNElement) MatchedIndices(pkRec *record.Record) ([]int, error) {
+	pkIdx := rpnElem.keyColumn
+	isFirstPK := rpnElem.IsFirstPrimaryKey()
+	colVal := pkRec.Column(pkIdx)
+	return rpnElem.rg.MatchedIndices(colVal, isFirstPK)
 }
 
 type IndexProperty struct {

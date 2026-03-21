@@ -21,10 +21,10 @@ import (
 
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/failpoint"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
-	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
 
@@ -263,21 +263,19 @@ func failHandlerForRep(fh *failedHandler, id uint64, event *serf.MemberEvent, me
 			zap.Any("from", from), zap.Error(err))
 		return err
 	}
-	failpoint.Label("retry")
-	failpoint.Inject("stuckOnMemberFailEvent", func(val failpoint.Value) {
+
+	failpoint.Call("stuckOnMemberFailEvent", func(val *failpoint.Value) {
 		for {
-			if v, ok := val.(bool); ok {
-				if v {
-					time.Sleep(time.Second)
-					logger.GetLogger().Debug("stuck on store member fail event for replication")
-					failpoint.Goto("retry")
-				} else {
-					logger.GetLogger().Debug("jump out of stuck on store member fail event for replication")
-					failpoint.Break()
-				}
+			if val.Bool() {
+				time.Sleep(time.Second)
+				logger.GetLogger().Debug("stuck on store member fail event for replication")
+			} else {
+				logger.GetLogger().Debug("jump out of stuck on store member fail event for replication")
+				return
 			}
 		}
 	})
+
 	fh.cm.handleClusterMember(id, event)
 	return fh.failOverForRep(id)
 }
@@ -326,21 +324,19 @@ func handleStoreEvent(fh *failedHandler, id uint64, event *serf.MemberEvent, mem
 			zap.Any("from", from), zap.Error(err))
 		return err
 	}
-	failpoint.Label("retry")
-	failpoint.Inject("stuckOnMemberFailEvent", func(val failpoint.Value) {
+
+	failpoint.Call("stuckOnMemberFailEvent", func(val *failpoint.Value) {
 		for {
-			if v, ok := val.(bool); ok {
-				if v {
-					time.Sleep(time.Second)
-					logger.GetLogger().Debug("stuck on store member fail event for sso or waf")
-					failpoint.Goto("retry")
-				} else {
-					logger.GetLogger().Debug("jump out of stuck on store member fail event for sso or waf")
-					failpoint.Break()
-				}
+			if val.Bool() {
+				time.Sleep(time.Second)
+				logger.GetLogger().Debug("stuck on store member fail event for sso or waf")
+			} else {
+				logger.GetLogger().Debug("jump out of stuck on store member fail event for sso or waf")
+				return
 			}
 		}
 	})
+
 	fh.cm.handleClusterMember(id, event)
 	return nil
 }

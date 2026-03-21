@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -20,11 +20,12 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/workingsetcache"
 	"github.com/VictoriaMetrics/fastcache"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/memory"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/workingsetcache"
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/encoding/lz4"
 )
 
@@ -210,28 +211,30 @@ func UnMarshalTSIDs(dst []uint64, src []byte) ([]uint64, error) {
 
 func LoadCache(name, cachePath string, sizeBytes int) *workingsetcache.Cache {
 	path := cachePath + "/" + name
-	c := workingsetcache.Load(path, sizeBytes, time.Hour)
+	c := workingsetcache.Load(path, sizeBytes)
 	var cs fastcache.Stats
 	c.UpdateStats(&cs)
 	return c
 }
 
-func newIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize, tagFilterCostSize int, path string, store, compress bool) *IndexCache {
+func newIndexCache(path string, store bool) *IndexCache {
 	var mem = memory.Allowed()
-	if tsidCacheSize == 0 {
-		tsidCacheSize = mem / 32
-	}
-	if skeyCacheSize == 0 {
-		skeyCacheSize = mem / 32
-	}
-	if tagCacheSize == 0 {
-		tagCacheSize = mem / 16
-	}
-	if tagFilterCostSize == 0 {
-		tagFilterCostSize = mem / 128
-	}
+
+	conf := config.GetIndexConfig()
+	tsidCacheSize := conf.TSIDCacheSize
+	skeyCacheSize := conf.SKeyCacheSize
+	tagCacheSize := conf.TagCacheSize
+	tagFilterCostSize := conf.TagFilterCostCacheSize
+	cacheExpireDuration := time.Duration(conf.CacheExpireDuration)
+
+	config.ResetZero2Default(&tsidCacheSize, 0, mem/32)
+	config.ResetZero2Default(&skeyCacheSize, 0, mem/32)
+	config.ResetZero2Default(&tagCacheSize, 0, mem/16)
+	config.ResetZero2Default(&tagFilterCostSize, 0, mem/128)
+	config.ResetZero2Default(&cacheExpireDuration, 0, time.Hour)
+
 	ic := &IndexCache{
-		tagFilterCache: workingsetcache.New(tagCacheSize, time.Hour),
+		tagFilterCache: workingsetcache.New(tagCacheSize),
 		path:           path,
 	}
 	if store {
@@ -239,13 +242,13 @@ func newIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize, tagFilterCostSize
 		ic.TSIDToSeriesKeyCache = LoadCache(TSIDToSeriesKeyCacheName, path, skeyCacheSize)
 		ic.TagKeyValueCache = LoadCache(TagKeyToTagValueCacheName, path, skeyCacheSize)
 	} else {
-		ic.SeriesKeyToTSIDCache = workingsetcache.New(tsidCacheSize, time.Hour)
-		ic.TSIDToSeriesKeyCache = workingsetcache.New(skeyCacheSize, time.Hour)
-		ic.TagKeyValueCache = workingsetcache.New(skeyCacheSize, time.Hour)
+		ic.SeriesKeyToTSIDCache = workingsetcache.New(tsidCacheSize)
+		ic.TSIDToSeriesKeyCache = workingsetcache.New(skeyCacheSize)
+		ic.TagKeyValueCache = workingsetcache.New(skeyCacheSize)
 	}
-	ic.TagFilterCostCache = workingsetcache.New(tagFilterCostSize, time.Hour)
+	ic.TagFilterCostCache = workingsetcache.New(tagFilterCostSize)
 	ic.store = store
-	ic.keyCompressed = compress
+	ic.keyCompressed = conf.CacheCompressEnable
 	return ic
 }
 

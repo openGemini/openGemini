@@ -591,7 +591,7 @@ func (t *Transpiler) transpileCall(a *parser.Call) (influxql.Node, error) {
 
 	// {count,avg,sum,min,max,...}_over_time()
 	if fn, ok := rangeVectorFunctions[a.Func.Name]; ok {
-		t.dropMetric = true
+		t.dropMetric = !fn.keepMetric
 		if subExpr, subOk := a.Args[fn.vectorPosition].(*parser.SubqueryExpr); subOk {
 			return t.transpilePromSubqueryFunc(subExpr, fn, args)
 		}
@@ -599,12 +599,12 @@ func (t *Transpiler) transpileCall(a *parser.Call) (influxql.Node, error) {
 	}
 
 	if fn, ok := instantVectorFunctions[a.Func.Name]; ok {
-		t.dropMetric = true
+		t.dropMetric = !fn.keepMetric
 		return t.transpilePromFunc(fn, args, t.setAggregateFields)
 	}
 
 	if fn, ok := vectorMathFunctions[a.Func.Name]; ok {
-		t.dropMetric = true
+		t.dropMetric = !fn.keepMetric
 		return t.transpileVectorMathFunc(fn, args)
 	}
 

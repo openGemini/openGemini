@@ -14,7 +14,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/obs"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 // DatabaseInfo represents information about a database in the system.
@@ -189,6 +189,13 @@ func (di *DatabaseInfo) unmarshal(pb *proto2.DatabaseInfo) {
 	if pb.GetOptions() != nil {
 		di.Options = UnmarshalObsOptions(pb.GetOptions())
 	}
+}
+
+func (di *DatabaseInfo) GetShardKey(ID uint64) *ShardKeyInfo {
+	if len(di.ShardKey.ShardKey) > 0 && di.ShardKey.ShardGroup <= ID {
+		return &di.ShardKey
+	}
+	return nil
 }
 
 type PtOwner struct {

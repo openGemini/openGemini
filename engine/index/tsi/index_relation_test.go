@@ -17,7 +17,7 @@ package tsi
 import (
 	"fmt"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/dictmap"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/util"
@@ -32,7 +33,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/savsgio/dictpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -765,7 +765,7 @@ func TestWriteTextData(t *testing.T) {
 	path := t.TempDir()
 	_, idxBuilder := getTextIndexAndBuilder(path)
 	defer idxBuilder.Close()
-	mmPoints := &dictpool.Dict{}
+	mmPoints := make(dictmap.DictMap[string, *[]influx.Row])
 	if err := CreateIndexByRows(idxBuilder, mmPoints); err != nil {
 		t.Fatal(err)
 	}
@@ -942,7 +942,7 @@ func TestPartialFieldIndexSearch(t *testing.T) {
 	}
 }
 
-func genRowsByOpt(opt influx.IndexOption, seriesKeys []string) *dictpool.Dict {
+func genRowsByOpt(opt influx.IndexOption, seriesKeys []string) dictmap.DictMap[string, *[]influx.Row] {
 	pts := make([]influx.Row, 0, len(seriesKeys))
 
 	indexOptions := make([]influx.IndexOption, 0)
@@ -973,12 +973,12 @@ func genRowsByOpt(opt influx.IndexOption, seriesKeys []string) *dictpool.Dict {
 		pts = append(pts, pt)
 	}
 
-	mmPoints := &dictpool.Dict{}
+	mmPoints := make(dictmap.DictMap[string, *[]influx.Row])
 	mmPoints.Set("mn-1_0000", &pts)
 	return mmPoints
 }
 
-func genPartialRowsByOpt(opt influx.IndexOption, seriesKeys []string) *dictpool.Dict {
+func genPartialRowsByOpt(opt influx.IndexOption, seriesKeys []string) dictmap.DictMap[string, *[]influx.Row] {
 	pts := make([]influx.Row, 0, len(seriesKeys))
 
 	indexOptions := make([]influx.IndexOption, 0)
@@ -1020,7 +1020,7 @@ func genPartialRowsByOpt(opt influx.IndexOption, seriesKeys []string) *dictpool.
 		pts = append(pts, pt)
 	}
 
-	mmPoints := &dictpool.Dict{}
+	mmPoints := make(dictmap.DictMap[string, *[]influx.Row])
 	mmPoints.Set("mn-1_0000", &pts)
 	return mmPoints
 }
@@ -1051,18 +1051,13 @@ func CreateIndexByBuild(iBuilder *IndexBuilder, idx Index) {
 		pts = append(pts, pt)
 	}
 
-	mmPoints := &dictpool.Dict{}
+	mmPoints := make(dictmap.DictMap[string, *[]influx.Row])
 	mmPoints.Set("mn-1", &pts)
 	if err := iBuilder.CreateIndexIfNotExists(mmPoints, true); err != nil {
 		panic(err)
 	}
 
-	for mmIndex := range mmPoints.D {
-		rows, ok := mmPoints.D[mmIndex].Value.(*[]influx.Row)
-		if !ok {
-			panic("create index failed due to map mmPoints")
-		}
-
+	for _, rows := range mmPoints {
 		for rowIdx := range *rows {
 			if (*rows)[rowIdx].SeriesId == 0 {
 				panic("create index failed")
@@ -1074,18 +1069,13 @@ func CreateIndexByBuild(iBuilder *IndexBuilder, idx Index) {
 	iBuilder.Open()
 }
 
-func CreateIndexByRows(iBuilder *IndexBuilder, mmPoints *dictpool.Dict) error {
+func CreateIndexByRows(iBuilder *IndexBuilder, mmPoints dictmap.DictMap[string, *[]influx.Row]) error {
 
 	if err := iBuilder.CreateIndexIfNotExists(mmPoints, true); err != nil {
 		return err
 	}
 
-	for mmIndex := range mmPoints.D {
-		rows, ok := mmPoints.D[mmIndex].Value.(*[]influx.Row)
-		if !ok {
-			return fmt.Errorf("create index failed due to map mmPoints")
-		}
-
+	for _, rows := range mmPoints {
 		for rowIdx := range *rows {
 			if (*rows)[rowIdx].SeriesId == 0 {
 				return fmt.Errorf("create index failed")
@@ -1107,15 +1097,6 @@ func BenchmarkCreateIndex1(b *testing.B) {
 	_, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 
-	type IndexItem struct {
-		name      []byte
-		key       []byte
-		shardKey  []byte
-		tags      []influx.Tag
-		shardID   uint64
-		timestamp int64
-		mmPoints  *dictpool.Dict
-	}
 	n := 1000000
 	items := make([]*IndexItem, n)
 
@@ -1128,7 +1109,7 @@ func BenchmarkCreateIndex1(b *testing.B) {
 		for k := 0; k < 10; k++ {
 			tags[k] = influx.Tag{
 				Key:   "key-" + strconv.Itoa(k),
-				Value: "value-" + strconv.Itoa(k*1000+rand.Intn(1000)),
+				Value: "value-" + strconv.Itoa(k*1000+rand.IntN(1000)),
 			}
 			key += "," + tags[k].Key + "=" + tags[k].Value + ","
 		}
@@ -1148,7 +1129,7 @@ func BenchmarkCreateIndex1(b *testing.B) {
 		pt.SeriesId = 0
 		pt.Name = name
 		pt.Tags = tags
-		item.mmPoints = &dictpool.Dict{}
+		item.mmPoints = make(dictmap.DictMap[string, *[]influx.Row])
 		item.mmPoints.Set(name+"_0000", &[]influx.Row{pt})
 		items[i] = item
 	}
@@ -1409,8 +1390,7 @@ func TestMergeSetCacheClear(t *testing.T) {
 	if err != nil {
 		t.Fatal()
 	}
-	mem := 1 * 1024 * 1024
-	mIndex.cache = newIndexCache(mem/32, mem/32, mem/16, mem/128, path, false, false)
+	mIndex.cache = newIndexCache(path, false)
 
 	err = MergeSetCacheClear(mIndex)
 	if err != nil {

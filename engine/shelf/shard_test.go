@@ -16,7 +16,9 @@ package shelf_test
 
 import (
 	"errors"
+	"fmt"
 	"math"
+	"os"
 	"testing"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/stretchr/testify/require"
 )
@@ -49,25 +52,32 @@ func TestAsyncCreateIndex(t *testing.T) {
 }
 
 func TestCovertTSSP(t *testing.T) {
-	defer initConfig(2)()
+	defer initConfig(8)()
 	dir := t.TempDir()
-	shelf.Open()
 
 	shard, _, store := newShard(10, dir)
-	defer shard.Stop()
+
 	shard.Run()
 	shard.Run()
+	shard.ConvertToTSSP()
 
-	rec := buildRecord(10, 1)
-	err := writeRecordToShard(shard, rec, 10, nil)
-	require.NoError(t, err)
+	for range 5 {
+		rec := buildRecord(10, 1)
+		err := writeRecordToShard(shard, rec, 10, nil)
+		require.NoError(t, err)
+
+		row := buildRow(1, "foo", 1)
+		err = writeRecordToShard(shard, rec, 10, row.IndexKey)
+		require.NoError(t, err)
+		shard.ForceFlush()
+	}
 
 	shard.ConvertToTSSP()
-	shard.ForceFlush()
-
 	shard.ConvertToTSSP()
-	shard.ConvertToTSSP()
+	shard.Stop()
+	shard.Wait()
 	require.True(t, len(store.files) > 0)
+	require.NoError(t, store.Close())
 }
 
 func TestFreeShard(t *testing.T) {
@@ -113,6 +123,7 @@ func TestWriteRecordFailed(t *testing.T) {
 	tr := &util.TimeRange{Min: 0, Max: math.MaxInt64}
 
 	wal := shard.GetWalReaders(nil, "foo", tr)
+	unrefWal(wal)
 	require.True(t, len(wal) == 1)
 
 	mockErr := errors.New("some error")
@@ -134,7 +145,8 @@ func TestWriteRecordFailed(t *testing.T) {
 	require.NoError(t, err)
 
 	wal = shard.GetWalReaders(nil, "foo", tr)
-	require.Equal(t, 2, len(wal))
+	unrefWal(wal)
+	require.Equal(t, 1, len(wal))
 }
 
 func TestIndexCreatorManager(t *testing.T) {
@@ -148,4 +160,38 @@ func TestIndexCreatorManager(t *testing.T) {
 
 	require.Equal(t, c2, c3)
 	require.NotEqual(t, c1, c2)
+}
+
+func TestSwitchWAL(t *testing.T) {
+	defer initConfig(2)()
+	dir := t.TempDir()
+
+	shard, _, _ := newShard(10, dir)
+	defer shard.Stop()
+
+	wal := shard.CreateWal()
+	require.Empty(t, shard.SwitchWal(wal, false))
+
+	rec := buildRecord(10, 1)
+	err := writeRecordToShard(shard, rec, 10, nil)
+	require.NoError(t, err)
+
+	config.GetShelfMode().MaxWalFileSize = 1
+	defer func() {
+		config.GetShelfMode().MaxWalFileSize = config.MB * 128
+	}()
+
+	p1 := gomonkey.ApplyFunc(fileops.OpenFile, func(name string, flag int, perm os.FileMode, opt ...fileops.FSOption) (fileops.File, error) {
+		return nil, fmt.Errorf("some err")
+	})
+	defer p1.Reset()
+
+	shard.SwitchWalIfNeeded()
+	require.Empty(t, shard.SwitchWal(shard.CreateWal(), true))
+}
+
+func unrefWal(wals []*shelf.Wal) {
+	for _, wal := range wals {
+		wal.Unref()
+	}
 }

@@ -52,6 +52,8 @@ message Data {
 	optional bool IsSQLiteEnabled = 32;
 	repeated DataNode SqlNodes = 33;
 	optional uint64 MaxMstID = 34;
+	map<string, ResourceInfo> Resources = 35;
+	map<string, TaskGroup> TaskGroups = 36;
 }
 
 message Replications {
@@ -142,6 +144,7 @@ message MeasurementInfo {
     optional uint64 ID = 11;
     optional Options Options = 21;
 	map<string, SchemaVal> SchemaUseForClean = 22;
+	repeated int32 ShardingPlan = 23;
 }
 
 message SchemaVal {
@@ -166,6 +169,7 @@ message RetentionPolicyInfo {
 	optional DownSamplePolicyInfo DownSamplePolicyInfo = 13;
 	optional int64 ShardMergeDuration = 15;
 	optional int64 IndexColdDuration = 16;
+	optional bool AdaptiveSharding = 17;
 }
 
 message ContinuousQueryInfo {
@@ -183,6 +187,7 @@ message ShardGroupInfo {
 	optional int64 TruncatedAt = 6;
 	optional uint32 EngineType = 7;
 	optional uint32 version = 12;
+	optional string Timezone = 13;
 }
 
 message ShardInfo {
@@ -238,10 +243,21 @@ message IndexRelation {
     repeated string IndexName = 3;
     repeated IndexList IndexLists = 4;
     repeated IndexOptions IndexOptions = 5;
+    repeated IndexParam IndexParams = 6;
 }
 
 message IndexList {
     repeated string IList = 1;
+}
+
+message IndexParam {
+	repeated IndexElem IList = 1;
+}
+
+message IndexElem {
+	required uint32 Type = 1;
+	optional string  StrVal = 2;
+	optional double NumVal = 3;
 }
 
 message RpMeasurementsFieldsInfo {
@@ -394,7 +410,14 @@ message Command {
 		IndexDurationCommand                       = 104;
 		UpdateIndexInfoTierCommand                 = 105;
 		ReplaceMergeShardsCommand                  = 106;
-		RecoverMetaData                    = 107;
+		RecoverMetaData                            = 107;
+		AlterShardsNumCommand                      = 108;
+		CreateResourceCommand                      = 109;
+		DropResourceCommand                        = 110;
+		CreateTaskCommand                      	   = 111;
+		DropTaskCommand                            = 112;
+		ClearUselessDataNodeCommand                = 113;
+		UpdateShardingPlanCommand                  = 200;
 	}
 
 	required Type type = 1;
@@ -471,6 +494,8 @@ message CreateShardGroupCommand {
 	required uint64 ShardTier = 4;
 	optional uint32 EngineType = 5;
 	optional uint32 Version = 11;
+	optional string Timezone = 12;
+	map<string, Idxes> shardingPlans = 13;
 }
 
 message DeleteShardGroupCommand {
@@ -726,7 +751,8 @@ message IndexGroupInfo {
 	required int64 DeletedAt = 4;
 	repeated IndexInfo Indexes = 5;
 	optional uint32 EngineType = 6;
-	optional ReplicaClearInfo ClearInfo = 7;
+	optional ReplicaClearInfo ClearInfo = 8;
+	optional string Timezone = 9;
 }
 
 message ShardStatus {
@@ -887,6 +913,7 @@ message IndexDescriptor {
     required uint64 IndexID = 1;
     required uint64 IndexGroupID = 2;
     required TimeRangeInfo TimeRange = 3;
+	optional string Timezone = 4;
 }
 
 message ShardDurationInfo {
@@ -940,6 +967,7 @@ message UpdateShardInfoTierCommand {
 message CardinalityInfo {
     required TimeRangeInfo TimeRange = 1;
     required uint64      Cardinality = 2;
+	optional string         Timezone = 3;
 }
 
 message MeasurementCardinalityInfo {
@@ -1372,4 +1400,100 @@ message RecoverMetaDataCommand{
 	repeated string Databases = 1;
 	required bytes MetaData = 2;
 	map<uint64,uint64> NodeMap = 3;
+}
+
+message AlterShardsNumCommand {
+	extend Command {
+		optional AlterShardsNumCommand command = 205;
+	}
+	required string DBName = 1;
+	required string RpName = 2;
+	required string Name = 3;
+	optional int32 NumOfShards = 4;
+}
+
+message ResourceInfo {
+	required string Name = 1;
+	map<string,string> Properties = 2;
+}
+
+message CreateResourceCommand {
+	extend Command {
+		optional CreateResourceCommand command = 206;
+	}
+	required string Name = 1;
+	required ResourceInfo ResourceInfo = 2;
+}
+
+message DropResourceCommand {
+	extend Command {
+		optional DropResourceCommand command = 207;
+	}
+	required string Name = 1;
+}
+
+message DbPtLastIndexInfo {
+	required string Database = 1;
+	required uint32 PtId = 2;
+	required uint64 LastIndex = 3;
+}
+
+message ShowLastInfoResponse {
+	repeated DbPtLastIndexInfo Infos = 1;
+	optional string Err = 2;
+}
+
+message TaskGroup {
+	map<string, TaskInfo> tasks = 1;
+}
+
+message TaskInfo {
+	required string Name = 1;
+	required string Type = 2;
+	map<string, string> Properties = 3;
+	optional uint64 ID = 4;
+}
+
+message CreateTaskCommand {
+	extend Command {
+		optional CreateTaskCommand command = 208;
+	}
+	required TaskInfo TaskInfo = 1;
+}
+
+message DropTaskCommand {
+	extend Command {
+		optional DropTaskCommand command = 209;
+	}
+	required string TaskName = 1;
+	required string TaskType = 2;
+}
+
+message ClearUselessDataNodeCommand {
+	extend Command {
+		optional ClearUselessDataNodeCommand command = 210;
+	}
+	repeated string DataHosts = 1;
+}
+
+message MstWriteStatus {
+	map<string, int64> mstWriteStatus = 1;
+}
+
+message RPPTWriteStatusResponse {
+	map<uint32, MstWriteStatus> ptMstWriteStatus = 1;
+	optional string Err = 2;
+}
+
+message RPPTShardingPlan {
+	required string db = 1;
+	required string rp = 2;
+	map<string, Idxes> idxes = 3;
+}
+
+message UpdateShardingPlanCommand {
+	extend Command {
+		optional UpdateShardingPlanCommand command = 300;
+	}
+	repeated RPPTShardingPlan plans = 1;
 }

@@ -41,6 +41,7 @@ const (
 	NodeStore  = 3
 	NodeServer = 4
 	NodeData   = 5
+	NodeTask   = 6
 )
 
 const (
@@ -251,9 +252,12 @@ func NewErrs() *Errs {
 
 // Dispatch no lock, use len 1 error chan for lock
 func (s *Errs) Dispatch(err error) {
-	if atomic.AddInt32(&s.cnt, -1) >= 0 {
-		s.wg.Add(-1)
-	}
+	// wg.Add(-1) should be called at the end to ensure the integrity of s.err
+	defer func() {
+		if atomic.AddInt32(&s.cnt, -1) >= 0 {
+			s.wg.Add(-1)
+		}
+	}()
 	if err == nil {
 		return
 	}
@@ -325,6 +329,7 @@ var retryableErrnos = []Errno{
 	PtNotFound,
 	DBPTClosed,
 	ShardMetaNotFound,
+	LastRowRetry,
 }
 
 var retryableErrStrs = []string{

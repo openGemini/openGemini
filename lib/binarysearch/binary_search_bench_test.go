@@ -18,7 +18,7 @@ package binarysearch
 import (
 	"encoding/binary"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"sort"
 	"testing"
 )
@@ -41,10 +41,9 @@ func removeDuplicateElement(addrs []int) []int {
 }
 
 func makeUniformDataset(n int) []int {
-	r := rand.New(rand.NewSource(42))
 	offsets := make([]int, 0)
 	for i := 0; i < n; i++ {
-		offsets = append(offsets, r.Intn(n))
+		offsets = append(offsets, rand.IntN(n))
 	}
 	offsets = removeDuplicateElement(offsets)
 	sort.Ints(offsets)
@@ -56,14 +55,13 @@ func makeGapDataset(n int, sparsity float64) []int {
 		return nil
 	}
 
-	r := rand.New(rand.NewSource(42))
 	offsets := make([]int, 0)
 	skips := map[int]struct{}{}
 	rang := float64(n) / sparsity
 	ran := int(rang)
 
 	for len(skips)+n < ran {
-		skips[r.Intn(ran)] = struct{}{}
+		skips[rand.IntN(ran)] = struct{}{}
 	}
 
 	for k := 1; k < ran+1; k++ {

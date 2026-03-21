@@ -200,7 +200,7 @@ func (s *MockRPCStore) getDataNodeAliveConnId(nodeId uint64) (uint64, error) {
 	return 0, nil
 }
 
-func (s *MockRPCStore) handlerSql2MetaHeartbeat(host string) error {
+func (s *MockRPCStore) handlerCQ2MetaHeartbeat(host string) error {
 	return nil
 }
 
@@ -397,12 +397,12 @@ func TestRegisterQueryIDOffset(t *testing.T) {
 	}
 }
 
-func TestSql2MetaHeartbeatMessage(t *testing.T) {
+func TestCQ2MetaHeartbeatMessage(t *testing.T) {
 	server := startServer()
 	defer server.Stop()
 
-	callback := &metaclient.Sql2MetaHeartbeatCallback{}
-	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatRequest{
+	callback := &metaclient.CQ2MetaHeartbeatCallback{}
+	msg := message.NewMetaMessage(message.CQ2MetaHeartbeatRequestMessage, &message.CQ2MetaHeartbeatRequest{
 		Host: "localhost:8086",
 	})
 	err := sendTestMsg(msg, callback)

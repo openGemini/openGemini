@@ -239,6 +239,10 @@ func (p *LogicalHoltWinters) LogicPlanType() internal.LogicPlanType {
 	return internal.LogicPlanType_LogicalHoltWinters
 }
 
+func (p *LogicalLLMSemantic) LogicPlanType() internal.LogicPlanType {
+	return internal.LogicPlanType_LogicalLLMSemantic
+}
+
 func (p *LogicalSortAppend) LogicPlanType() internal.LogicPlanType {
 	return internal.LogicPlanType_LogicalSortAppend
 }
@@ -425,6 +429,10 @@ func (p *LogicalSplitGroup) String() string {
 
 func (p *LogicalHoltWinters) String() string {
 	return "LogicalHoltWinters"
+}
+
+func (p *LogicalLLMSemantic) String() string {
+	return "LogicalLLMSemantic"
 }
 
 func (p *LogicalSortAppend) String() string {
@@ -859,26 +867,65 @@ func UnmarshalQueryNode(buf []byte, shardNum int, opt hybridqp.Options) (hybridq
 	return best, nil
 }
 
+// RewriteArgs rewrites the arguments for the query plan nodes
+// recursively based on the specified plan type
 func ReWriteArgs(best hybridqp.QueryNode, isUnifyPlan bool) {
-	if best == nil || best.Children() == nil {
+	if best == nil || len(best.Children()) == 0 {
+		return // Early exit if node or children are nil
+	}
+
+	// Recursively process child nodes first
+	ReWriteArgs(best.Children()[0], isUnifyPlan)
+
+	// Check if current node is a LogicalHashAgg
+	node, ok := best.(*LogicalHashAgg)
+	if !ok {
 		return
 	}
-	ReWriteArgs(best.Children()[0], isUnifyPlan)
-	node, ok := best.(*LogicalHashAgg)
-	if ok {
-		if isUnifyPlan {
-			if node.eType != UNKNOWN_EXCHANGE {
-				node.ForwardCallArgs()
-				node.CountToSum()
-				node.init()
-			}
-		} else {
-			if node.eType != READER_EXCHANGE {
-				node.ForwardCallArgs()
-				node.CountToSum()
-				node.init()
+	ProcessHashAgg(node, isUnifyPlan)
+}
+
+// ProcessHashAgg handles the specific logic for LogicalHashAgg nodes
+func ProcessHashAgg(node *LogicalHashAgg, isUnifyPlan bool) {
+	if isUnifyPlan {
+		HandleUnifyPlanAgg(node)
+	} else {
+		HandleStandardAgg(node)
+	}
+}
+
+// HandleUnifyPlanAgg processes nodes for unify plan
+func HandleUnifyPlanAgg(node *LogicalHashAgg) {
+	if node.eType != UNKNOWN_EXCHANGE {
+		node.ForwardCallArgs()
+		node.CountToSum()
+		node.init()
+	}
+}
+
+// HandleStandardAgg processes nodes for standard plans
+func HandleStandardAgg(node *LogicalHashAgg) {
+	if node.eType != READER_EXCHANGE {
+		if len(node.Children()) == 0 {
+			return
+		}
+		// Check if child is also a hash aggregation
+		_, ok := node.Children()[0].(*LogicalHashAgg)
+		if !ok {
+			return
+		}
+		// Determine if column store count is enabled
+		isColumnStoreCount := false
+		if node.schema.IsColumnStoreCount() {
+			if _, ok := node.Children()[0].(*LogicalColumnStoreReader); ok {
+				isColumnStoreCount = true
 			}
 		}
+		if !isColumnStoreCount {
+			node.ForwardCallArgs()
+		}
+		node.CountToSum()
+		node.init()
 	}
 }
 

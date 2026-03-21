@@ -340,6 +340,9 @@ func NewHashAggTransform(
 }
 
 func (trans *HashAggTransform) initIntervalWindow() error {
+	if trans.opt.StartTime == influxql.MinTime && trans.opt.HasInterval() {
+		return errors.New("time-range specification (including a start time) is mandatory for GROUP BY time aggregation on column store engine")
+	}
 	if trans.opt.IsPromQuery() {
 		offset := trans.opt.GetPromQueryOffset().Nanoseconds()
 		trans.intervalStartTime, _ = trans.opt.Window(trans.opt.StartTime + offset)

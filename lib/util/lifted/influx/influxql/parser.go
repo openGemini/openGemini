@@ -3534,13 +3534,21 @@ func IdentNeedsQuotes(ident string) bool {
 }
 
 // isDateString returns true if the string looks like a date-only time literal.
-func isDateString(s string) bool { return dateStringRegexp.MatchString(s) }
+func isDateString(s string) bool {
+	return len(s) == 10 &&
+		isNumChar(s[0]) && isNumChar(s[1]) && isNumChar(s[2]) && isNumChar(s[3]) &&
+		s[4] == '-' && isNumChar(s[5]) && isNumChar(s[6]) &&
+		s[7] == '-' && isNumChar(s[8]) && isNumChar(s[9])
+}
+
+func isNumChar(c uint8) bool {
+	return c >= '0' && c <= '9'
+}
 
 // isDateTimeString returns true if the string looks like a date+time time literal.
-func isDateTimeString(s string) bool { return dateTimeStringRegexp.MatchString(s) }
-
-var dateStringRegexp = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
-var dateTimeStringRegexp = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}.+`)
+func isDateTimeString(s string) bool {
+	return len(s) > 10 && isDateString(s[:10])
+}
 
 // ErrInvalidDuration is returned when parsing a malformed duration.
 var ErrInvalidDuration = errors.New("invalid duration")

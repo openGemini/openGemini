@@ -1207,7 +1207,11 @@ func resultEvalDIV(lhs *ResultEval, rhs *ResultEval, l int, IntegerFloatDivision
 					lhs.isNil[i] = true
 					continue
 				}
-				lhs.floatValue[i] = float64(lhs.getInteger(i)) / float64(rhs.getInteger(i))
+				if rhs.getInteger(i) == 0 && !rhs.isPromQuery {
+					lhs.floatValue[i] = float64(0)
+				} else {
+					lhs.floatValue[i] = float64(lhs.getInteger(i)) / float64(rhs.getInteger(i))
+				}
 			}
 
 			lhs.dataType = influxql.Float
@@ -1220,7 +1224,11 @@ func resultEvalDIV(lhs *ResultEval, rhs *ResultEval, l int, IntegerFloatDivision
 					lhs.isNil[i] = true
 					continue
 				}
-				lhs.floatValue[i] = lhs.getFloat64(i) / rhs.getFloat64(i)
+				if rhs.getFloat64(i) == 0 && !rhs.isPromQuery {
+					lhs.floatValue[i] = float64(0)
+				} else {
+					lhs.floatValue[i] = lhs.getFloat64(i) / rhs.getFloat64(i)
+				}
 			}
 			lhs.dataType = influxql.Float
 			return
@@ -1394,6 +1402,9 @@ func ResetTimeForCompare(oChunk Chunk, offset time.Duration) {
 }
 
 func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
+	if chunk.GetGraph() != nil {
+		return chunk
+	}
 	oChunk := trans.resultChunkPool.GetChunk()
 	oChunk.SetName(chunk.Name())
 	if !trans.ResetTime {
@@ -1448,9 +1459,6 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 				}
 			}
 		}
-	}
-	if oChunk.GetGraph() == nil {
-		oChunk.SetGraph(chunk.GetGraph())
 	}
 	return oChunk
 }

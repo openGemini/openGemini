@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/procutil"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/procutil"
 	"github.com/influxdata/influxdb/cmd"
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/app/ts-monitor/run"

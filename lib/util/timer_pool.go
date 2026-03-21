@@ -56,10 +56,11 @@ func (p *TimerPool) GetTimer(timeout time.Duration) *time.Timer {
 }
 
 func (p *TimerPool) PutTimer(timer *time.Timer) {
-	timer.Stop()
-	select {
-	case <-timer.C:
-	default:
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
 	}
 	select {
 	case p.cache <- timer:

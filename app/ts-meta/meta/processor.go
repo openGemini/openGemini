@@ -53,7 +53,7 @@ type MetaStoreInterface interface {
 	getDBBriefInfo(dbName string) ([]byte, error)
 	getDataNodeAliveConnId(nodeId uint64) (uint64, error)
 	registerQueryIDOffset(host meta.SQLHost) (uint64, error)
-	handlerSql2MetaHeartbeat(host string) error
+	handlerCQ2MetaHeartbeat(host string) error
 	getContinuousQueryLease(host string) ([]string, error)
 	verifyDataNodeStatus(nodeID uint64) error
 	ShowCluster(body []byte) ([]byte, error)

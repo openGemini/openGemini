@@ -9,9 +9,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/filestream"
 )
 
@@ -122,7 +122,7 @@ func RemoveDirContents(dir string, lock *string) {
 	}
 	fis, err := fileops.ReadDir(dir)
 	if err != nil {
-		logger.Panicf("FATAL: cannot read contents of the dir %q: %s", dir, err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot read contents of the dir %q: %s", dir, err))
 	}
 
 	for _, fi := range fis {
@@ -143,7 +143,7 @@ func MustClose(f fileops.File) {
 	}
 	fname := f.Name()
 	if err := f.Close(); err != nil {
-		logger.Panicf("FATAL: cannot close %q: %s", fname, err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot close %q: %s", fname, err))
 	}
 }
 
@@ -151,10 +151,10 @@ func MustClose(f fileops.File) {
 func MustFileSize(path string) uint64 {
 	fi, err := fileops.Stat(path)
 	if err != nil {
-		logger.Panicf("FATAL: cannot stat %q: %s", path, err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot stat %q: %s", path, err))
 	}
 	if fi.IsDir() {
-		logger.Panicf("FATAL: %q must be a file, not a directory", path)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: %q must be a file, not a directory", path))
 	}
 	return uint64(fi.Size())
 }
@@ -165,7 +165,7 @@ func IsPathExist(path string) bool {
 		if os.IsNotExist(err) {
 			return false
 		}
-		logger.Panicf("FATAL: cannot stat %q: %s", path, err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot stat %q: %s", path, err))
 	}
 	return true
 }
@@ -185,7 +185,7 @@ func IsEmptyDir(path string) bool {
 		if err == io.EOF {
 			return true
 		}
-		logger.Panicf("FATAL: unexpected error when reading directory %q: %s", path, err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: unexpected error when reading directory %q: %s", path, err))
 	}
 	if len(fis) == 0 {
 		return true
@@ -227,7 +227,7 @@ func HardLinkFiles(srcDir, dstDir string) error {
 	}
 	defer func() {
 		if err := d.Close(); err != nil {
-			logger.Panicf("FATAL: cannot close %q: %s", srcDir, err)
+			logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot close %q: %s", srcDir, err))
 		}
 	}()
 
@@ -319,7 +319,7 @@ func ReadFullData(r io.Reader, data []byte) error {
 		return fmt.Errorf("cannot read %d bytes; read only %d bytes; error: %w", len(data), n, err)
 	}
 	if n != len(data) {
-		logger.Panicf("BUG: io.ReadFull read only %d bytes; must read %d bytes", n, len(data))
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: io.ReadFull read only %d bytes; must read %d bytes", n, len(data)))
 	}
 	return nil
 }
@@ -331,10 +331,10 @@ func MustWriteData(w io.Writer, data []byte) {
 	}
 	n, err := w.Write(data)
 	if err != nil {
-		logger.Panicf("FATAL: cannot write %d bytes: %s", len(data), err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot write %d bytes: %s", len(data), err))
 	}
 	if n != len(data) {
-		logger.Panicf("BUG: writer wrote %d bytes instead of %d bytes", n, len(data))
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: writer wrote %d bytes instead of %d bytes", n, len(data)))
 	}
 }
 

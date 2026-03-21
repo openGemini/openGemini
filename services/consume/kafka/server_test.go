@@ -159,6 +159,10 @@ func (h *MetadataHandleV1) Handle(header protocol.RequestHeader, _ []byte, onMsg
 	return onMsg(resp)
 }
 
+func (h *MetadataHandleV1) Release() {
+	// No-op: present only to satisfy the interface; not expected to be called.
+}
+
 type ListOffsetHandleV1 struct {
 }
 
@@ -180,6 +184,10 @@ func (h *ListOffsetHandleV1) Handle(header protocol.RequestHeader, _ []byte, onM
 		List:          []protocol.TopicPartitionOffsetsV1{ofs},
 	}
 	return onMsg(resp)
+}
+
+func (h *ListOffsetHandleV1) Release() {
+	// No-op: present only to satisfy the interface; not expected to be called.
 }
 
 type FetchHandleV2 struct {
@@ -235,6 +243,10 @@ func (h *FetchHandleV2) Handle(header protocol.RequestHeader, body []byte, onMsg
 		},
 	}
 	return onMsg(resp)
+}
+
+func (h *FetchHandleV2) Release() {
+
 }
 
 type MockMessage struct {
@@ -433,10 +445,12 @@ func NewMockRequestFetchV2() *protocol.RequestFetchV2 {
 		ReplicaID:   0,
 		MaxWaitTime: 0,
 		MinBytes:    0,
-		Topics:      []string{"testTopics"},
-		Partitions:  []uint32{0},
-		Offset:      0,
-		MaxBytes:    0,
+		Topics: []string{
+			`{"mode": 1, "uuid": "test-uuid-123", "query": "SELECT * FROM test"}`,
+		},
+		Partitions: []uint32{0},
+		Offset:     0,
+		MaxBytes:   0,
 	}
 }
 
@@ -453,7 +467,7 @@ func (m *MockProcessor) Init(topic *consume.Topic) error {
 	return nil
 }
 
-func (m *MockProcessor) Process(onMsg func(msg protocol.Marshaler) bool) error {
+func (m *MockProcessor) Process(params consume.FetchParams, onMsg func(msg protocol.Marshaler) bool) error {
 	if m.ProcessErr != nil {
 		return m.ProcessErr
 	}

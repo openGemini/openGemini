@@ -17,26 +17,31 @@ package pool
 import (
 	"sync"
 
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
-var RowsPool sync.Pool
+var rowsPoolChan = make(chan *[]influx.Row, cpu.GetCpuNum())
+var rowsPool = sync.Pool{}
 
 func GetRows(num int) *[]influx.Row {
-	rows := RowsPool.Get()
-	if rows == nil {
-		rs := make([]influx.Row, 0, num)
-		return &rs
+	var rows *[]influx.Row
+	select {
+	case rows = <-rowsPoolChan:
+	default:
+		v := rowsPool.Get()
+		if v == nil {
+			rs := make([]influx.Row, 0, num)
+			return &rs
+		}
+		rows, _ = v.(*[]influx.Row)
 	}
-	rs, ok := rows.(*[]influx.Row)
-	if !ok {
-		panic("It's not ok for type *[]influx.Row")
-	}
+
 	// resize if needed
-	if cap(*rs) < num {
-		*rs = make([]influx.Row, 0, num)
+	if cap(*rows) < num {
+		*rows = make([]influx.Row, 0, num)
 	}
-	return rs
+	return rows
 }
 
 func PutRows(rows *[]influx.Row) {
@@ -44,5 +49,9 @@ func PutRows(rows *[]influx.Row) {
 		(*rows)[i].ReuseSet()
 	}
 	*rows = (*rows)[:0]
-	RowsPool.Put(rows)
+	select {
+	case rowsPoolChan <- rows:
+	default:
+		rowsPool.Put(rows)
+	}
 }

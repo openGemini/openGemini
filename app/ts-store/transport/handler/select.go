@@ -18,12 +18,14 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/lastrowcache"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/msgservice"
@@ -31,7 +33,10 @@ import (
 	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	query2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
@@ -185,9 +190,10 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 	if req.Empty() || s.aborted {
 		return nil
 	}
+	isInternal := util.IsInternalDatabase(req.Database)
 
 	var qDuration *statistics.StoreSlowQueryStatistics
-	if req.Database != "_internal" {
+	if !isInternal {
 		start := time.Now()
 		qDuration = s.startDuration(req.Database, req.Opt.Query)
 		defer s.finishDuration(qDuration, start)
@@ -198,7 +204,7 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 	var totalSource int64
 	var e error
 	start := time.Now()
-	if req.Database != "_internal" {
+	if !isInternal {
 		parallelism, totalSource, e = resourceallocator.AllocRes(resourceallocator.ShardsParallelismRes, shardsNum)
 		if e != nil {
 			return e
@@ -215,8 +221,9 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 			_ = resourceallocator.FreeParallelismRes(resourceallocator.ShardsParallelismRes, parallelism, 0)
 		}()
 	}
+	use := time.Since(start)
+	queryStat.GetShardResourceTimeTotal.Add(use.Nanoseconds())
 
-	queryStat.GetShardResourceTimeTotal.AddSinceNano(start)
 	var ctx context.Context
 	if s.context == nil {
 		ctx = context.WithValue(context.Background(), QueryDurationKey, qDuration)
@@ -225,6 +232,7 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 	}
 	if req.Analyze {
 		ctx = s.initTrace(ctx)
+		s.rootSpan.AddStringField("shard_resource_alloc_time_use", use.String())
 	}
 
 	defer func() {
@@ -233,6 +241,13 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 			s.logger().Error(err.Error(), zap.String("process raise stack:", string(debug.Stack())))
 		}
 	}()
+
+	// query last row cache
+	if lastrowcache.IsLastRowCacheEnabled() && node.Schema().IsLastRowQuery() {
+		if isHit := s.processLastRowCache(w, node, req); isHit {
+			return nil
+		}
+	}
 
 	if req.HaveLocalMst() {
 		if err := s.store.RefEngineDbPt(req.Database, req.PtID); err != nil {
@@ -263,6 +278,128 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 	return nil
 }
 
+func checkAllValuesNil(values map[string]any) bool {
+	nilCount := 0
+	for _, value := range values {
+		if value == nil {
+			nilCount++
+		}
+	}
+	return len(values) == nilCount
+}
+
+// processLastRowCache used for last_row only
+func (s *Select) processLastRowCache(w spdy.Responser, node hybridqp.QueryNode, req *executor.RemoteQuery) bool {
+	var db, rp string
+	for _, source := range req.Opt.Sources {
+		mst, isMst := source.(*influxql.Measurement)
+		if !isMst {
+			continue
+		}
+		// last_row supports only one source now
+		db, rp = mst.Database, mst.RetentionPolicy
+		break
+	}
+
+	if db == "" || rp == "" {
+		return false
+	}
+
+	// 1. query cache
+	fieldKeys := make([]string, 0, node.Schema().GetQueryFields().Len())
+	queryFields := node.Schema().GetQueryFields()
+	for i := range queryFields {
+		call, isCall := queryFields[i].Expr.(*influxql.Call)
+		if !isCall || strings.ToLower(call.Name) != "last_row" || len(call.Args) < 1 {
+			return false
+		}
+
+		fieldVarRef, isVarRef := call.Args[0].(*influxql.VarRef)
+		if !isVarRef {
+			return false
+		}
+		fieldKeys = append(fieldKeys, fieldVarRef.Val)
+	}
+
+	ts, values, ok := lastrowcache.Get(db, rp, req.Opt.SeriesKey, fieldKeys)
+	if !ok {
+		return false
+	}
+
+	// if all values from cache are nil, query results will return nothing, keep same with influx open source community
+	if checkAllValuesNil(values) {
+		if err := w.Response(executor.NewFinishMessage(0), true); err != nil {
+			return false
+		}
+		return true
+	}
+
+	// if query with time, cache timestamp should be in the query time range
+	if ts < req.Opt.StartTime || ts > req.Opt.EndTime {
+		return false
+	}
+
+	// 2. build chunk and send to sqlNode
+	// measurement name
+	name, _, err := influx.MeasurementName(req.Opt.SeriesKey)
+	if err != nil {
+		return false
+	}
+	chunkBuilder := executor.NewChunkBuilder(node.RowDataType())
+	chunk := chunkBuilder.NewChunk(influx.GetOriginMstName(string(name)))
+
+	// tags
+	var pointTags influx.PointTags
+	_, err = influx.IndexKeyToTags(req.Opt.SeriesKey, true, &pointTags)
+	if err != nil {
+		return false
+	}
+
+	// group by
+	dims := make([]string, 0, pointTags.Len())
+	for i := range pointTags {
+		pointTag := &(pointTags[i])
+		dims = append(dims, pointTag.Key)
+	}
+	chunkTags := executor.NewChunkTags(pointTags, dims)
+	chunk.AppendTagsAndIndex(*chunkTags, chunk.Len())
+	chunk.AppendTimes([]int64{ts})
+	chunk.AppendIntervalIndex(0)
+
+	// columns
+	for i, field := range node.RowDataType().Fields() {
+		fieldKey := executor.LastRowFieldKey(field.Expr, node.Schema().Mapping())
+		// column data
+		value, exist := values[fieldKey]
+		if !exist || value == nil {
+			chunk.Column(i).AppendNil()
+			continue
+		}
+		fieldType := field.Expr.(*influxql.VarRef).Type
+		switch fieldType {
+		case influxql.Integer:
+			chunk.Column(i).AppendIntegerValue(value.(int64))
+		case influxql.Float:
+			chunk.Column(i).AppendFloatValue(value.(float64))
+		case influxql.String:
+			chunk.Column(i).AppendStringValue(value.(string))
+		case influxql.Boolean:
+			chunk.Column(i).AppendBooleanValue(value.(bool))
+		default:
+			return false
+		}
+		// bitmap for nil value
+		chunk.Column(i).AppendNotNil()
+	}
+
+	// response
+	if err = w.Response(executor.NewChunkResponse(chunk), false); err != nil {
+		return false
+	}
+
+	return true
+}
+
 func (s *Select) execute(ctx context.Context, p hybridqp.Executor) error {
 	pe, ok := p.(*executor.PipelineExecutor)
 	if !ok || pe == nil {
@@ -287,7 +424,7 @@ func (s *Select) execute(ctx context.Context, p hybridqp.Executor) error {
 }
 
 func (s *Select) responseAnalyze(w spdy.Responser) {
-	tracing.Finish(s.buildPlanSpan, s.createPlanSpan)
+	tracing.Finish(s.rootSpan, s.buildPlanSpan, s.createPlanSpan)
 	rsp := executor.NewAnalyzeResponse(s.trace)
 
 	if err := w.Response(rsp, false); err != nil {
@@ -299,7 +436,7 @@ func (s *Select) initTrace(ctx context.Context) context.Context {
 	s.trace, s.rootSpan = tracing.NewTrace("TS-Store")
 	ctx = tracing.NewContextWithTrace(ctx, s.trace)
 	ctx = tracing.NewContextWithSpan(ctx, s.rootSpan)
-	s.rootSpan.Finish()
+
 	s.buildPlanSpan = tracing.Start(s.rootSpan, "build_logic_plan", false)
 	s.createPlanSpan = tracing.Start(s.buildPlanSpan, "create_logic_plan", false)
 

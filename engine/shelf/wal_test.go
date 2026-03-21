@@ -30,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
+	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
@@ -455,4 +456,14 @@ func TestRunObsWal(t *testing.T) {
 
 	err := writeRecordToWal(wal, rec, sid, row.IndexKey)
 	require.Error(t, err)
+}
+
+func TestForceUnref(t *testing.T) {
+	defer initConfig(2)()
+
+	lock := ""
+	wal := shelf.NewWal(t.TempDir(), &lock, nil)
+	wal.Ref()
+	wal.ForceUnref()
+	require.Equal(t, int64(1), stat.NewShelf().ForceUnrefTotal.GetValue())
 }

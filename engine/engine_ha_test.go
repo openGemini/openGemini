@@ -16,11 +16,14 @@ package engine
 
 import (
 	"fmt"
+	"os"
 	"reflect"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/influxdata/influxdb/toml"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -524,6 +527,31 @@ func TestRollbackPreOffloadDoShardMove(t *testing.T) {
 	if err != nil {
 		t.Fatal("TestRollbackPreOffloadDoShardMove err")
 	}
+}
+
+func TestOffloadDbPT(t *testing.T) {
+	dir := t.TempDir()
+	defer os.RemoveAll(dir)
+
+	e := getEngineBeforeTest(t, dir)
+	defer e.Close()
+
+	tmpTimeout := config.GetStoreConfig().DbptUnrefTimeout
+	config.GetStoreConfig().DbptUnrefTimeout = toml.Duration(time.Millisecond)
+	defer func() { config.GetStoreConfig().DbptUnrefTimeout = tmpTimeout }()
+
+	t.Run("not only query remaining", func(t *testing.T) {
+		got := e.offloadDbPT(&DBPTInfo{exeCount: 1, logger: e.log})
+		require.NotNil(t, got)
+	})
+	t.Run("need to wait querying", func(t *testing.T) {
+		tmpWait := config.GetStoreConfig().OffloadWait
+		config.GetStoreConfig().OffloadWait = true
+		defer func() { config.GetStoreConfig().OffloadWait = tmpWait }()
+
+		got := e.offloadDbPT(&DBPTInfo{exeCount: 1, rExeCount: 1, logger: e.log})
+		require.NotNil(t, got)
+	})
 }
 
 func checkShard(t *testing.T, e *EngineImpl, shNum int, shardId uint64, hasIndex bool, db string, ptId uint32, able bool) {

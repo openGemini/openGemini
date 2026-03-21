@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/smartystreets/goconvey/convey"
@@ -83,6 +84,8 @@ func Test_WriterWriteRecord(t *testing.T) {
 	defer tmpFile.Close()
 	defer os.Remove(tmpFile.Name())
 
+	conf := config.GetStoreConfig().ParquetTask
+	conf.ItrBatchSize = 1
 	meta := MetaData{Mst: "test", Schemas: map[string]uint8{"field1_float": 3, "field2_int": 1, "field3_bool": 5, "field4_string": 4, "time": 1,
 		"field6_int": 1, "field7_float": 3, "field8_string": 4, "field9_bool": 5, "test": 4}}
 	writer, err := NewWriter(tmpFile.Name(), "", meta)

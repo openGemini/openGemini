@@ -16,6 +16,7 @@ package query
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -248,6 +249,9 @@ type ArgNumberCheckRule struct {
 
 func (a *ArgNumberCheckRule) Check(expr *influxql.Call) error {
 	got := len(expr.Args)
+	if a.Max == 0 {
+		a.Max = math.MaxInt
+	}
 	if got < a.Min || got > a.Max {
 		if a.Min == a.Max {
 			return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, a.Min, got)
@@ -307,5 +311,10 @@ func AssertIntegerLiteral(arg interface{}) bool {
 
 func AssertNumberLiteral(arg interface{}) bool {
 	_, ok := arg.(*influxql.NumberLiteral)
+	return ok
+}
+
+func AssertVarRef(arg interface{}) bool {
+	_, ok := arg.(*influxql.VarRef)
 	return ok
 }

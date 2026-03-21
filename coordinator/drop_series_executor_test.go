@@ -50,6 +50,24 @@ func TestDropSeriesExecutor(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestDropSeriesIllegalExecutor(t *testing.T) {
+	e := NewDropSeriesExecutor(logger.NewLogger(errno.ModuleUnknown),
+		&mockMC{}, &mockME{}, &mockNS{})
+	smt := &influxql.DropSeriesStatement{
+		Sources: append(influxql.Sources{}, &influxql.Measurement{Name: "mst"}),
+	}
+
+	err := e.Execute(smt, "db0")
+	assert.ErrorContains(t, err, "where condition is illegal")
+
+	cond, _, er := parseTagKeyCondition("tag1 > 'a1'")
+	assert.NoError(t, er)
+
+	smt.Condition = cond
+	err = e.Execute(smt, "db0")
+	assert.ErrorContains(t, err, "only support =, !=, =~")
+}
+
 func TestDropSeriesExecutorError(t *testing.T) {
 	e := NewDropSeriesExecutor(logger.NewLogger(errno.ModuleUnknown),
 		&mockMError{}, &mockME{}, &mockNS{})

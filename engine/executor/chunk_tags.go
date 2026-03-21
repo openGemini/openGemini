@@ -16,9 +16,14 @@ package executor
 
 import (
 	"sort"
+	"strings"
 	"unsafe"
 
+	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
@@ -112,6 +117,30 @@ func (ct *ChunkTags) GetChunkTagAndValues() ([]string, []string) {
 		v = append(v, kv[1])
 	}
 	return k, v
+}
+
+func (ct *ChunkTags) GetChunkTagKVStrings() string {
+	if len(ct.subset) == 0 {
+		return ""
+	}
+	tagValue := ct.decodeTags()
+	if len(tagValue) == 0 {
+		return ""
+	}
+
+	var builder strings.Builder
+	builder.Grow(64)
+
+	for i, kv := range tagValue {
+		if i > 0 {
+			builder.WriteByte(',')
+		}
+		builder.WriteString(kv[0])
+		builder.WriteByte('=')
+		builder.WriteString(kv[1])
+	}
+
+	return builder.String()
 }
 
 func DecodeBytes(bytes []byte) []byte {
@@ -235,6 +264,17 @@ func (ct *ChunkTags) encodeTags(pts influx.PointTags, keys []string) {
 	}
 
 	for _, k := range keys {
+		if k == influxql.DefaultLabels {
+			dst := bufferpool.Get()
+			defer bufferpool.Put(dst)
+			dst = ConvertToLabels(&pts, dst[:0])
+			dst = append(dst, influx.ByteSplit)
+			ct.subset = append(ct.subset, Str2bytes(k+influx.StringSplit)...)
+			ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
+			ct.subset = append(ct.subset, dst...)
+			ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
+			continue
+		}
 		t1 := pts.FindPointTag(k)
 		if t1 == nil {
 			if IgnoreEmptyTag {
@@ -339,4 +379,34 @@ func (ct *ChunkTags) DecodeTagsWithoutTag(tagName string) ([]byte, string) {
 		return nil, targetTagValue
 	}
 	return newTags, targetTagValue
+}
+
+func ConvertToLabels(pts *influx.PointTags, dst []byte) []byte {
+	for i := range *pts {
+		if (*pts)[i].Key == promql2influxql.DefaultMetricKeyLabel {
+			continue
+		}
+		dst = append(dst, (*pts)[i].Key...)
+		dst = append(dst, influxql.DefaultLabelValueSplit...)
+		dst = append(dst, (*pts)[i].Value...)
+		if i < len(*pts)-1 {
+			dst = append(dst, influxql.DefaultLabelKeySplit...)
+		}
+	}
+	return dst
+}
+
+func AuxTagKeyHandler(auxTagIdx int, tags *influx.PointTags, rec *record.Record, start, end int) {
+	dst := bufferpool.Get()
+	defer bufferpool.Put(dst)
+	dst = ConvertToLabels(tags, dst[:0])
+	if len(dst) == 0 {
+		for j := start; j < end; j++ {
+			rec.ColVals[auxTagIdx].AppendStringNull()
+		}
+	} else {
+		for j := start; j < end; j++ {
+			rec.ColVals[auxTagIdx].AppendString(util.Bytes2str(dst))
+		}
+	}
 }

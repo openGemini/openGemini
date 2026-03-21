@@ -17,6 +17,7 @@ package meta
 import (
 	"bytes"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,8 +28,17 @@ import (
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/spf13/cast"
+	"google.golang.org/protobuf/proto"
+)
+
+const (
+	PropertyKeyUniqueEnabled = "unique"
+	PropertyKeyPKType        = "primaryKeyType"
+
+	PrimaryKeyTypeSparse  = "sparse"
+	PrimaryKeyTypeCluster = "cluster"
 )
 
 var escapeTable [256]byte
@@ -102,9 +112,9 @@ func (mo *Options) Marshal() *proto2.Options {
 	return &proto2.Options{
 		CaseInSensitive: proto.Bool(mo.CaseInSensitive),
 		AppendMeta:      proto.Bool(mo.AppendMeta),
-		WriteThreshold:  proto.Int(mo.WriteThreshold),
-		ReadThreshold:   proto.Int(mo.ReadThreshold),
-		StorageCapacity: proto.Int(mo.StorageCapacity),
+		WriteThreshold:  proto.Int32(int32(mo.WriteThreshold)),
+		ReadThreshold:   proto.Int32(int32(mo.ReadThreshold)),
+		StorageCapacity: proto.Int32(int32(mo.StorageCapacity)),
 		SplitChar:       proto.String(mo.SplitChar),
 		TagsSplit:       proto.String(mo.TagsSplit),
 		Ttl:             proto.Int64(mo.Ttl),
@@ -155,31 +165,35 @@ func NewCleanSchema(len int) CleanSchema {
 	return make(map[string]SchemaVal, len)
 }
 
-func UnmarshalCleanSchema(msti *MeasurementInfo, pb *proto2.MeasurementInfo, logKeeper bool) {
+func UnmarshalCleanSchema(msti *MeasurementInfo, pb *proto2.MeasurementInfo, logKeeper bool, lastEndTime int32) {
 	pbSchema := pb.GetSchema()
 	pbCleanSchema := pb.GetSchemaUseForClean()
 	if pbSchema != nil {
 		retSchema := NewCleanSchema(len(pbSchema))
 		for k, v := range pbSchema {
-			retSchema[k] = SchemaVal{Typ: int8(v), EndTime: 0}
+			retSchema[k] = SchemaVal{Typ: int8(v), EndTime: lastEndTime}
 			if v == influx.Field_Type_Tag {
 				msti.tagKeysTotal++
 			}
 		}
 		if logKeeper {
-			retSchema[record.SeqIDField] = SchemaVal{Typ: influx.Field_Type_Int, EndTime: 0}
+			retSchema[record.SeqIDField] = SchemaVal{Typ: influx.Field_Type_Int, EndTime: lastEndTime}
 		}
 		msti.Schema = &retSchema
 	} else if pbCleanSchema != nil {
 		retSchema := NewCleanSchema(len(pbCleanSchema))
 		for k, v := range pbCleanSchema {
-			retSchema[k] = SchemaVal{Typ: int8(*v.Typ), EndTime: *v.EndTime}
+			if *v.EndTime == 0 {
+				retSchema[k] = SchemaVal{Typ: int8(*v.Typ), EndTime: lastEndTime}
+			} else {
+				retSchema[k] = SchemaVal{Typ: int8(*v.Typ), EndTime: *v.EndTime}
+			}
 			if *v.Typ == influx.Field_Type_Tag {
 				msti.tagKeysTotal++
 			}
 		}
 		if logKeeper {
-			retSchema[record.SeqIDField] = SchemaVal{Typ: influx.Field_Type_Int, EndTime: 0}
+			retSchema[record.SeqIDField] = SchemaVal{Typ: influx.Field_Type_Int, EndTime: lastEndTime}
 		}
 		msti.Schema = &retSchema
 	} else {
@@ -251,6 +265,7 @@ type MeasurementInfo struct {
 	tagKeysTotal    int
 	ID              uint64
 	SchemaLock      sync.RWMutex //ts-meta not use
+	ShardingPlan    []int
 }
 
 type MeasurementTTLTnfo struct {
@@ -375,7 +390,7 @@ func (msti *MeasurementInfo) marshal() *proto2.MeasurementInfo {
 	return pb
 }
 
-func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
+func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo, lastEndTime int32) {
 	msti.Name = pb.GetName()
 	msti.originName = influx.GetOriginMstName(msti.Name)
 	msti.MarkDeleted = pb.GetMarkDeleted()
@@ -388,7 +403,7 @@ func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 		}
 	}
 
-	UnmarshalCleanSchema(msti, pb, config.IsLogKeeper())
+	UnmarshalCleanSchema(msti, pb, config.IsLogKeeper(), lastEndTime)
 
 	msti.ShardIdexes = make(map[uint64][]int, len(pb.GetShardIdxes()))
 	if pb.GetShardIdxes() != nil {
@@ -429,7 +444,7 @@ func (msti *MeasurementInfo) UnmarshalBinary(buf []byte) error {
 	if err := proto.Unmarshal(buf, pb); err != nil {
 		return err
 	}
-	msti.unmarshal(pb)
+	msti.unmarshal(pb, 0)
 	return nil
 }
 
@@ -555,7 +570,7 @@ func (mstsi *MeasurementsInfo) unmarshal(pb *proto2.MeasurementsInfo) {
 	mstsi.MstsInfo = make([]*MeasurementInfo, len(pb.GetMeasurementsInfo()))
 	for i := range pb.MeasurementsInfo {
 		mstsi.MstsInfo[i] = &MeasurementInfo{}
-		mstsi.MstsInfo[i].unmarshal(pb.GetMeasurementsInfo()[i])
+		mstsi.MstsInfo[i].unmarshal(pb.GetMeasurementsInfo()[i], 0)
 	}
 }
 
@@ -645,6 +660,13 @@ func (msti *MeasurementInfo) CompatibleForLogkeeperRowstore() {
 			},
 		},
 	}
+}
+
+func (msti *MeasurementInfo) IsShardsNumSpecified(shardGroupID uint64) bool {
+	if msti.ShardIdexes != nil && len(msti.ShardIdexes[shardGroupID]) > 0 {
+		return true
+	}
+	return false
 }
 
 type ShardKeyInfo struct {
@@ -804,6 +826,37 @@ func EncodeIndexRelation(indexR *influxql.IndexRelation) *proto2.IndexRelation {
 		pb.IndexLists[i] = indexList
 	}
 
+	pb.IndexParams = make([]*proto2.IndexParam, len(indexR.IndexParam))
+	for i, params := range indexR.IndexParam {
+		ies := make([]*proto2.IndexElem, 0, len(params.IList))
+		for _, v := range params.IList {
+			switch v.(type) {
+			case *influxql.NumberLiteral:
+				a := v.(*influxql.NumberLiteral)
+				t := uint32(influx.Field_Type_Float)
+				ie := &proto2.IndexElem{
+					Type:   &t,
+					NumVal: &a.Val,
+				}
+				ies = append(ies, ie)
+			case *influxql.StringLiteral:
+				a := v.(*influxql.StringLiteral)
+				t := uint32(influx.Field_Type_String)
+				ie := &proto2.IndexElem{
+					Type:   &t,
+					StrVal: &a.Val,
+				}
+				ies = append(ies, ie)
+			default:
+			}
+		}
+
+		indexList := &proto2.IndexParam{
+			IList: ies,
+		}
+		pb.IndexParams[i] = indexList
+	}
+
 	pb.IndexOptions = make([]*proto2.IndexOptions, len(indexR.IndexOptions))
 	for i, indexOptions := range indexR.IndexOptions {
 		if indexOptions != nil {
@@ -831,6 +884,32 @@ func DecodeIndexRelation(pb *proto2.IndexRelation) *influxql.IndexRelation {
 			IList: iList.GetIList(),
 		}
 	}
+
+	params := pb.GetIndexParams()
+	indexR.IndexParam = make([]*influxql.IndexParam, len(params))
+	for i, paramItem := range params {
+		indexParams := make([]influxql.Expr, 0, len(paramItem.IList))
+		for _, ie := range paramItem.IList {
+			t := int(*ie.Type)
+			switch t {
+			case influx.Field_Type_Float:
+				e := &influxql.NumberLiteral{
+					Val: *ie.NumVal,
+				}
+				indexParams = append(indexParams, e)
+			case influx.Field_Type_String:
+				e := &influxql.StringLiteral{
+					Val: *ie.StrVal,
+				}
+				indexParams = append(indexParams, e)
+			}
+		}
+
+		indexR.IndexParam[i] = &influxql.IndexParam{
+			IList: indexParams,
+		}
+	}
+
 	indexOptions := pb.GetIndexOptions()
 	indexR.IndexOptions = make([]*influxql.IndexOptions, len(indexOptions))
 	for i, idxOptions := range indexOptions {
@@ -847,11 +926,18 @@ func DecodeIndexRelation(pb *proto2.IndexRelation) *influxql.IndexRelation {
 	return indexR
 }
 
+type MeasurementProperty struct {
+	Unique         bool
+	isCluster      bool
+	PrimaryKeyType string
+}
+
 type ColStoreInfo struct {
 	PrimaryKey          []string
 	SortKey             []string
 	PropertyKey         []string
 	PropertyValue       []string
+	Property            MeasurementProperty
 	TimeClusterDuration time.Duration
 	CompactionType      config.CompactionType
 }
@@ -864,15 +950,63 @@ func NewColStoreInfo(PrimaryKey []string, SortKey []string, Property [][]string,
 		TimeClusterDuration: Duration,
 		CompactionType:      config.Str2CompactionType(CompactType),
 	}
-	if Property != nil {
+	if Property != nil && len(Property) >= 2 && len(Property[0]) == len(Property[1]) {
 		h.PropertyKey = Property[0]
 		h.PropertyValue = Property[1]
 	}
+	h.BuildProperty()
 	return h
+}
+
+func (h *ColStoreInfo) BuildProperty() {
+	mp := make(map[string]string)
+	for i := range h.PropertyKey {
+		mp[h.PropertyKey[i]] = strings.ToLower(h.PropertyValue[i])
+	}
+
+	h.Property.Unique = cast.ToBool(mp[PropertyKeyUniqueEnabled])
+	h.Property.PrimaryKeyType = mp[PropertyKeyPKType]
+
+	// Default use of Cluster mode
+	if h.Property.PrimaryKeyType == "" {
+		h.Property.PrimaryKeyType = PrimaryKeyTypeCluster
+	}
+
+	h.Property.isCluster = h.Property.PrimaryKeyType == PrimaryKeyTypeCluster
 }
 
 func (h *ColStoreInfo) IsBlockCompact() bool {
 	return h.CompactionType == config.BLOCK
+}
+
+func (h *ColStoreInfo) UniqueEnabled() bool {
+	return h.Property.Unique
+}
+
+func (h *ColStoreInfo) GetPKType() string {
+	return h.Property.PrimaryKeyType
+}
+
+func (h *ColStoreInfo) IsClusterPKIndex() bool {
+	return h.Property.isCluster || h.Property.PrimaryKeyType == PrimaryKeyTypeCluster
+}
+
+func (h *ColStoreInfo) PropertyMapToString() string {
+	if len(h.PropertyKey) == 0 || len(h.PropertyKey) != len(h.PropertyValue) {
+		return ""
+	}
+
+	var sb strings.Builder
+	for i, k := range h.PropertyKey {
+		if sb.Len() > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(k)
+		sb.WriteString("=")
+		sb.WriteString(h.PropertyValue[i])
+	}
+
+	return sb.String()
 }
 
 func (h *ColStoreInfo) Marshal() *proto2.ColStoreInfo {
@@ -894,6 +1028,7 @@ func (h *ColStoreInfo) Unmarshal(pb *proto2.ColStoreInfo) {
 	h.PropertyValue = pb.GetPropertyValue()
 	h.TimeClusterDuration = time.Duration(pb.GetTimeClusterDuration())
 	h.CompactionType = config.CompactionType(pb.GetCompactionType())
+	h.BuildProperty()
 }
 
 func NewSchemaInfo(tags, fields map[string]int32) []*proto2.FieldSchema {

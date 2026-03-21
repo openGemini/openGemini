@@ -24,13 +24,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/sysconfig"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
@@ -62,6 +62,7 @@ var (
 	_ LogicalPlan = &LogicalJoin{}
 	_ LogicalPlan = &LogicalBinOp{}
 	_ LogicalPlan = &LogicalIn{}
+	_ LogicalPlan = &LogicalLLMSemantic{}
 )
 
 type AggLevel uint8
@@ -1371,7 +1372,27 @@ func (p *LogicalDistinct) New(inputs []hybridqp.QueryNode, schema hybridqp.Catal
 }
 
 func (p *LogicalDistinct) init() {
-	p.InitRef(p.inputs[0])
+	if p.schema.IsSelectDistinct() {
+		fields := p.schema.Fields()
+		fieldsRef := make(influxql.VarRefs, 0, len(fields))
+		p.ops = make([]hybridqp.ExprOptions, 0, len(fields))
+		for _, f := range fields {
+			if f.Auxiliary {
+				continue
+			}
+			varRefType, err := p.schema.(*QuerySchema).deriveType(f.Expr)
+			if err != nil {
+				panic(fmt.Sprintf("derive type from %v failed, %v", f.Expr, err.Error()))
+			}
+			varRef := influxql.VarRef{Val: f.Name(), Type: varRefType}
+			fieldsRef = append(fieldsRef, varRef)
+			p.ops = append(p.ops, hybridqp.ExprOptions{Expr: influxql.CloneExpr(f.Expr), Ref: varRef})
+		}
+		p.rt = hybridqp.NewRowDataTypeImpl(fieldsRef...)
+	} else {
+		p.InitRef(p.inputs[0])
+	}
+
 	hybridqp.WalkQueryNodeInPreOrder(&hybridqp.SetDistinctVisitor{}, p)
 }
 
@@ -2647,6 +2668,13 @@ func (b *LogicalPlanBuilderImpl) HoltWinters() LogicalPlanBuilder {
 	return b
 }
 
+func (b *LogicalPlanBuilderImpl) LLMSemantic() LogicalPlanBuilder {
+	last := b.stack.Pop()
+	plan := NewLogicalLLMSemantic(last, b.schema)
+	b.stack.Push(plan)
+	return b
+}
+
 func (b *LogicalPlanBuilderImpl) CountDistinct() LogicalPlanBuilder {
 	if b.schema.CountDistinct() != nil {
 		last := b.stack.Pop()
@@ -3063,7 +3091,7 @@ func (b *LogicalPlanBuilderImpl) CreateDistinct(input hybridqp.QueryNode) (hybri
 
 	b.Push(input)
 
-	if b.schema.HasDistinct() {
+	if b.schema.HasDistinct() && !b.schema.IsSelectDistinct() {
 		b.Distinct()
 	}
 
@@ -3893,9 +3921,7 @@ func (p *LogicalTableFunction) DeriveOperations() {
 }
 
 func (p *LogicalTableFunction) init() {
-	for _, input := range p.inputs {
-		p.InitRef(input)
-	}
+	p.initForSink()
 }
 
 func (p *LogicalTableFunction) Clone() hybridqp.QueryNode {
@@ -3968,6 +3994,90 @@ func (p *LogicalHoltWinters) Type() string {
 }
 
 func (p *LogicalHoltWinters) Digest() string {
+	if p.digest {
+		return string(p.digestName)
+	}
+	p.digest = true
+	p.digestName = p.digestName[:0]
+	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
+	p.digestName = encoding.MarshalUint64(p.digestName, p.inputs[0].ID())
+	return string(p.digestName)
+}
+
+type LogicalLLMSemantic struct {
+	LogicalPlanSingle
+}
+
+func NewLogicalLLMSemantic(input hybridqp.QueryNode, schema hybridqp.Catalog) *LogicalLLMSemantic {
+	hw := &LogicalLLMSemantic{
+		LogicalPlanSingle: *NewLogicalPlanSingle(input, schema),
+	}
+	hw.init()
+	return hw
+}
+
+// impl me
+func (p *LogicalLLMSemantic) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
+func (p *LogicalLLMSemantic) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalLLMSemantic) init() {
+	input := p.inputs[0]
+	inrefs := input.RowDataType().MakeRefs()
+	refs := make([]influxql.VarRef, 0, len(inrefs))
+	p.ops = make([]hybridqp.ExprOptions, 0, len(inrefs))
+
+	for _, ref := range inrefs {
+		clone := ref
+		if !p.matchLLMFunc(&clone) {
+			p.ops = append(p.ops, hybridqp.ExprOptions{Expr: &clone, Ref: ref})
+		}
+		refs = append(refs, ref)
+	}
+	p.rt = hybridqp.NewRowDataTypeImpl(refs...)
+}
+
+func (p *LogicalLLMSemantic) matchLLMFunc(ref *influxql.VarRef) bool {
+	for _, op := range p.schema.LLMFunc() {
+		call, ok := op.Expr.(*influxql.Call)
+		if !ok || call == nil || len(call.Args) == 0 {
+			continue
+		}
+		inRef, ok := call.Args[0].(*influxql.VarRef)
+		if !ok {
+			continue
+		}
+		if v, ok := p.schema.Mapping()[inRef]; ok && v.Val == ref.Val && v.Type == ref.Type {
+			newCall := influxql.CloneExpr(op.Expr)
+			newCall.(*influxql.Call).Args[0].(*influxql.VarRef).Val = ref.Val
+			p.ops = append(p.ops, hybridqp.ExprOptions{Expr: newCall, Ref: *ref})
+			return true
+		}
+	}
+	return false
+}
+
+func (p *LogicalLLMSemantic) Clone() hybridqp.QueryNode {
+	clone := &LogicalLLMSemantic{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	return clone
+}
+
+func (p *LogicalLLMSemantic) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalLLMSemantic) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalLLMSemantic) Digest() string {
 	if p.digest {
 		return string(p.digestName)
 	}
@@ -4263,6 +4373,17 @@ func (p *LogicalSort) Type() string {
 }
 
 func (p *LogicalSort) Digest() string {
+	if p.digest {
+		return string(p.digestName)
+	}
+	p.digest = true
+	p.digestName = p.digestName[:0]
+	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
+	p.digestName = encoding.MarshalUint64(p.digestName, p.inputs[0].ID())
+	for _, field := range p.sortFields {
+		p.digestName = append(p.digestName, []byte(field.Name)...)
+		p.digestName = encoding.MarshalBool(p.digestName, field.Ascending)
+	}
 	return string(p.digestName)
 }
 
@@ -4564,7 +4685,6 @@ func (p *LogicalColumnStoreReader) ExplainIterms(writer LogicalPlanWriter) {
 
 func (p *LogicalColumnStoreReader) Explain(writer LogicalPlanWriter) {
 	p.ExplainIterms(writer)
-	p.LogicalPlanBase.ExplainIterms(writer)
 	writer.Explain(p)
 }
 

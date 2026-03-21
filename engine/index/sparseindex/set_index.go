@@ -52,6 +52,10 @@ func (r *SetIndexReader) MayBeInFragment(fragId uint32) (bool, error) {
 	return false, nil
 }
 
+func (r *SetIndexReader) GetFragmentRowCount(fragId uint32) (int64, error) {
+	return 0, nil
+}
+
 func (r *SetIndexReader) ReInit(file interface{}) (err error) {
 	if !r.init {
 		r.init = true
@@ -72,18 +76,14 @@ type SetWriter struct {
 	*skipIndexWriter
 }
 
+func (s *SetWriter) Flush() error {
+	return nil
+}
+
 func NewSetWriter(dir, msName, dataFilePath, lockPath string, token string) *SetWriter {
 	return &SetWriter{
 		newSkipIndexWriter(dir, msName, dataFilePath, lockPath, token),
 	}
-}
-
-func (s *SetWriter) Open() error {
-	return nil
-}
-
-func (s *SetWriter) Close() error {
-	return nil
 }
 
 func (s *SetWriter) CreateAttachIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int) error {

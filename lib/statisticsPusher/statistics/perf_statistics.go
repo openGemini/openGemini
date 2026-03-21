@@ -47,6 +47,7 @@ type PerfStatistics struct {
 	WriteMstInfoNs           int64
 	WriteShardKeyIdxNs       int64
 	WriteAddSidRowCountNs    int64
+	CopyFileToObsErrors      int64
 }
 
 const (
@@ -75,6 +76,7 @@ const (
 	statWriteMstInfoNs           = "WriteMstInfoNs"
 	statWriteShardKeyIdxNs       = "WriteShardKeyIdxNs"
 	statWriteAddSidRowCountNs    = "WriteAddSidRowCountNs"
+	statCopyFileToObsErrors      = "CopyFileToObsErrors"
 )
 
 var PerfStat = NewPerfStatistics()
@@ -122,6 +124,7 @@ func genPerfValueMap() map[string]interface{} {
 		statWriteMstInfoNs:           atomic.LoadInt64(&PerfStat.WriteMstInfoNs),
 		statWriteShardKeyIdxNs:       atomic.LoadInt64(&PerfStat.WriteShardKeyIdxNs),
 		statWriteAddSidRowCountNs:    atomic.LoadInt64(&PerfStat.WriteAddSidRowCountNs),
+		statCopyFileToObsErrors:      atomic.LoadInt64(&PerfStat.CopyFileToObsErrors),
 	}
 	return perfValueMap
 }

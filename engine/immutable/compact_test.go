@@ -23,11 +23,14 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/influxdata/influxdb/logger"
+	"github.com/influxdata/influxdb/pkg/limiter"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
@@ -45,6 +48,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -79,7 +83,7 @@ var schemaForColumnStore = []record.Field{
 func setPKInfo(msb *MsBuilder) {
 	if msb.GetPKInfoNum() == len(msb.Files) {
 		for i, file := range msb.Files {
-			file.SetPkInfo(colstore.NewPKInfo(msb.GetPKRecord(i), msb.GetPKMark(i), colstore.DefaultTCLocation))
+			file.SetPkInfo(colstore.NewPKInfo(msb.GetPKRecord(i), msb.GetPKMark(i), "", colstore.DefaultTCLocation))
 		}
 	}
 }
@@ -275,11 +279,12 @@ func writeIntoFile(msb *MsBuilder, tmp bool) error {
 	if err != nil {
 		return err
 	}
-	return nil
+
+	return msb.CloseIndexWriters()
 }
 
-func defaultIdent() colstore.MeasurementIdent {
-	ident := colstore.NewMeasurementIdent("db0", "rp0")
+func defaultIdent() util.MeasurementIdent {
+	ident := util.NewMeasurementIdent("db0", "rp0")
 	ident.SetName("mst")
 	return ident
 }
@@ -526,6 +531,7 @@ func TestFullCompactForColumnStore(t *testing.T) {
 	}
 
 	newPkInfo := store.CSFiles["mst"].files[0].GetPkInfo()
+
 	require.Equal(t, pkMark.GetFragmentCount(), newPkInfo.GetMark().GetFragmentCount(), "FragmentCount is not equal")
 	require.True(t, checkPkRecord(pkRec, newPkInfo.GetRec()), "pkRec is not equal")
 	check("mst", fids.files[0].Path(), oldRec)
@@ -537,7 +543,6 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
 		sig.Close()
-		_ = fileops.RemoveAll(testCompDir)
 	}()
 
 	var idMinMax, tmMinMax MinMax
@@ -586,68 +591,6 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 		return rec
 	}
 
-	check := func(name string, fn string, orig *record.Record) {
-		f := store.File(name, fn, true)
-		contains, err := f.Contains(idMinMax.min)
-		if err != nil || !contains {
-			t.Fatalf("show contain series id:%v, but not find, error:%v", idMinMax.min, err)
-		}
-
-		midx, _ := f.MetaIndexAt(0)
-		if midx == nil {
-			t.Fatalf("meta index not find")
-		}
-
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		decs := NewReadContext(true)
-		readRec := record.NewRecordBuilder(schemaForColumnStore)
-		readRec.ReserveColumnRows(recRows * 4)
-		rec := record.NewRecordBuilder(schemaForColumnStore)
-		rec.ReserveColumnRows(conf.maxRowsPerSegment)
-		for i := range cm.timeMeta().entries {
-			rec, err = f.ReadAt(cm, i, rec, decs, fileops.IO_PRIORITY_LOW_READ)
-			if err != nil {
-				t.Fatal(err)
-			}
-			readRec.Merge(rec)
-		}
-
-		oldV0 := orig.Column(0).FloatValues()
-		oldV1 := orig.Column(1).IntegerValues()
-		oldV2 := orig.Column(2).BooleanValues()
-		oldV3 := orig.Column(3).StringValues(nil)
-		oldTimes := orig.Times()
-		v0 := readRec.Column(0).FloatValues()
-		v1 := readRec.Column(1).IntegerValues()
-		v2 := readRec.Column(2).BooleanValues()
-		v3 := readRec.Column(3).StringValues(nil)
-		times := readRec.Times()
-
-		if !reflect.DeepEqual(oldTimes, times) {
-			t.Fatalf("time not eq, \nexp:%v \nget:%v", oldTimes, times)
-		}
-
-		if !reflect.DeepEqual(oldV0, v0) {
-			t.Fatalf("flaot value not eq, \nexp:%v \nget:%v", oldV0, v0)
-		}
-
-		if !reflect.DeepEqual(oldV1, v1) {
-			t.Fatalf("int value not eq, \nexp:%v \nget:%v", oldV1, v1)
-		}
-
-		if !reflect.DeepEqual(oldV2, v2) {
-			t.Fatalf("bool value not eq, \nexp:%v \nget:%v", oldV2, v2)
-		}
-
-		if !reflect.DeepEqual(oldV3, v3) {
-			t.Fatalf("string value not eq, \nexp:%v \nget:%v", oldV3, v3)
-		}
-	}
-
 	tm := testTimeStart
 	tmMinMax.min = uint64(tm.UnixNano())
 	idMinMax.min = 0
@@ -675,48 +618,57 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 		setPKInfo(msb)
 	}
 
-	tmMinMax.max = uint64(tm.UnixNano() - timeInterval.Nanoseconds())
-	files := store.CSFiles
-	fids, ok := files["mst"]
-	if !ok || fids.Len() != filesN {
-		t.Fatalf("mst not find")
+	mc := &MockCompactor{}
+	config.GetStoreConfig().ColumnStore.CompactEnabled = true
+	SetColStoreCompactorFactory(func(lock *string, sw *StreamWriteFile) ColStoreCompactor {
+		return mc
+	})
+	defer func() {
+		config.GetStoreConfig().ColumnStore.CompactEnabled = false
+		SetColStoreCompactorFactory(nil)
+	}()
+
+	var run = func(n int) {
+		err := store.LevelCompact(0, 1)
+		require.NoError(t, err)
+		store.Wait()
+
+		files := store.CSFiles["mst"].Files()
+		require.Len(t, files, n)
+		require.NoError(t, files[0].LoadComponents())
 	}
 
-	for i, f := range fids.files {
-		check("mst", f.Path(), recs[i])
-		fr := f.(*tsspFile).reader.(*tsspFileReader)
-		if fr.ref != 0 {
-			t.Fatal("ref error")
-		}
+	filesLen := []int{8, 8, 1}
+	for i, v := range []int{1, 2, 0} {
+		mc.flag = v
+		run(filesLen[i])
 	}
-	// get origin pkRec
-	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
-	msb.NewPKIndexWriter()
-	fixRowsPerSegment := GenFixRowsPerSegment(oldRec, conf.maxRowsPerSegment)
-	pkRec, pkMark, err := msb.pkIndexWriter.Build(oldRec, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, util.DefaultMaxRowsPerSegment4ColStore)
+}
+
+type MockCompactor struct {
+	flag int
+}
+
+func (c *MockCompactor) Compact(_ util.MeasurementIdent, files []TSSPFile) ([]TSSPFile, error) {
+	switch c.flag {
+	case 1:
+		return nil, fmt.Errorf("mock compact err")
+	case 2:
+		return nil, nil
+	default:
+
+	}
+
+	newFile := files[0].Path() + tmpFileSuffix
+	newFile = strings.ReplaceAll(newFile, "-0000-", "-0001-")
+	_, err := fileops.CopyFile(files[0].Path(), newFile)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 
-	if err = store.LevelCompact(0, 1); err != nil {
-		t.Fatal(err)
-	}
-	store.Wait()
-	files = store.CSFiles
-	fids, ok = files["mst"]
-	if !ok {
-		t.Fatalf("mst not find")
-	}
-
-	if fids.Len() != 1 {
-		t.Fatalf("exp 1 file after compact, but got len:%d,fids:%v", fids.Len(), fids)
-	}
-
-	newPkInfo := store.CSFiles["mst"].files[0].GetPkInfo()
-	require.Equal(t, pkMark.GetFragmentCount(), newPkInfo.GetMark().GetFragmentCount(), "FragmentCount is not equal")
-	require.True(t, checkPkRecord(pkRec, newPkInfo.GetRec()), "pkRec is not equal")
-	check("mst", fids.files[0].Path(), oldRec)
+	lock := ""
+	f, err := OpenTSSPFile(newFile, &lock, true)
+	return []TSSPFile{f}, err
 }
 
 func TestLevelCompactForColumnStoreWithTimeCluster(t *testing.T) {
@@ -1316,56 +1268,6 @@ func checkPkRecord(oldRec, newRec *record.Record) bool {
 	return true
 }
 
-func checkPkRecordWithTimeCluster(oldRec, newRec *record.Record, tcDuration time.Duration) bool {
-	oldvt := oldRec.TimeColumn()
-	oldV0 := oldRec.Column(0).StringValues(nil)
-	oldV1 := oldRec.Column(1).StringValues(nil)
-	oldV2 := oldRec.Column(2).FloatValues()
-
-	oldvtValues := oldvt.IntegerValues()
-	for k, v := range oldvtValues {
-		oldvtValues[k] = int64(time.Duration(v).Truncate(tcDuration))
-	}
-
-	vt := newRec.Column(0).IntegerValues()
-	v0 := newRec.Column(1).StringValues(nil)
-	v1 := newRec.Column(2).StringValues(nil)
-	v2 := newRec.Column(3).FloatValues()
-
-	if !reflect.DeepEqual(oldvtValues, vt) {
-		return false
-	}
-	if !reflect.DeepEqual(oldV0, v0) {
-		return false
-	}
-
-	if !reflect.DeepEqual(oldV1, v1) {
-		return false
-	}
-
-	if !reflect.DeepEqual(oldV2, v2) {
-		return false
-	}
-	return true
-}
-
-func checkPkRecordWithSchemaLess(oldRec, newRec *record.Record) bool {
-	oldV0 := oldRec.Column(0).FloatValues()
-	oldV1 := oldRec.Column(1).IntegerValues()
-
-	v0 := newRec.Column(0).FloatValues()
-	v1 := newRec.Column(1).IntegerValues()
-
-	if !reflect.DeepEqual(oldV0, v0) {
-		return false
-	}
-
-	if !reflect.DeepEqual(oldV1, v1) {
-		return false
-	}
-	return true
-}
-
 func TestWriteMetaIndexForColumnStore(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
@@ -1388,7 +1290,6 @@ func TestWriteMetaIndexForColumnStore(t *testing.T) {
 		f.builder.fd.Close()
 	}()
 	f.builder.Conf = conf
-	f.builder.Conf.maxChunkMetaItemSize = 0
 	f.builder.trailer.idCount = 1
 	f.builder.trailer.minTime = 1
 	f.builder.trailer.maxTime = -1
@@ -1426,58 +1327,6 @@ func TestPutFragmentIterators(t *testing.T) {
 			schemaMap:         make(map[string]struct{}),
 		}
 		putFragmentIterators(&itr)
-	}
-}
-
-func TestCompactionWriteMetaErr(t *testing.T) {
-	testCompDir := t.TempDir()
-	_ = fileops.RemoveAll(testCompDir)
-	sig := interruptsignal.NewInterruptSignal()
-	defer func() {
-		sig.Close()
-		_ = fileops.RemoveAll(testCompDir)
-	}()
-
-	conf := NewColumnStoreConfig()
-	tier := uint64(util.Hot)
-	lockPath := ""
-	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
-	defer store.Close()
-	store.SetDbRp("db0", "rp0")
-	store.SetImmTableType(config.COLUMNSTORE)
-	sortKey := []string{"primaryKey_string1", "primaryKey_string2", "primaryKey_float1", "sortKey_int1"}
-
-	defer clearMstInfo()
-	_, _, ok := initColumnStoreMstInfo(defaultColumnStoreMstInfo([]string{}, sortKey, 0))
-	require.True(t, ok)
-
-	cm := make([]ColumnMeta, 1)
-	cm[0] = ColumnMeta{name: "a", ty: influx.Field_Type_Int}
-	fileItr := FileIterator{curtChunkMeta: &ChunkMeta{colMeta: cm}}
-	filesItr := make(FileIterators, 0, 1)
-	filesItr = append(filesItr, &fileItr)
-	group := FilesInfo{name: "mst", compIts: filesItr}
-	compItrs := getFragmentIterators()
-	fileName := NewTSSPFileName(uint64(1), group.toLevel, 0, 0, true, store.lock)
-	compItrs.builder = NewMsBuilder(store.path, compItrs.name, store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.TSSTORE, nil, 0)
-	indexName := compItrs.builder.fd.Name()[:len(compItrs.builder.fd.Name())-len(tmpFileSuffix)] + ".index.init"
-	fd, err := fileops.OpenFile(indexName, os.O_CREATE|os.O_RDWR, 0640)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		fd.Close()
-		compItrs.builder.fd.Close()
-	}()
-	tsspFileWriter := compItrs.builder.diskFileWriter.(*tsspFileWriter)
-	cmw, ok := tsspFileWriter.cmw.(*indexWriter)
-	require.True(t, ok)
-
-	cmw.buf = cmw.buf[:1]
-	cmw.name = "/"
-	err = compItrs.writeMeta(&ChunkMeta{colMeta: cm}, 0, 1)
-	if err == nil {
-		t.Fatalf("writeMeta should open file error")
 	}
 }
 
@@ -2415,7 +2264,7 @@ func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 
 	files := store.Order
 	if len(files) != 1 {
-		t.Fatalf("exp 4 file, but:%v", len(files))
+		t.Fatalf("exp 1 file, but:%v", len(files))
 	}
 	fids, ok := files["mst"]
 	if !ok || fids.Len() != filesN {
@@ -2731,7 +2580,7 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 
 	files := store.Order
 	if len(files) != 1 {
-		t.Fatalf("exp 4 file, but:%v", len(files))
+		t.Fatalf("exp 1 file, but:%v", len(files))
 	}
 	fids, ok := files["mst"]
 	if !ok || fids.Len() != filesN {
@@ -2791,10 +2640,10 @@ func TestMmsTables_FullCompact(t *testing.T) {
 
 	store.CompactionEnable()
 
-	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder, merge *record.Record) {
+	write := func(ids []uint64, data map[uint64]*record.Record, sw *StreamWriteFile, merge *record.Record) {
 		for _, id := range ids {
 			rec := data[id]
-			err := msb.WriteData(id, rec)
+			err := sw.WriteRecord(id, rec)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2876,20 +2725,22 @@ func TestMmsTables_FullCompact(t *testing.T) {
 	recs := make([]*record.Record, 0, filesN)
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, 1, recRows, &startValue, &tm)
-		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
-		write(ids, data, msb, oldRec)
+		sw := NewStreamWriteFile("mst", conf, testCompDir, store.closed, store.lock)
+		require.NoError(t, sw.InitFlushFile(store.NextSequence(), true))
+		write(ids, data, sw, oldRec)
 		for _, v := range data {
 			recs = append(recs, v)
 		}
-		store.AddTable(msb, true, false)
+		file, err := sw.NewTSSPFile(false)
+		require.NoError(t, err)
+		store.AddTSSPFiles("mst", true, file)
 	}
 
 	tmMinMax.max = uint64(tm.UnixNano() - timeInterval.Nanoseconds())
 
 	files := store.Order
 	if len(files) != 1 {
-		t.Fatalf("exp 4 file, but:%v", len(files))
+		t.Fatalf("exp 1 file, but:%v", len(files))
 	}
 	fids, ok := files["mst"]
 	if !ok || fids.Len() != filesN {
@@ -2900,9 +2751,19 @@ func TestMmsTables_FullCompact(t *testing.T) {
 		check("mst", f.Path(), recs[i])
 	}
 
-	if err := store.FullCompact(1); err != nil {
-		t.Fatal(err)
-	}
+	f0 := fids.files[0]
+	filePath := f0.Path()
+
+	// skip closed TSSPFile
+	require.NoError(t, f0.Close())
+	require.NoError(t, store.FullCompact(1))
+	store.Wait()
+
+	// execute FullCompact after reopening the file
+	f0, err := OpenTSSPFile(filePath, &filePath, true)
+	require.NoError(t, err)
+	fids.files[0] = f0
+	require.NoError(t, store.FullCompact(1))
 
 	store.Wait()
 
@@ -2921,6 +2782,197 @@ func TestMmsTables_FullCompact(t *testing.T) {
 	}
 
 	check("mst", fids.files[0].Path(), oldRec)
+}
+
+func TestFullCompactOnTaskNode(t *testing.T) {
+	mergeFlags := []int32{util.NonStreamingCompact, util.StreamingCompact, util.AutoCompact}
+
+	common := config.GetCommon()
+	common.TaskNodeEnabled = true
+	config.SetCommon(*common)
+	cacheIns := readcache.GetReadMetaCacheIns()
+	cacheIns.Purge(readcache.MetaCachePool)
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		common.TaskNodeEnabled = false
+		config.SetCommon(*common)
+		sig.Close()
+
+	}()
+	for _, f := range mergeFlags {
+		SetMergeFlag4TsStore(f)
+		testCompDir := t.TempDir()
+		_ = fileops.RemoveAll(testCompDir)
+		defer func() {
+			_ = fileops.RemoveAll(testCompDir)
+		}()
+
+		var idMinMax, tmMinMax MinMax
+		var startValue = 1.1
+
+		conf := NewTsStoreConfig()
+		conf.maxRowsPerSegment = 100
+		tier := uint64(util.Hot)
+		recRows := conf.maxRowsPerSegment*4 + 1
+		lockPath := ""
+
+		store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
+		store.SetImmTableType(config.TSSTORE)
+		defer store.Close()
+
+		store.CompactionEnable()
+
+		write := func(ids []uint64, data map[uint64]*record.Record, sw *StreamWriteFile, merge *record.Record) {
+			for _, id := range ids {
+				rec := data[id]
+				err := sw.WriteRecord(id, rec)
+				if err != nil {
+					t.Fatal(err)
+				}
+				merge.Merge(rec)
+			}
+		}
+
+		check := func(name string, fn string, orig *record.Record) {
+			f := store.File(name, fn, true)
+			contains, err := f.Contains(idMinMax.min)
+			if err != nil || !contains {
+				t.Fatalf("show contain series id:%v, but not find, error:%v", idMinMax.min, err)
+			}
+
+			midx, _ := f.MetaIndexAt(0)
+			if midx == nil {
+				t.Fatalf("meta index not find")
+			}
+
+			cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			decs := NewReadContext(true)
+			readRec := record.NewRecordBuilder(schema)
+			readRec.ReserveColumnRows(recRows * 4)
+			rec := record.NewRecordBuilder(schema)
+			rec.ReserveColumnRows(conf.maxRowsPerSegment)
+			for i := range cm.timeMeta().entries {
+				rec, err = f.ReadAt(cm, i, rec, decs, fileops.IO_PRIORITY_LOW_READ)
+				if err != nil {
+					t.Fatal(err)
+				}
+				readRec.Merge(rec)
+			}
+
+			oldV0 := orig.Column(0).FloatValues()
+			oldV1 := orig.Column(1).IntegerValues()
+			oldV2 := orig.Column(2).BooleanValues()
+			oldV3 := orig.Column(3).StringValues(nil)
+			oldTimes := orig.Times()
+			v0 := readRec.Column(0).FloatValues()
+			v1 := readRec.Column(1).IntegerValues()
+			v2 := readRec.Column(2).BooleanValues()
+			v3 := readRec.Column(3).StringValues(nil)
+			times := readRec.Times()
+
+			if !reflect.DeepEqual(oldTimes, times) {
+				t.Fatalf("time not eq, \nexp:%v \nget:%v", oldTimes, times)
+			}
+
+			if !reflect.DeepEqual(oldV0, v0) {
+				t.Fatalf("flaot value not eq, \nexp:%v \nget:%v", oldV0, v0)
+			}
+
+			if !reflect.DeepEqual(oldV1, v1) {
+				t.Fatalf("int value not eq, \nexp:%v \nget:%v", oldV1, v1)
+			}
+
+			if !reflect.DeepEqual(oldV2, v2) {
+				t.Fatalf("bool value not eq, \nexp:%v \nget:%v", oldV2, v2)
+			}
+
+			if !reflect.DeepEqual(oldV3, v3) {
+				t.Fatalf("string value not eq, \nexp:%v \nget:%v", oldV3, v3)
+			}
+		}
+
+		tm := testTimeStart
+
+		tmMinMax.min = uint64(tm.UnixNano())
+		idMinMax.min = 1
+
+		filesN := LeveLMinGroupFiles[0]
+		oldRec := record.NewRecordBuilder(schema)
+		oldRec.ReserveColumnRows(recRows * filesN)
+
+		recs := make([]*record.Record, 0, filesN)
+		for i := 0; i < filesN; i++ {
+			ids, data := genTestData(idMinMax.min, 1, recRows, &startValue, &tm)
+			sw := NewStreamWriteFile("mst", conf, testCompDir, store.closed, store.lock)
+			require.NoError(t, sw.InitFlushFile(store.NextSequence(), true))
+			write(ids, data, sw, oldRec)
+			for _, v := range data {
+				recs = append(recs, v)
+			}
+			file, err := sw.NewTSSPFile(false)
+			require.NoError(t, err)
+			store.AddTSSPFiles("mst", true, file)
+		}
+
+		tmMinMax.max = uint64(tm.UnixNano() - timeInterval.Nanoseconds())
+
+		files := store.Order
+		if len(files) != 1 {
+			t.Fatalf("exp 1 file, but:%v", len(files))
+		}
+		fids, ok := files["mst"]
+		if !ok || fids.Len() != filesN {
+			t.Fatalf("mst not find")
+		}
+
+		for i, f := range fids.files {
+			check("mst", f.Path(), recs[i])
+		}
+
+		require.NoError(t, store.FullCompact(1))
+
+		task := store.scheduler.GetTask(scheduler.CompactTask)
+		defer func() {
+			task.Finish()
+		}()
+		info, err := task.ExecuteOnTN()
+		require.NoError(t, err)
+		ct := task.(*CompactTask)
+		err = ct.ReplaceFiles(info.(*CompactedFileInfo))
+		require.NoError(t, err)
+
+		files = store.Order
+		if len(files) != 1 {
+			t.Fatalf("exp 1 file after compact, but:%v", len(files))
+		}
+
+		fids, ok = files["mst"]
+		if !ok {
+			t.Fatalf("mst not find")
+		}
+
+		if fids.Len() != 1 {
+			t.Fatalf("exp 1 file after compact, but:%v", fids)
+		}
+
+		check("mst", fids.files[0].Path(), oldRec)
+	}
+
+}
+
+func TestExecuteOnTaskNode(t *testing.T) {
+	table := &MmsTables{ImmTable: NewTsImmTable()}
+	plan := NewCompactGroup("mst1", "path", 1, 0)
+	plan.Add("group1")
+	task := NewCompactTask(table, plan, true)
+	info, _ := task.ExecuteOnTN()
+	i := info.(*CompactedFileInfo)
+	err := task.ReplaceFiles(i)
+	assert.Error(t, err)
 }
 
 func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
@@ -3170,7 +3222,8 @@ func TestCompactLog_Validate(t *testing.T) {
 			"000000001-0000-0000.tssp", "000000002-0000-0000.tssp",
 			"000000003-0000-0000.tssp", "000000004-0000-0000.tssp",
 		},
-		NewFile: []string{"000000001-0001-0000.tssp.init"},
+		NewFile:  []string{"000000001-0001-0000.tssp.init"},
+		BasePath: filepath.Join(testCompDir, "mst1"),
 	}
 
 	oldFiles := mustCreateTsspFiles(testCompDir, info.OldFile)
@@ -3181,7 +3234,8 @@ func TestCompactLog_Validate(t *testing.T) {
 	}()
 	lockPath := ""
 	store := &MmsTables{lock: &lockPath}
-	logFile, err := store.writeCompactedFileInfo(info.Name, oldFiles, newFiles, testCompDir, info.IsOrder)
+	cInfo := GenerateCompactedInfo(info.Name, oldFiles, newFiles, testCompDir, info.IsOrder)
+	logFile, err := store.writeCompactedFileInfo(cInfo, testCompDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3236,7 +3290,8 @@ func TestCompactLog_AllNewFileExist1(t *testing.T) {
 
 	lockPath := ""
 	store := &MmsTables{lock: &lockPath}
-	_, err := store.writeCompactedFileInfo(info.Name, oldFiles, newFiles, testCompDir, info.IsOrder)
+	cInfo := GenerateCompactedInfo(info.Name, oldFiles, newFiles, testCompDir, info.IsOrder)
+	_, err := store.writeCompactedFileInfo(cInfo, testCompDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3286,7 +3341,8 @@ func TestCompactLog_AllNewFileExist2(t *testing.T) {
 
 	lockPath := ""
 	store := &MmsTables{lock: &lockPath}
-	_, err := store.writeCompactedFileInfo(info.Name, oldFiles, newFiles, testCompDir, info.IsOrder)
+	cInfo := GenerateCompactedInfo(info.Name, oldFiles, newFiles, testCompDir, info.IsOrder)
+	_, err := store.writeCompactedFileInfo(cInfo, testCompDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3343,7 +3399,8 @@ func TestCompactLog_NewFileNotExit1(t *testing.T) {
 
 	lockPath := ""
 	store := &MmsTables{lock: &lockPath}
-	_, err := store.writeCompactedFileInfo(info.Name, oldFiles, newFiles, testCompDir, info.IsOrder)
+	cInfo := GenerateCompactedInfo(info.Name, oldFiles, newFiles, testCompDir, info.IsOrder)
+	_, err := store.writeCompactedFileInfo(cInfo, testCompDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3401,7 +3458,8 @@ func TestCompactLog_NewFileNotExit2(t *testing.T) {
 
 	lockPath := ""
 	store := &MmsTables{lock: &lockPath}
-	_, err := store.writeCompactedFileInfo(info.Name, oldFiles, newFiles, testCompDir, info.IsOrder)
+	cInfo := GenerateCompactedInfo(info.Name, oldFiles, newFiles, testCompDir, info.IsOrder)
+	_, err := store.writeCompactedFileInfo(cInfo, testCompDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3564,7 +3622,7 @@ func TestMmsTables_LevelCompact_SegmentLimit(t *testing.T) {
 }
 
 func TestMmsTables_SetMaxCompactor(t *testing.T) {
-	minConcurrentCompactions := 2
+	minConcurrentCompactions := 1
 	maxConcurrentCompactions := 32
 
 	concurrentCompactions := 4
@@ -3680,7 +3738,7 @@ func TestMergeRecovery(t *testing.T) {
 func TestDisableCompAndMerge(t *testing.T) {
 	mst := &MmsTables{
 		inCompLock: sync.RWMutex{},
-		scheduler:  scheduler.NewTaskScheduler(func(signal chan struct{}, onClose func()) {}, compLimiter),
+		scheduler:  scheduler.NewTaskScheduler(func(signal chan struct{}, onClose func()) {}, CompLimiter),
 	}
 	mst.EnableCompAndMerge()
 	mst.EnableCompAndMerge()
@@ -3783,5 +3841,100 @@ func TestGetLocalBloomFilterData(t *testing.T) {
 	_, err := msBuilder.getLocalBloomFilterData(skipIndexFilePaths)
 	if err == nil {
 		t.Fatal("should return no such file or dir")
+	}
+}
+
+func TestSetMaxCompactor(t *testing.T) {
+	defer SetMaxCompactor(cpu.GetCpuNum())
+	convey.Convey("SetMaxCompactor set, cpuNum=2", t, func() {
+		var limi int
+		cpu.SetCpuNum(2, 2)
+		patch2 := gomonkey.ApplyFunc(limiter.NewFixed, func(limit int) limiter.Fixed {
+			limi = limit
+			return nil
+		})
+		defer func() {
+			patch2.Reset()
+		}()
+		SetMaxCompactor(0)
+		convey.So(limi, convey.ShouldEqual, 2)
+	})
+
+	convey.Convey("SetMaxCompactor set, cpuNum=4", t, func() {
+		var limi int
+		cpu.SetCpuNum(4, 2)
+		patch2 := gomonkey.ApplyFunc(limiter.NewFixed, func(limit int) limiter.Fixed {
+			limi = limit
+			return nil
+		})
+		defer func() {
+			patch2.Reset()
+		}()
+		SetMaxCompactor(0)
+		convey.So(limi, convey.ShouldEqual, 2)
+	})
+
+	convey.Convey("SetMaxCompactor set, cpuNum=8", t, func() {
+		var limi int
+		cpu.SetCpuNum(8, 2)
+		patch2 := gomonkey.ApplyFunc(limiter.NewFixed, func(limit int) limiter.Fixed {
+			limi = limit
+			return nil
+		})
+		defer func() {
+			patch2.Reset()
+		}()
+		SetMaxCompactor(0)
+		convey.So(limi, convey.ShouldEqual, 4)
+	})
+
+	convey.Convey("SetMaxCompactor set, cpuNum=16", t, func() {
+		var limi int
+		cpu.SetCpuNum(16, 2)
+		patch2 := gomonkey.ApplyFunc(limiter.NewFixed, func(limit int) limiter.Fixed {
+			limi = limit
+			return nil
+		})
+		defer func() {
+			patch2.Reset()
+		}()
+		SetMaxCompactor(0)
+		convey.So(limi, convey.ShouldEqual, 6)
+	})
+
+	convey.Convey("SetMaxCompactor set, cpuNum=32", t, func() {
+		var limi int
+		cpu.SetCpuNum(32, 2)
+		patch2 := gomonkey.ApplyFunc(limiter.NewFixed, func(limit int) limiter.Fixed {
+			limi = limit
+			return nil
+		})
+		defer func() {
+			patch2.Reset()
+		}()
+		SetMaxCompactor(0)
+		convey.So(limi, convey.ShouldEqual, 8)
+	})
+}
+
+func TestCalculateMaxCompactor(t *testing.T) {
+	for _, testcase := range []struct {
+		cpuN int
+		exp  int
+	}{
+		{1, 2},
+		{2, 2},
+		{4, 2},
+		{8, 4},
+		{16, 6},
+		{32, 8},
+		{64, 10},
+		{128, 12},
+	} {
+		convey.Convey(fmt.Sprintf("calculateMaxCompactor cpu num is %d", testcase.cpuN), t, func() {
+			patch1 := gomonkey.ApplyFunc(cpu.GetCpuNumWithoutRatio, func() int { return testcase.cpuN })
+			defer func() { patch1.Reset() }()
+			convey.So(calculateMaxCompactor(), convey.ShouldEqual, testcase.exp)
+		})
 	}
 }

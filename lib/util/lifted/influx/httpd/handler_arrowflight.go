@@ -16,6 +16,7 @@
 package httpd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +31,7 @@ import (
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -37,16 +39,17 @@ import (
 	"google.golang.org/grpc/peer"
 )
 
-type request struct {
+type FlightRequest struct {
 	Q                  string `json:"q"`
 	DB                 string `json:"db"`
 	RP                 string `json:"rp"`
 	NodeID             string `json:"node_id"`
 	Params             string `json:"params"`
 	Chunked            string `json:"chunked"`
-	ChunkSize          string `json:"chunkSize"`
-	InnerChunkSize     string `json:"innerChunkSize"`
+	ChunkSize          string `json:"chunk_size"`
+	InnerChunkSize     string `json:"inner_chunk_size"`
 	IsQuerySeriesLimit string `json:"is_query_series_limit"`
+	QueryType          string `json:"query_type"`
 }
 
 func (h *Handler) HandleQuery(ticket []byte, user meta2.User, server flight.FlightService_DoGetServer) error {
@@ -65,7 +68,7 @@ func (h *Handler) HandleQuery(ticket []byte, user meta2.User, server flight.Flig
 
 	var q *influxql.Query
 	var err error
-	var req request
+	var req FlightRequest
 	err = json.Unmarshal(ticket, &req)
 	if err != nil {
 		h.Logger.Error("parse request error!", zap.Any("r", req))
@@ -87,6 +90,12 @@ func (h *Handler) HandleQuery(ticket []byte, user meta2.User, server flight.Flig
 		return err
 	}
 
+	// Validate QueryType
+	queryType, err := h.ValidAndGetQueryType(req)
+	if err != nil {
+		return err
+	}
+
 	// new reader for sql statement
 	qr := strings.NewReader(queryStr)
 	q, err = h.getArrowSqlQuery(req, qr)
@@ -97,7 +106,7 @@ func (h *Handler) HandleQuery(ticket []byte, user meta2.User, server flight.Flig
 
 	db := req.DB
 	var qDuration *statistics.SQLSlowQueryStatistics
-	if !isInternalDatabase(db) {
+	if !util.IsInternalDatabase(db) {
 		qDuration = statistics.NewSqlSlowQueryStatistics(db)
 		defer func() {
 			d := time.Since(start)
@@ -138,6 +147,7 @@ func (h *Handler) HandleQuery(ticket []byte, user meta2.User, server flight.Flig
 		Quiet:              true,
 		Authorizer:         h.getAuthorizer(user),
 		IsArrowQuery:       true,
+		QueryType:          queryType,
 	}
 
 	// Make sure if the client disconnects we signal the query to abort
@@ -196,7 +206,134 @@ func (h *Handler) HandleQuery(ticket []byte, user meta2.User, server flight.Flig
 	return nil
 }
 
-func (h *Handler) parseQueryFromRequest(req request, server flight.FlightService_DoGetServer, user meta2.User) (string, error) {
+func (h *Handler) GetSchema(req FlightRequest, user meta2.User, ctx context.Context) (*arrow.Schema, error) {
+	handlerStat.QueryRequests.Incr()
+	handlerStat.ActiveQueryRequests.Incr()
+	start := time.Now()
+	defer func() {
+		handlerStat.ActiveQueryRequests.Decr()
+		handlerStat.QueryRequestDuration.AddSinceNano(start)
+	}()
+
+	if syscontrol.DisableReads {
+		h.Logger.Error("read is forbidden!", zap.Bool("DisableReads", syscontrol.DisableReads))
+		return nil, errors.New(`disable read`)
+	}
+
+	var q *influxql.Query
+	var err error
+
+	// Retrieve the node id the query should be executed on.
+	var nodeID uint64
+	if req.NodeID != "" {
+		nodeID, err = strconv.ParseUint(req.NodeID, 10, 64)
+		if err != nil {
+			h.Logger.Error("parse node_id error!", zap.String("node_id", req.NodeID), zap.Any("r", req))
+			return nil, err
+		}
+	}
+
+	queryStr := strings.TrimSpace(req.Q)
+	if queryStr == "" {
+		h.Logger.Error("query error! `missing required parameter: Q", zap.Any("r", req))
+		return nil, fmt.Errorf(`missing required parameter "Q"`)
+	}
+
+	// Validate QueryType
+	queryType, err := h.ValidAndGetQueryType(req)
+	if err != nil {
+		return nil, err
+	}
+
+	// new reader for sql statement
+	qr := strings.NewReader(queryStr)
+	q, err = h.getArrowSqlQuery(req, qr)
+	if err != nil {
+		h.Logger.Error("serveQuery: getSqlQuery error!", zap.Error(err))
+		return nil, err
+	}
+
+	db := req.DB
+	var qDuration *statistics.SQLSlowQueryStatistics
+	if !util.IsInternalDatabase(db) {
+		qDuration = statistics.NewSqlSlowQueryStatistics(db)
+		defer func() {
+			d := time.Since(start)
+			if d.Nanoseconds() > time.Second.Nanoseconds()*10 {
+				qDuration.AddDuration("TotalDuration", d.Nanoseconds())
+				statistics.AppendSqlQueryDuration(qDuration)
+				h.Logger.Info("slow query", zap.Duration("duration", d), zap.String("DB", qDuration.DB),
+					zap.String("query", qDuration.Query))
+			}
+		}()
+	}
+
+	// Check authorization.
+	err = h.checkAuthorization(user, q, db)
+	if err != nil {
+		h.Logger.Error("serveQuery error:user is not authorized to query to database", zap.Error(err))
+		return nil, fmt.Errorf(`error authorizing query: %s`, err)
+	}
+
+	// Parse chunk size. Use default if not provided or unparsable.
+	chunked, chunkSize, innerChunkSize, err := h.parseChunkSizeForArrow(req)
+	if err != nil {
+		h.Logger.Error("serveQuery: parseChunkSize error!", zap.Error(err))
+		return nil, err
+	}
+
+	isQuerySeriesLimit := req.IsQuerySeriesLimit == "true"
+	opts := query.ExecutionOptions{
+		IsQuerySeriesLimit:   isQuerySeriesLimit,
+		Database:             db,
+		RetentionPolicy:      req.RP,
+		ChunkSize:            chunkSize,
+		Chunked:              chunked,
+		ReadOnly:             true,
+		NodeID:               nodeID,
+		InnerChunkSize:       innerChunkSize,
+		ParallelQuery:        atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1,
+		Quiet:                true,
+		Authorizer:           h.getAuthorizer(user),
+		IsArrowQuery:         true,
+		IsGetFlightInfoQuery: true,
+		QueryType:            queryType,
+	}
+
+	// Make sure if the client disconnects we signal the query to abort
+	closing := make(chan struct{})
+	done := make(chan struct{})
+	opts.AbortCh = closing
+	defer func() {
+		close(done)
+	}()
+	go func() {
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
+		close(closing)
+	}()
+
+	// Execute query
+	results := h.QueryExecutor.ExecuteQuery(q, opts, closing, qDuration)
+	for r := range results {
+		// Ignore nil results.
+		if r == nil {
+			continue
+		}
+
+		if r.Err != nil {
+			return nil, r.Err
+		}
+
+		return r.Schema, nil
+	}
+
+	return nil, nil
+}
+
+func (h *Handler) parseQueryFromRequest(req FlightRequest, server flight.FlightService_DoGetServer, user meta2.User) (string, error) {
 	queryStr := strings.TrimSpace(req.Q)
 	p, ok := peer.FromContext(server.Context())
 	if !ok {
@@ -226,7 +363,7 @@ func (h *Handler) sendRecord(record *models.RecordContainer, writer *flight.Writ
 	return nil
 }
 
-func (h *Handler) getArrowSqlQuery(req request, qr *strings.Reader) (*influxql.Query, error) {
+func (h *Handler) getArrowSqlQuery(req FlightRequest, qr *strings.Reader) (*influxql.Query, error) {
 	p := influxql.NewParser(qr)
 	defer p.Release()
 
@@ -251,7 +388,7 @@ func (h *Handler) getArrowSqlQuery(req request, qr *strings.Reader) (*influxql.Q
 	return q, nil
 }
 
-func (h *Handler) parseQueryParamsForArray(req request) (map[string]interface{}, error) {
+func (h *Handler) parseQueryParamsForArray(req FlightRequest) (map[string]interface{}, error) {
 	rawParams := req.Params
 	if rawParams == "" {
 		return nil, nil
@@ -283,7 +420,7 @@ func (h *Handler) parseQueryParamsForArray(req request) (map[string]interface{},
 	return params, nil
 }
 
-func (h *Handler) parseChunkSizeForArrow(req request) (bool, int, int, error) {
+func (h *Handler) parseChunkSizeForArrow(req FlightRequest) (bool, int, int, error) {
 	// Parse chunk size. Use default if not provided or unparsable.
 	chunked := req.Chunked == "true"
 	chunkSize := DefaultChunkSize

@@ -2,7 +2,7 @@ package meta
 
 import (
 	metaProto "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 type MigrateEventInfo struct {
@@ -78,11 +78,11 @@ func (m *MigrateEventInfo) GetAliveConnId() uint64 {
 func (m *MigrateEventInfo) marshal() *metaProto.MigrateEventInfo {
 	pb := &metaProto.MigrateEventInfo{
 		EventId:     proto.String(m.eventId),
-		EventType:   proto.Int(m.eventType),
+		EventType:   proto.Int32(int32(m.eventType)),
 		OpId:        proto.Uint64(m.opId),
 		Pti:         m.pt.Marshal(),
-		CurrState:   proto.Int(m.currState),
-		PreState:    proto.Int(m.preState),
+		CurrState:   proto.Int32(int32(m.currState)),
+		PreState:    proto.Int32(int32(m.preState)),
 		Dest:        proto.Uint64(m.dest),
 		Src:         proto.Uint64(m.src),
 		AliveConnId: proto.Uint64(m.aliveConnId),

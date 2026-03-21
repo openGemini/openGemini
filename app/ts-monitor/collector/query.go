@@ -15,6 +15,7 @@
 package collector
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,7 +27,9 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/valyala/fastjson"
+	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
+	"github.com/spf13/cast"
 	"go.uber.org/zap"
 )
 
@@ -42,6 +45,7 @@ var (
 )
 
 type QueryMetric struct {
+	wg   sync.WaitGroup
 	done chan struct{}
 
 	url      string
@@ -95,29 +99,19 @@ func (q *QueryMetric) Start() {
 		return
 	}
 	q.logger.Info("start QueryMetric")
+	q.wg.Add(2)
 	go q.collect()
 	go q.report()
 }
 
 func (q *QueryMetric) collect() {
-	ticker := time.NewTicker(time.Duration(q.conf.QueryInterval))
-	defer ticker.Stop()
+	defer q.wg.Done()
 
-	for {
-		select {
-		case <-ticker.C:
-			err := q.query()
-			if err != nil {
-				q.logger.Error("query series error", zap.Error(err))
-			}
-		case <-q.done:
-			return
-		}
-	}
-
+	dur := max(time.Minute, time.Duration(q.conf.QueryInterval))
+	util.TickerRun(dur, q.done, q.Query, func() {})
 }
 
-func (q *QueryMetric) queryExecute(db, cmd string) ([]byte, error) {
+func (q *QueryMetric) queryExecute(db, cmd string) (*httpd.Response, error) {
 	tries := 0
 	var bytesBody []byte
 	for {
@@ -143,86 +137,99 @@ func (q *QueryMetric) queryExecute(db, cmd string) ([]byte, error) {
 		q.logger.Error("monitor query series retry", zap.String("url", q.url), zap.Int("tries", tries), zap.ByteString("body", bytesBody), zap.Error(err))
 		time.Sleep(time.Second)
 	}
-	return bytesBody, nil
+
+	resp := &httpd.Response{}
+	err := json.Unmarshal(bytesBody, resp)
+	return resp, err
+}
+
+func (q *QueryMetric) showQuery(db, query string) ([]string, error) {
+	data, err := q.queryExecute(db, query)
+	if err != nil {
+		return nil, err
+	}
+
+	var ret []string
+	itrColumnValues(data, 0, func(val interface{}) {
+		ret = append(ret, cast.ToString(val))
+	})
+	return ret, nil
+}
+
+func (q *QueryMetric) Query() {
+	err := q.query()
+	if err != nil {
+		q.logger.Error("query series error", zap.Error(err))
+	}
 }
 
 func (q *QueryMetric) query() error {
-	queryDB, _ := q.queryExecute("", ShowDatabases)
-	v, err := parseSeries(queryDB)
+	databases, err := q.showQuery("", ShowDatabases)
 	if err != nil {
 		return err
 	}
-	var databases []string
-	for _, db := range v.Get("0", "values").GetArray() {
-		databases = append(databases, string(db.GetStringBytes("0")))
-	}
-
-	q.queryMetrics.mu.Lock()
-	q.queryMetrics.DBCount = int64(len(databases))
-	q.queryMetrics.mu.Unlock()
 
 	var mstCount int64
 	for _, db := range databases {
 		// count mst
-		queryMst, _ := q.queryExecute(db, ShowMeasurements)
-		v, err = parseSeries(queryMst)
+		measurements, err := q.showQuery(db, ShowMeasurements)
 		if err != nil {
 			return err
 		}
-		var measurements []string
-		for _, mst := range v.Get("0", "values").GetArray() {
-			mstCount += 1
-			measurements = append(measurements, string(mst.GetStringBytes("0")))
+		if len(measurements) == 0 {
+			continue
 		}
+		mstCount += int64(len(measurements))
 
-		q.queryMetrics.mu.Lock()
-		q.queryMetrics.SeriesMap[db] = make(map[string]int64)
-		q.queryMetrics.mu.Unlock()
+		seriesCount := make(map[string]int64)
 		// count series
-		for _, mst := range measurements {
-			querySeries, _ := q.queryExecute(db, fmt.Sprintf(ShowSeriesCardinality, mst))
-			v, err = parseSeries(querySeries)
+		for i := range measurements {
+			data, err := q.queryExecute(db, fmt.Sprintf(ShowSeriesCardinality, measurements[i]))
 			if err != nil {
 				return err
 			}
-			for _, vi := range v.GetArray() {
-				q.queryMetrics.mu.Lock()
-				q.queryMetrics.SeriesMap[db][mst] += vi.Get("values", "0").GetInt64("2")
-				q.queryMetrics.mu.Unlock()
-			}
+
+			itrColumnValues(data, 2, func(val interface{}) {
+				seriesCount[measurements[i]] += cast.ToInt64(val)
+			})
 		}
+		q.queryMetrics.mu.Lock()
+		q.queryMetrics.SeriesMap[db] = seriesCount
+		q.queryMetrics.mu.Unlock()
 	}
+
 	q.queryMetrics.mu.Lock()
 	q.queryMetrics.MstCount = mstCount
+	q.queryMetrics.DBCount = int64(len(databases))
 	q.queryMetrics.mu.Unlock()
 	return nil
 }
 
-func parseSeries(queryResp []byte) (*fastjson.Value, error) {
-	var p fastjson.Parser
-	v, err := p.Parse(string(queryResp))
-	if err != nil {
-		return nil, err
+func itrColumnValues(resp *httpd.Response, idx int, fn func(val interface{})) {
+	if resp == nil || len(resp.Results) == 0 {
+		return
 	}
-	return v.Get("results", "0", "series"), nil
+
+	for _, rows := range resp.Results[0].Series {
+		for _, row := range rows.Values {
+			if len(row) >= idx {
+				fn(row[idx])
+			}
+		}
+	}
 }
 
 func (q *QueryMetric) report() {
-	ticker := time.NewTicker(ReportQueryFrequency)
-	defer ticker.Stop()
+	defer q.wg.Done()
 
-	for {
-		select {
-		case <-ticker.C:
-			point := q.formatPoint()
-			if err := q.Reporter.WriteData(point); err != nil {
-				q.logger.Error("report query metrics error", zap.Error(err))
-			}
-		case <-q.done:
-			q.logger.Info("collect query metrics closed")
-			return
+	util.TickerRun(ReportQueryFrequency, q.done, func() {
+		point := q.formatPoint()
+		if err := q.Reporter.WriteData(point); err != nil {
+			q.logger.Error("report query metrics error", zap.Error(err))
 		}
-	}
+	}, func() {
+		q.logger.Info("collect query metrics closed")
+	})
 }
 
 var custerMetricFields = []string{
@@ -256,4 +263,5 @@ func (q *QueryMetric) formatPoint() string {
 
 func (q *QueryMetric) Close() {
 	close(q.done)
+	q.wg.Wait()
 }

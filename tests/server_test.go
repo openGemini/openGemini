@@ -1274,15 +1274,13 @@ func TestServer_Query_Math(t *testing.T) {
 
 // Currently, division by zero is not supported and needs to be determined by the client.
 func TestServer_Query_DivByZero(t *testing.T) {
-	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
 	defer s.Close()
 
-	now := now()
 	writes := []string{
-		"inf value=42 " + strconv.FormatInt(now.UnixNano(), 10),
-		"negativeInf value=-42 " + strconv.FormatInt(now.UnixNano(), 10),
-		"nan value=0 " + strconv.FormatInt(now.UnixNano(), 10),
+		"inf value=42 1",
+		"negativeInf value=-42 1",
+		"nan value=0 1",
 	}
 
 	test := NewTest("db", "rp")
@@ -1294,17 +1292,17 @@ func TestServer_Query_DivByZero(t *testing.T) {
 		{
 			name:    "SELECT value /0 of float value",
 			command: `SELECT value / 0 from db.rp.inf`,
-			exp:     fmt.Sprintf(`{"error":"struct { Results []*query.Result \"json:\\\"results,omitempty\\\"\"; Err string \"json:\\\"error,omitempty\\\"\" }.Results: []*query.Result: json: unsupported value: NaN or ±Infinite"}`),
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"inf","columns":["time","value"],"values":[["1970-01-01T00:00:00.000000001Z",0]]}]}]}`,
 		},
 		{
 			name:    "SELECT negative value /0  of float value",
 			command: `SELECT value / 0 from db.rp.negativeInf`,
-			exp:     fmt.Sprintf(`{"error":"struct { Results []*query.Result \"json:\\\"results,omitempty\\\"\"; Err string \"json:\\\"error,omitempty\\\"\" }.Results: []*query.Result: json: unsupported value: NaN or ±Infinite"}`),
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"negativeInf","columns":["time","value"],"values":[["1970-01-01T00:00:00.000000001Z",0]]}]}]}`,
 		},
 		{
 			name:    "SELECT negative value /0  of float value",
 			command: `SELECT value / 0 from db.rp.nan`,
-			exp:     fmt.Sprintf(`{"error":"struct { Results []*query.Result \"json:\\\"results,omitempty\\\"\"; Err string \"json:\\\"error,omitempty\\\"\" }.Results: []*query.Result: json: unsupported value: NaN or ±Infinite"}`),
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"nan","columns":["time","value"],"values":[["1970-01-01T00:00:00.000000001Z",0]]}]}]}`,
 		},
 	}...)
 
@@ -4336,6 +4334,81 @@ func TestServer_MeasurementWithShardLists(t *testing.T) {
 	}
 }
 
+func TestServer_QueryColumnStoreForBF(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	// set infinite retention policy as we are inserting data in the past and don't want retention policy enforcement to make this test racy
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.CreateMeasurement("CREATE measurement db0.rp0.mstbf (clientip TAG, size FLOAT64, status INT64, request STRING) WITH ENGINETYPE = columnstore INDEXTYPE bloomfilter_universal INDEXLIST size,status,request TYPE hash PRIMARYKEY clientip SORTKEY clientip"); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`mstbf,clientip=0.3.4.11 request="english hello",size=1083.71,status=2001i 1629129600000000000`,
+		`mstbf,clientip=0.3.4.11 request="english1 world",size=1083.71,status=2001i 1629129600000000000`,
+		`mstbf,clientip=0.3.4.12 request="english1",size=1083.71,status=2001i 1629129601000000000`,
+		`mstbf,clientip=0.3.4.11 request="hello",size=1083.71,status=2001i 1629129603000000000`,
+		`mstbf,clientip=0.3.4.11 request="",size=1083.71,status=2001i 1629129603000000000`,
+		`mstbf,clientip=0.3.4.11 size=1083.71,status=2001i 1629129610000000000`,
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "hello has 2 records",
+			params:  url.Values{"inner_chunk_size": []string{"1"}},
+			command: `select * from db0.rp0.mstbf where MATCHPHRASE(request,"hello")`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mstbf","columns":["time","clientip","request","size","status"],"values":[["2021-08-16T16:00:00Z","0.3.4.11","english hello",1083.71,2001],["2021-08-16T16:00:03Z","0.3.4.11","hello",1083.71,2001]]}]}]}`,
+		},
+		{
+			name:    "english1(primary key not equal) has 2 records",
+			params:  url.Values{"inner_chunk_size": []string{"1"}},
+			command: `select * from db0.rp0.mstbf where MATCHPHRASE(request,"english1") order by time`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mstbf","columns":["time","clientip","request","size","status"],"values":[["2021-08-16T16:00:00Z","0.3.4.11","english1 world",1083.71,2001],["2021-08-16T16:00:01Z","0.3.4.12","english1",1083.71,2001]]}]}]}`,
+		},
+		{
+			name:    "english hello has 1 records",
+			params:  url.Values{"inner_chunk_size": []string{"1"}},
+			command: `select * from db0.rp0.mstbf where MATCHPHRASE(request,"english hello") order by time`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mstbf","columns":["time","clientip","request","size","status"],"values":[["2021-08-16T16:00:00Z","0.3.4.11","english hello",1083.71,2001]]}]}]}`,
+		},
+		{
+			name:    "empty string \"\" has 1 records",
+			params:  url.Values{"inner_chunk_size": []string{"1"}},
+			command: `select * from db0.rp0.mstbf where MATCHPHRASE(request,"")`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mstbf","columns":["time","clientip","request","size","status"],"values":[["2021-08-16T16:00:03Z","0.3.4.11","",1083.71,2001]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+				time.Sleep(5 * time.Second)
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 // TODO:partial Compare
 func TestServer_Query_Complex_Aggregate(t *testing.T) {
 	t.Parallel()
@@ -5560,6 +5633,97 @@ func TestServer_Query_AggregateSelectors(t *testing.T) {
 	}
 }
 
+func TestServer_Query_DistinctColumns(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`table1,tk1=a1,tk2=b1 v1=1i,v2=1,v3="a",v4=true 1629129600000000000`,
+		`table1,tk1=a1,tk2=b2 v1=1i,v2=4,v3="c",v4=true 1629129600000000000`,
+		`table1,tk1=a2,tk2=b1 v1=2i,v2=1,v3="c",v4=true 1629129600000000000`,
+		`table1,tk1=a2,tk2=b2 v1=2i,v2=4,v3="b",v4=true 1629129600000000000`,
+		`table1,tk1=a3,tk2=b3 v1=2i,v2=1,v3="c",v4=false 1629129600000000001`,
+		`table1,tk1=a3,tk2=b4 v1=3i,v2=2,v3="c",v4=false 1629129600000000001`,
+		`table1,tk1=a4,tk2=b3 v1=3i,v2=2,v3="a",v4=false 1629129600000000001`,
+		`table1,tk1=a4,tk2=b4 v1=3i,v2=4,v3="a",v4=false 1629129600000000001`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		// distinct one column use the agg function distinct()
+		{
+			name:    "distinct v1 group by tk1",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select distinct v1 from table1 group by tk1`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1","tags":{"tk1":"a1"},"columns":["time","distinct"],"values":[["1970-01-01T00:00:00Z",1]]},{"name":"table1","tags":{"tk1":"a2"},"columns":["time","distinct"],"values":[["1970-01-01T00:00:00Z",2]]},{"name":"table1","tags":{"tk1":"a3"},"columns":["time","distinct"],"values":[["1970-01-01T00:00:00Z",2],["1970-01-01T00:00:00Z",3]]},{"name":"table1","tags":{"tk1":"a4"},"columns":["time","distinct"],"values":[["1970-01-01T00:00:00Z",3]]}]}]}`,
+		},
+		// distinct multi columns use the distinct transform
+		{
+			name:    "distinct tk1_v1",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select distinct tk1,v1 from table1`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1","columns":["time","tk1","v1"],"values":[["2021-08-16T16:00:00Z","a1",1],["2021-08-16T16:00:00Z","a2",2],["2021-08-16T16:00:00.000000001Z","a3",2],["2021-08-16T16:00:00.000000001Z","a3",3],["2021-08-16T16:00:00.000000001Z","a4",3]]}]}]}`,
+		},
+		{
+			name:    "distinct *",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select distinct * from table1`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1","columns":["time","tk1","tk2","v1","v2","v3","v4"],"values":[["2021-08-16T16:00:00Z","a1","b1",1,1,"a",true],["2021-08-16T16:00:00Z","a1","b2",1,4,"c",true],["2021-08-16T16:00:00Z","a2","b1",2,1,"c",true],["2021-08-16T16:00:00Z","a2","b2",2,4,"b",true],["2021-08-16T16:00:00.000000001Z","a3","b3",2,1,"c",false],["2021-08-16T16:00:00.000000001Z","a3","b4",3,2,"c",false],["2021-08-16T16:00:00.000000001Z","a4","b3",3,2,"a",false],["2021-08-16T16:00:00.000000001Z","a4","b4",3,4,"a",false]]}]}]}`,
+		},
+		// distinct on use the distinct transform
+		{
+			name:    "distinct on v1 select v2",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select distinct on(v1) v2 from table1`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1","columns":["time","v2"],"values":[["2021-08-16T16:00:00Z",1],["2021-08-16T16:00:00Z",1],["2021-08-16T16:00:00.000000001Z",2]]}]}]}`,
+		},
+		{
+			name:    "distinct on tk1_v1 select v3_v4",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select distinct on(tk1,v1) v3,v4 from table1`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1","columns":["time","v3","v4"],"values":[["2021-08-16T16:00:00Z","a",true],["2021-08-16T16:00:00Z","b",true],["2021-08-16T16:00:00.000000001Z","c",false],["2021-08-16T16:00:00.000000001Z","c",false],["2021-08-16T16:00:00.000000001Z","a",false]]}]}]}`,
+		},
+		{
+			name:    "distinct on tk1_time select *",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select distinct on(tk1,time) * from table1`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1","columns":["time","tk1","tk2","v1","v2","v3","v4"],"values":[["2021-08-16T16:00:00Z","a1","b1",1,1,"a",true],["2021-08-16T16:00:00Z","a2","b1",2,1,"c",true],["2021-08-16T16:00:00.000000001Z","a3","b3",2,1,"c",false],["2021-08-16T16:00:00.000000001Z","a4","b3",3,2,"a",false]]}]}]}`,
+		},
+		{
+			name:    "distinct on * select v2",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select distinct on (*) v2 from table1`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1","columns":["time","v2","tk1","tk2","v1","v2_1","v3","v4"],"values":[["2021-08-16T16:00:00Z",1,"a1","b1",1,1,"a",true],["2021-08-16T16:00:00Z",4,"a1","b2",1,4,"c",true],["2021-08-16T16:00:00Z",1,"a2","b1",2,1,"c",true],["2021-08-16T16:00:00Z",4,"a2","b2",2,4,"b",true],["2021-08-16T16:00:00.000000001Z",1,"a3","b3",2,1,"c",false],["2021-08-16T16:00:00.000000001Z",2,"a3","b4",3,2,"c",false],["2021-08-16T16:00:00.000000001Z",2,"a4","b3",3,2,"a",false],["2021-08-16T16:00:00.000000001Z",4,"a4","b4",3,4,"a",false]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 func TestServer_Query_ExactTimeRange(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
@@ -6464,6 +6628,69 @@ func TestServer_Query_SubqueryWithGroupBy(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}},
 			command: `SELECT mean(mean) FROM (SELECT mean(value) FROM cpu GROUP BY time(2s), host, region) WHERE time >= '2000-01-01T00:00:00Z' AND time < '2000-01-01T00:00:04Z' GROUP BY time(2s), host`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"host":"server01"},"columns":["time","mean"],"values":[["2000-01-01T00:00:00Z",5.5],["2000-01-01T00:00:02Z",7.5]]},{"name":"cpu","tags":{"host":"server02"},"columns":["time","mean"],"values":[["2000-01-01T00:00:00Z",9.5],["2000-01-01T00:00:02Z",11.5]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Query_SubqueryWithSemicolo(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`mst,metric_name=cpu_usage,instance_id=5ec21 value=1i,unit=16i %d`, mustParseTime(time.RFC3339Nano, "2025-12-16T00:00:00Z").UnixNano()),
+		fmt.Sprintf(`mst,metric_name=cpu_usage,instance_id=5ec21 value=2i,unit=14i %d`, mustParseTime(time.RFC3339Nano, "2025-12-16T00:00:01Z").UnixNano()),
+		fmt.Sprintf(`mst,metric_name=cpu_usage,instance_id=5ec21 value=3i,unit=12i %d`, mustParseTime(time.RFC3339Nano, "2025-12-16T00:00:02Z").UnixNano()),
+		fmt.Sprintf(`mst,metric_name=cpu_usage,instance_id=5ec21 value=4i,unit=10i %d`, mustParseTime(time.RFC3339Nano, "2025-12-16T00:00:03Z").UnixNano()),
+		fmt.Sprintf(`mst,metric_name=cpu_usage,instance_id=5ec22 value=5i,unit=8i %d`, mustParseTime(time.RFC3339Nano, "2025-12-16T00:00:00Z").UnixNano()),
+		fmt.Sprintf(`mst,metric_name=cpu_usage,instance_id=5ec22 value=6i,unit=6i %d`, mustParseTime(time.RFC3339Nano, "2025-12-16T00:00:01Z").UnixNano()),
+		fmt.Sprintf(`mst,metric_name=cpu_usage,instance_id=5ec22 value=7i,unit=4i %d`, mustParseTime(time.RFC3339Nano, "2025-12-16T00:00:02Z").UnixNano()),
+		fmt.Sprintf(`mst,metric_name=cpu_usage,instance_id=5ec22 value=8i,unit=2i %d`, mustParseTime(time.RFC3339Nano, "2025-12-16T00:00:03Z").UnixNano()),
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "select subquery with semicolo",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select * from(select * from mst WHERE time = '2025-12-16T00:00:00Z';select * from mst WHERE time = '2025-12-16T00:00:03Z')`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","instance_id","metric_name","unit","value"],"values":[["2025-12-16T00:00:00Z","5ec21","cpu_usage",16,1],["2025-12-16T00:00:00Z","5ec22","cpu_usage",8,5],["2025-12-16T00:00:03Z","5ec21","cpu_usage",10,4],["2025-12-16T00:00:03Z","5ec22","cpu_usage",2,8]]}]}]}`,
+		},
+		{
+			name:    "select subquery with groupby_semicolo1",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT mean(value),mean(unit) FROM (SELECT mean(value) as value,mean(unit) as unit FROM mst WHERE instance_id='5ec21' GROUP BY time(2s), instance_id fill(none);SELECT mean(value) as value,mean(unit) as unit FROM mst WHERE instance_id='5ec22' GROUP BY time(2s), instance_id fill(none)) GROUP BY time(2s), metric_name fill(none)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"metric_name":"cpu_usage"},"columns":["time","mean","mean_1"],"values":[["2025-12-16T00:00:00Z",3.5,11],["2025-12-16T00:00:02Z",5.5,7]]}]}]}`,
+		},
+		{
+			name:    "select subquery with groupby_semicolo2",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT mean(value),last(unit) as vallast FROM (SELECT min(value) as value,last(unit) as unit FROM mst WHERE instance_id='5ec21' GROUP BY time(2s), instance_id fill(none);SELECT min(value) as value,last(unit) as unit FROM mst WHERE instance_id='5ec22' GROUP BY time(2s), instance_id fill(none)) GROUP BY time(2s), metric_name fill(none)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"metric_name":"cpu_usage"},"columns":["time","mean","vallast"],"values":[["2025-12-16T00:00:00Z",3,14],["2025-12-16T00:00:02Z",5,10]]}]}]}`,
 		},
 	}...)
 
@@ -9136,13 +9363,13 @@ func TestServer_Query_ShowMeasurementsDetail(t *testing.T) {
 			name:    "show details of measurements in column engine with shard keys",
 			command: `show measurements detail with measurement = cpu`,
 			params:  url.Values{"db": []string{"db0"}},
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["Detail"],"values":[["RETENTION POLICY: rp0"],["INDEX: \u003cnil\u003e"],["SHARD KEY: az, region"],["ENGINE TYPE: columnstore"],["PRIMARY KEY: az, region, time"],["SORT KEY: az, region, time"],["COMPACTION_TYPE: row"],["TAG KEYS: az, region"],["FIELD KEYS: v1(integer), v2(float), v3(boolean), v4(string)"]]}]}]}`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["Detail"],"values":[["RETENTION POLICY: rp0"],["INDEX: <nil>"],["SHARD KEY: az, region"],["ENGINE TYPE: columnstore"],["PRIMARY KEY: az, region, time"],["SORT KEY: az, region, time"],["COMPACTION_TYPE: row"],["PROPERTY: <nil>"],["TAG KEYS: az, region"],["FIELD KEYS: v1(integer), v2(float), v3(boolean), v4(string)"]]}]}]}`,
 		},
 		{
 			name:    "show details of measurements in tsstore",
 			command: `show measurements detail with measurement = gpu`,
 			params:  url.Values{"db": []string{"db0"}},
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"gpu","columns":["Detail"],"values":[["RETENTION POLICY: rp0"],["INDEX: \u003cnil\u003e"],["SHARD KEY: \u003cnil\u003e"],["ENGINE TYPE: tsstore"],["TAG KEYS: az, region"],["FIELD KEYS: v1(integer), v2(float), v3(boolean), v4(string)"]]}]}]}`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"gpu","columns":["Detail"],"values":[["RETENTION POLICY: rp0"],["INDEX: <nil>"],["SHARD KEY: <nil>"],["ENGINE TYPE: tsstore"],["TAG KEYS: az, region"],["FIELD KEYS: v1(integer), v2(float), v3(boolean), v4(string)"]]}]}]}`,
 		},
 	}...)
 	InitHaTestEnv(t)
@@ -9272,7 +9499,7 @@ func TestServer_Query_ShowTagKeysWithCondition(t *testing.T) {
 		&Write{data: strings.Join(writes, "\n")},
 	}
 	/*
-	  these queries are all special mst, because more mst make the results no order, exp not match actual
+	   these queries are all special mst, because more mst make the results no order, exp not match actual
 	*/
 	test.addQueries([]*Query{
 		{
@@ -9364,6 +9591,30 @@ func TestServer_DropSeries(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}},
 		},
 		{
+			name:    `before drop with condition execute show series cardinality from cpu where host='server02'`,
+			command: `show series cardinality from cpu where host='server02'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu_0000","columns":["startTime","endTime","count"],"values":[["2009-11-09T00:00:00Z","2009-11-16T00:00:00Z",2]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
+			name:    `before drop no condition execute show series cardinality from cpu`,
+			command: `show series cardinality from cpu`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"columns":["startTime","endTime","count"],"values":[["2009-11-09T00:00:00Z","2009-11-16T00:00:00Z",5]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
+			name:    `before drop with condition execute show series from cpu where host='server02'`,
+			command: `show series from cpu where host='server02'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"columns":["key"],"values":[["cpu,host=server02,region=useast"],["cpu,host=server02,region=uswest"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
+			name:    `before drop no condition execute show series from cpu`,
+			command: `show series from cpu`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"columns":["key"],"values":[["cpu,host=server01,region=useast"],["cpu,host=server01,region=uswest"],["cpu,host=server02,region=useast"],["cpu,host=server02,region=uswest"],["cpu,host=server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
 			name:    `drop series from cpu where host='server02'`,
 			command: `drop series from cpu where host='server02'`,
 			exp:     `{"results":[{"statement_id":0}]}`,
@@ -9379,6 +9630,30 @@ func TestServer_DropSeries(t *testing.T) {
 			name:    `after drop execute select * from cpu where host='server02'`,
 			command: `select * from cpu where host='server02'`,
 			exp:     `{"results":[{"statement_id":0}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
+			name:    `after drop with condition execute show series cardinality from cpu where host='server02'`,
+			command: `show series cardinality from cpu where host='server02'`,
+			exp:     `{"results":[{"statement_id":0}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
+			name:    `after drop no condition execute show series cardinality from cpu`,
+			command: `show series cardinality from cpu`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"columns":["startTime","endTime","count"],"values":[["2009-11-09T00:00:00Z","2009-11-16T00:00:00Z",3]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
+			name:    `after drop with condition execute show series from cpu where host='server02'`,
+			command: `show series from cpu where host='server02'`,
+			exp:     `{}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
+			name:    `after drop no condition execute show series from cpu`,
+			command: `show series from cpu`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"columns":["key"],"values":[["cpu,host=server01,region=useast"],["cpu,host=server01,region=uswest"],["cpu,host=server03"]]}]}]}`,
 			params:  url.Values{"db": []string{"db0"}},
 		},
 	}...)
@@ -9553,6 +9828,30 @@ func TestServer_Query_ShowTagValues(t *testing.T) {
 			name:    "show tag values with key",
 			command: "SHOW TAG VALUES WITH KEY = host order by value asc",
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"],["host","server02"]]},{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"],["host","server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
+			name:    "show tag values with key asc limit 1",
+			command: "SHOW TAG VALUES WITH KEY = host order by value asc limit 1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"]]},{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
+			name:    "show tag values with key asc limit 3",
+			command: "SHOW TAG VALUES WITH KEY = host order by value asc limit 3",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"],["host","server02"]]},{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"],["host","server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
+			name:    "show tag values with key desc limit 1",
+			command: "SHOW TAG VALUES WITH KEY = host order by value desc limit 1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server02"]]},{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
+			name:    "show tag values with key desc limit 3",
+			command: "SHOW TAG VALUES WITH KEY = host order by value desc limit 3",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server02"],["host","server01"]]},{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server03"],["host","server02"]]}]}]}`,
 			params:  url.Values{"db": []string{"db0"}},
 		},
 		{
@@ -11310,10 +11609,10 @@ func TestServer_Query_FullSeries(t *testing.T) {
 
 	test.addQueries([]*Query{
 		{
-			name:    "full series and no result",
+			name:    "full series and no condition",
 			params:  url.Values{"db": []string{"db0"}},
-			command: `select /*+ full_series */ value from cpu where (host = 'server05' AND region = 'uswest')`,
-			exp:     `{"results":[{"statement_id":0}]}`,
+			command: `select /*+ full_series */ value from cpu`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2009-11-10T23:00:00Z",100],["2009-11-10T23:00:00Z",101],["2009-11-10T23:00:00Z",102],["2009-11-10T23:00:00Z",103]]}]}]}`,
 		},
 		{
 			name:    "full series and single tag",
@@ -11322,13 +11621,49 @@ func TestServer_Query_FullSeries(t *testing.T) {
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2009-11-10T23:00:00Z",100]]}]}]}`,
 		},
 		{
+			name:    "full series and single tag and field",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select /*+ full_series */ value from cpu where (host = 'server01' AND value = 100)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2009-11-10T23:00:00Z",100]]}]}]}`,
+		},
+		{
+			name:    "full series and single tag and field2",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select /*+ full_series */ value from cpu where (host = 'server02' AND value > 100)`,
+			exp:     `{"results":[{"statement_id":0}]}`,
+		},
+		{
+			name:    "not full series with tag not equal",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select /*+ full_series */ value from cpu where (host != 'server01' AND value > 100)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2009-11-10T23:00:00Z",103]]}]}]}`,
+		},
+		{
+			name:    "not full series with or",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select /*+ full_series */ value from cpu where (host = 'server02' OR value > 100)`,
+			exp:     `{"results":[{"statement_id":0}]}`,
+		},
+		{
+			name:    "full series and no result",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select /*+ full_series */ value from cpu where (host = 'server05' AND region = 'uswest')`,
+			exp:     `{"results":[{"statement_id":0}]}`,
+		},
+		{
 			name:    "full series normal",
 			params:  url.Values{"db": []string{"db0"}},
 			command: `select /*+ full_series */ value from cpu where (host = 'server01' AND region = 'uswest')`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2009-11-10T23:00:00Z",101]]}]}]}`,
 		},
 		{
-			name:    "full series or field",
+			name:    "full series normal",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select /*+ full_series */ value from cpu where (host = 'server01' AND region = 'uswest' AND value != 101)`,
+			exp:     `{"results":[{"statement_id":0}]}`,
+		},
+		{
+			name:    "not full series with or",
 			params:  url.Values{"db": []string{"db0"}},
 			command: `select /*+ full_series */ value from cpu where (host = 'server01' AND region = 'uswest' OR value > 99)`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2009-11-10T23:00:00Z",101]]}]}]}`,
@@ -11379,23 +11714,47 @@ func TestServer_Query_SpecificSeries(t *testing.T) {
 		{
 			name:    "specific series and no result",
 			params:  url.Values{"db": []string{"db0"}},
-			command: `select /*+ specific_series */ value from cpu where (host = 'server05' AND region = 'uswest')`,
-			exp:     `{"results":[{"statement_id":0}]}`,
+			command: `select /*+ specific_series */ value from cpu`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2009-11-10T23:00:00Z",100],["2009-11-10T23:00:00Z",101],["2009-11-10T23:00:00Z",102],["2009-11-10T23:00:00Z",103]]}]}]}`,
 		},
 		{
-			name:    "specific series and single tag",
+			name:    "specific series and single tag, can‘t be full series",
 			params:  url.Values{"db": []string{"db0"}},
 			command: `select /*+ specific_series */ value from cpu where (host = 'server01')`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2009-11-10T23:00:00Z",100],["2009-11-10T23:00:00Z",101],["2009-11-10T23:00:00Z",102]]}]}]}`,
 		},
 		{
-			name:    "specific series normal",
+			name:    "specific series and single tag and field, can‘t be full series",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select /*+ specific_series */ value from cpu where (host = 'server01' AND value = 100)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2009-11-10T23:00:00Z",100]]}]}]}`,
+		},
+		{
+			name:    "specific series and single tag and field2, can‘t be full series",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select /*+ specific_series */ value from cpu where (host = 'server01' AND value > 100)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2009-11-10T23:00:00Z",101],["2009-11-10T23:00:00Z",102]]}]}]}`,
+		},
+		{
+			name:    "specific series and no result, can be full series",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select /*+ specific_series */ value from cpu where (host = 'server05' AND region = 'uswest')`,
+			exp:     `{"results":[{"statement_id":0}]}`,
+		},
+		{
+			name:    "specific series normal, can be full series",
 			params:  url.Values{"db": []string{"db0"}},
 			command: `select /*+ specific_series */ value from cpu where (host = 'server01' AND region = 'uswest')`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2009-11-10T23:00:00Z",101]]}]}]}`,
 		},
 		{
-			name:    "specific series or field",
+			name:    "specific series normal, can be full series",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select /*+ specific_series */ value from cpu where (host = 'server01' AND region = 'uswest' AND value = 102)`,
+			exp:     `{"results":[{"statement_id":0}]}`,
+		},
+		{
+			name:    "specific series or field, can be full series",
 			params:  url.Values{"db": []string{"db0"}},
 			command: `select /*+ specific_series */ value from cpu where (host = 'server01' AND region = 'uswest' OR value > 99)`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2009-11-10T23:00:00Z",101]]}]}]}`,
@@ -12261,7 +12620,6 @@ func TestServer_fullJoin_SubQuery(t *testing.T) {
 	}
 }
 
-/*
 func TestServer_Union_Table(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
@@ -12385,7 +12743,7 @@ func TestServer_Union_Table(t *testing.T) {
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","additional","entity_id","forwarded_id"],"values":[["2021-08-16T16:00:00Z","ELB1","vm11",null],["2021-08-16T16:00:00Z","ELB1","vm12",null],["2021-08-16T16:00:00Z","ELB1","vm13",null],["2021-08-16T16:00:00Z","ELB1","vm14",null],["2021-08-16T16:00:00Z","ELB1","vm15",null],["2021-08-16T16:00:00Z","add1","vm6",null],["2021-08-16T16:00:00Z","add2","vm7",null],["2021-08-16T16:00:00Z","add2","vm9",null],["2021-08-16T16:00:00Z","add3","vm10",null],["2021-08-16T16:00:00Z","add3","vm8",null],["2021-08-16T16:00:00Z",null,"vm1","forward1"],["2021-08-16T16:00:00Z",null,"vm2","forward2"],["2021-08-16T16:00:00Z",null,"vm3","forward3"],["2021-08-16T16:00:00Z",null,"vm4","forward4"],["2021-08-16T16:00:00Z",null,"vm5","forward5"]]}]}]}`,
 		},
 		{
-			name:    "union CTE",
+			name:    "unionall CTE",
 			params:  url.Values{"db": []string{"db0"}},
 			command: "with u1 as (select entity_id as t1,forwarded_id as f1 from event_table union all select entity_id,additional from alarm_table) select t1,f1 from u1 union all select entity_id,forwarded_service from CPU",
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","f1","t1"],"values":[["2021-08-16T16:00:00Z","ELB1","vm11"],["2021-08-16T16:00:00Z","ELB1","vm12"],["2021-08-16T16:00:00Z","ELB1","vm13"],["2021-08-16T16:00:00Z","ELB1","vm14"],["2021-08-16T16:00:00Z","ELB1","vm15"],["2021-08-16T16:00:00Z","add1","vm6"],["2021-08-16T16:00:00Z","add2","vm7"],["2021-08-16T16:00:00Z","add2","vm9"],["2021-08-16T16:00:00Z","add3","vm10"],["2021-08-16T16:00:00Z","add3","vm8"],["2021-08-16T16:00:00Z","forward1","vm1"],["2021-08-16T16:00:00Z","forward2","vm2"],["2021-08-16T16:00:00Z","forward3","vm3"],["2021-08-16T16:00:00Z","forward4","vm4"],["2021-08-16T16:00:00Z","forward5","vm5"]]}]}]}`,
@@ -12397,9 +12755,21 @@ func TestServer_Union_Table(t *testing.T) {
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,"a","h"],["2021-08-16T16:00:00Z",2,12,"b","h"],["2021-08-16T16:00:00Z",3,21,"b","i"],["2021-08-16T16:00:00Z",4,22,"c","i"]]}]}]}`,
 		},
 		{
+			name:    "union distinct same columns count",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 union distinct select * from table2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,"a","h"],["2021-08-16T16:00:00Z",2,12,"b","h"],["2021-08-16T16:00:00Z",3,21,"b","i"],["2021-08-16T16:00:00Z",4,22,"c","i"]]}]}]}`,
+		},
+		{
 			name:    "unionbyname same columns count(not same name)",
 			params:  url.Values{"db": []string{"db0"}},
 			command: "select * from table1 union by name select * from table2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","f3","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,null,"a","h"],["2021-08-16T16:00:00Z",2,12,null,"b","h"],["2021-08-16T16:00:00Z",3,null,21,"b","i"],["2021-08-16T16:00:00Z",4,null,22,"c","i"]]}]}]}`,
+		},
+		{
+			name:    "uniondistinctbyname same columns count(not same name)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 union distinct by name select * from table2",
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","f3","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,null,"a","h"],["2021-08-16T16:00:00Z",2,12,null,"b","h"],["2021-08-16T16:00:00Z",3,null,21,"b","i"],["2021-08-16T16:00:00Z",4,null,22,"c","i"]]}]}]}`,
 		},
 		{
@@ -12409,9 +12779,21 @@ func TestServer_Union_Table(t *testing.T) {
 			exp:     `{"results":[{"statement_id":0,"error":"union/union all can only apply to expressions with the same number of result columns"}]}`,
 		},
 		{
+			name:    "union distinct not same columns count",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 union distinct select * from table3",
+			exp:     `{"results":[{"statement_id":0,"error":"union/union all can only apply to expressions with the same number of result columns"}]}`,
+		},
+		{
 			name:    "unionbyname not same columns count",
 			params:  url.Values{"db": []string{"db0"}},
 			command: "select * from table2 union by name select * from table3",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table2,table3","columns":["time","f1","f2","f3","t1","t2"],"values":[["2021-08-16T16:00:00Z",3,null,21,"b","i"],["2021-08-16T16:00:00Z",4,null,22,"c","i"],["2021-08-16T16:00:00Z",3,"a",31,"b","j"],["2021-08-16T16:00:00Z",4,"b",32,"c","k"]]}]}]}`,
+		},
+		{
+			name:    "uniondistinctbyname not same columns count",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table2 union distinct by name select * from table3",
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table2,table3","columns":["time","f1","f2","f3","t1","t2"],"values":[["2021-08-16T16:00:00Z",3,null,21,"b","i"],["2021-08-16T16:00:00Z",4,null,22,"c","i"],["2021-08-16T16:00:00Z",3,"a",31,"b","j"],["2021-08-16T16:00:00Z",4,"b",32,"c","k"]]}]}]}`,
 		},
 		{
@@ -12421,9 +12803,21 @@ func TestServer_Union_Table(t *testing.T) {
 			exp:     `{"results":[{"statement_id":0,"error":"columns in the same index position must have the same data type when using union/union all"}]}`,
 		},
 		{
+			name:    "union distinct same index not same type",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select f1,f2 from table1 union distinct select f1,f2 from table3",
+			exp:     `{"results":[{"statement_id":0,"error":"columns in the same index position must have the same data type when using union/union all"}]}`,
+		},
+		{
 			name:    "unionbyname same name not same type",
 			params:  url.Values{"db": []string{"db0"}},
 			command: "select * from table1 union by name select * from table3",
+			exp:     `{"results":[{"statement_id":0,"error":"columns with same name must have the same data type when using union by name/union all by name"}]}`,
+		},
+		{
+			name:    "uniondistinctbyname same name not same type",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 union distinct by name select * from table3",
 			exp:     `{"results":[{"statement_id":0,"error":"columns with same name must have the same data type when using union by name/union all by name"}]}`,
 		},
 		{
@@ -12433,9 +12827,21 @@ func TestServer_Union_Table(t *testing.T) {
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,"a","h"],["2021-08-16T16:00:00Z",2,12,"b","h"],["2021-08-16T16:00:00Z",3,21,"i","b"],["2021-08-16T16:00:00Z",4,22,"i","c"]]}]}]}`,
 		},
 		{
+			name:    "union distinct group by",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 group by t1 union distinct select * from table2 group by t2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,"a","h"],["2021-08-16T16:00:00Z",2,12,"b","h"],["2021-08-16T16:00:00Z",3,21,"i","b"],["2021-08-16T16:00:00Z",4,22,"i","c"]]}]}]}`,
+		},
+		{
 			name:    "unionbyname group by",
 			params:  url.Values{"db": []string{"db0"}},
 			command: "select * from table1 group by t1  union by name select * from table2 group by t2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","f3","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,null,"a","h"],["2021-08-16T16:00:00Z",2,12,null,"b","h"],["2021-08-16T16:00:00Z",3,null,21,"b","i"],["2021-08-16T16:00:00Z",4,null,22,"c","i"]]}]}]}`,
+		},
+		{
+			name:    "uniondistinctbyname group by",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 group by t1  union distinct by name select * from table2 group by t2",
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","f3","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,null,"a","h"],["2021-08-16T16:00:00Z",2,12,null,"b","h"],["2021-08-16T16:00:00Z",3,null,21,"b","i"],["2021-08-16T16:00:00Z",4,null,22,"c","i"]]}]}]}`,
 		},
 		{
@@ -12445,9 +12851,21 @@ func TestServer_Union_Table(t *testing.T) {
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"alarm_table,event_table","columns":["time","entity_id","forwarded_id"],"values":[["2021-08-16T16:00:00Z","vm9","add2"],["2021-08-16T16:00:00Z","vm8","add3"],["2021-08-16T16:00:00Z","vm1","forward1"],["2021-08-16T16:00:00Z","vm2","forward2"],["2021-08-16T16:00:00Z","vm3","forward3"],["2021-08-16T16:00:00Z","vm4","forward4"],["2021-08-16T16:00:00Z","vm5","forward5"]]}]}]}`,
 		},
 		{
+			name:    "union distinct incondition",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union distinct select entity_id,additional from alarm_table where \"name\" in (select \"name\" from CPU)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"alarm_table,event_table","columns":["time","entity_id","forwarded_id"],"values":[["2021-08-16T16:00:00Z","vm9","add2"],["2021-08-16T16:00:00Z","vm8","add3"],["2021-08-16T16:00:00Z","vm1","forward1"],["2021-08-16T16:00:00Z","vm2","forward2"],["2021-08-16T16:00:00Z","vm3","forward3"],["2021-08-16T16:00:00Z","vm4","forward4"],["2021-08-16T16:00:00Z","vm5","forward5"]]}]}]}`,
+		},
+		{
 			name:    "union cascade union",
 			params:  url.Values{"db": []string{"db0"}},
 			command: "select entity_id,forwarded_id from event_table union select entity_id,additional from alarm_table union select entity_id,forwarded_service from CPU",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","entity_id","forwarded_id"],"values":[["2021-08-16T16:00:00Z","vm11","ELB1"],["2021-08-16T16:00:00Z","vm12","ELB1"],["2021-08-16T16:00:00Z","vm13","ELB1"],["2021-08-16T16:00:00Z","vm14","ELB1"],["2021-08-16T16:00:00Z","vm15","ELB1"],["2021-08-16T16:00:00Z","vm6","add1"],["2021-08-16T16:00:00Z","vm7","add2"],["2021-08-16T16:00:00Z","vm9","add2"],["2021-08-16T16:00:00Z","vm10","add3"],["2021-08-16T16:00:00Z","vm8","add3"],["2021-08-16T16:00:00Z","vm1","forward1"],["2021-08-16T16:00:00Z","vm2","forward2"],["2021-08-16T16:00:00Z","vm3","forward3"],["2021-08-16T16:00:00Z","vm4","forward4"],["2021-08-16T16:00:00Z","vm5","forward5"]]}]}]}`,
+		},
+		{
+			name:    "union distinct cascade union distinct",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union distinct select entity_id,additional from alarm_table union distinct select entity_id,forwarded_service from CPU",
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","entity_id","forwarded_id"],"values":[["2021-08-16T16:00:00Z","vm11","ELB1"],["2021-08-16T16:00:00Z","vm12","ELB1"],["2021-08-16T16:00:00Z","vm13","ELB1"],["2021-08-16T16:00:00Z","vm14","ELB1"],["2021-08-16T16:00:00Z","vm15","ELB1"],["2021-08-16T16:00:00Z","vm6","add1"],["2021-08-16T16:00:00Z","vm7","add2"],["2021-08-16T16:00:00Z","vm9","add2"],["2021-08-16T16:00:00Z","vm10","add3"],["2021-08-16T16:00:00Z","vm8","add3"],["2021-08-16T16:00:00Z","vm1","forward1"],["2021-08-16T16:00:00Z","vm2","forward2"],["2021-08-16T16:00:00Z","vm3","forward3"],["2021-08-16T16:00:00Z","vm4","forward4"],["2021-08-16T16:00:00Z","vm5","forward5"]]}]}]}`,
 		},
 		{
@@ -12457,9 +12875,21 @@ func TestServer_Union_Table(t *testing.T) {
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","additional","entity_id","forwarded_id","forwarded_service"],"values":[["2021-08-16T16:00:00Z",null,"vm11",null,"ELB1"],["2021-08-16T16:00:00Z",null,"vm12",null,"ELB1"],["2021-08-16T16:00:00Z",null,"vm13",null,"ELB1"],["2021-08-16T16:00:00Z",null,"vm14",null,"ELB1"],["2021-08-16T16:00:00Z",null,"vm15",null,"ELB1"],["2021-08-16T16:00:00Z","add1","vm6",null,null],["2021-08-16T16:00:00Z","add2","vm7",null,null],["2021-08-16T16:00:00Z","add2","vm9",null,null],["2021-08-16T16:00:00Z","add3","vm10",null,null],["2021-08-16T16:00:00Z","add3","vm8",null,null],["2021-08-16T16:00:00Z",null,"vm1","forward1",null],["2021-08-16T16:00:00Z",null,"vm2","forward2",null],["2021-08-16T16:00:00Z",null,"vm3","forward3",null],["2021-08-16T16:00:00Z",null,"vm4","forward4",null],["2021-08-16T16:00:00Z",null,"vm5","forward5",null]]}]}]}`,
 		},
 		{
+			name:    "uniondistinctbyname cascade unionbyname",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union distinct by name select entity_id,additional from alarm_table union by name select entity_id,forwarded_service from CPU",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","additional","entity_id","forwarded_id","forwarded_service"],"values":[["2021-08-16T16:00:00Z",null,"vm11",null,"ELB1"],["2021-08-16T16:00:00Z",null,"vm12",null,"ELB1"],["2021-08-16T16:00:00Z",null,"vm13",null,"ELB1"],["2021-08-16T16:00:00Z",null,"vm14",null,"ELB1"],["2021-08-16T16:00:00Z",null,"vm15",null,"ELB1"],["2021-08-16T16:00:00Z","add1","vm6",null,null],["2021-08-16T16:00:00Z","add2","vm7",null,null],["2021-08-16T16:00:00Z","add2","vm9",null,null],["2021-08-16T16:00:00Z","add3","vm10",null,null],["2021-08-16T16:00:00Z","add3","vm8",null,null],["2021-08-16T16:00:00Z",null,"vm1","forward1",null],["2021-08-16T16:00:00Z",null,"vm2","forward2",null],["2021-08-16T16:00:00Z",null,"vm3","forward3",null],["2021-08-16T16:00:00Z",null,"vm4","forward4",null],["2021-08-16T16:00:00Z",null,"vm5","forward5",null]]}]}]}`,
+		},
+		{
 			name:    "union cascade unionbyname",
 			params:  url.Values{"db": []string{"db0"}},
 			command: "select entity_id,forwarded_id from event_table union select entity_id,additional from alarm_table union by name select entity_id,forwarded_service from CPU",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","entity_id","forwarded_id","forwarded_service"],"values":[["2021-08-16T16:00:00Z","vm11",null,"ELB1"],["2021-08-16T16:00:00Z","vm12",null,"ELB1"],["2021-08-16T16:00:00Z","vm13",null,"ELB1"],["2021-08-16T16:00:00Z","vm14",null,"ELB1"],["2021-08-16T16:00:00Z","vm15",null,"ELB1"],["2021-08-16T16:00:00Z","vm6","add1",null],["2021-08-16T16:00:00Z","vm7","add2",null],["2021-08-16T16:00:00Z","vm9","add2",null],["2021-08-16T16:00:00Z","vm10","add3",null],["2021-08-16T16:00:00Z","vm8","add3",null],["2021-08-16T16:00:00Z","vm1","forward1",null],["2021-08-16T16:00:00Z","vm2","forward2",null],["2021-08-16T16:00:00Z","vm3","forward3",null],["2021-08-16T16:00:00Z","vm4","forward4",null],["2021-08-16T16:00:00Z","vm5","forward5",null]]}]}]}`,
+		},
+		{
+			name:    "union cascade uniondistinctbyname",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union select entity_id,additional from alarm_table union distinct by name select entity_id,forwarded_service from CPU",
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","entity_id","forwarded_id","forwarded_service"],"values":[["2021-08-16T16:00:00Z","vm11",null,"ELB1"],["2021-08-16T16:00:00Z","vm12",null,"ELB1"],["2021-08-16T16:00:00Z","vm13",null,"ELB1"],["2021-08-16T16:00:00Z","vm14",null,"ELB1"],["2021-08-16T16:00:00Z","vm15",null,"ELB1"],["2021-08-16T16:00:00Z","vm6","add1",null],["2021-08-16T16:00:00Z","vm7","add2",null],["2021-08-16T16:00:00Z","vm9","add2",null],["2021-08-16T16:00:00Z","vm10","add3",null],["2021-08-16T16:00:00Z","vm8","add3",null],["2021-08-16T16:00:00Z","vm1","forward1",null],["2021-08-16T16:00:00Z","vm2","forward2",null],["2021-08-16T16:00:00Z","vm3","forward3",null],["2021-08-16T16:00:00Z","vm4","forward4",null],["2021-08-16T16:00:00Z","vm5","forward5",null]]}]}]}`,
 		},
 		{
@@ -12469,15 +12899,33 @@ func TestServer_Union_Table(t *testing.T) {
 			exp:     `{"results":[{"statement_id":0,"error":"union/union all can only apply to expressions with the same number of result columns"}]}`,
 		},
 		{
+			name:    "unionbyname cascade union distinct",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union by name select entity_id,additional from alarm_table union distinct select entity_id,forwarded_service from CPU",
+			exp:     `{"results":[{"statement_id":0,"error":"union/union all can only apply to expressions with the same number of result columns"}]}`,
+		},
+		{
 			name:    "unionbyname cascade (union)",
 			params:  url.Values{"db": []string{"db0"}},
 			command: "select entity_id,forwarded_id from event_table union by name (select entity_id,additional from alarm_table union select entity_id,forwarded_service from CPU)",
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","additional","entity_id","forwarded_id"],"values":[["2021-08-16T16:00:00Z","ELB1","vm11",null],["2021-08-16T16:00:00Z","ELB1","vm12",null],["2021-08-16T16:00:00Z","ELB1","vm13",null],["2021-08-16T16:00:00Z","ELB1","vm14",null],["2021-08-16T16:00:00Z","ELB1","vm15",null],["2021-08-16T16:00:00Z","add1","vm6",null],["2021-08-16T16:00:00Z","add2","vm7",null],["2021-08-16T16:00:00Z","add2","vm9",null],["2021-08-16T16:00:00Z","add3","vm10",null],["2021-08-16T16:00:00Z","add3","vm8",null],["2021-08-16T16:00:00Z",null,"vm1","forward1"],["2021-08-16T16:00:00Z",null,"vm2","forward2"],["2021-08-16T16:00:00Z",null,"vm3","forward3"],["2021-08-16T16:00:00Z",null,"vm4","forward4"],["2021-08-16T16:00:00Z",null,"vm5","forward5"]]}]}]}`,
 		},
 		{
+			name:    "uniondistinctbyname cascade (union distinct)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union distinct by name (select entity_id,additional from alarm_table union distinct select entity_id,forwarded_service from CPU)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","additional","entity_id","forwarded_id"],"values":[["2021-08-16T16:00:00Z","ELB1","vm11",null],["2021-08-16T16:00:00Z","ELB1","vm12",null],["2021-08-16T16:00:00Z","ELB1","vm13",null],["2021-08-16T16:00:00Z","ELB1","vm14",null],["2021-08-16T16:00:00Z","ELB1","vm15",null],["2021-08-16T16:00:00Z","add1","vm6",null],["2021-08-16T16:00:00Z","add2","vm7",null],["2021-08-16T16:00:00Z","add2","vm9",null],["2021-08-16T16:00:00Z","add3","vm10",null],["2021-08-16T16:00:00Z","add3","vm8",null],["2021-08-16T16:00:00Z",null,"vm1","forward1"],["2021-08-16T16:00:00Z",null,"vm2","forward2"],["2021-08-16T16:00:00Z",null,"vm3","forward3"],["2021-08-16T16:00:00Z",null,"vm4","forward4"],["2021-08-16T16:00:00Z",null,"vm5","forward5"]]}]}]}`,
+		},
+		{
 			name:    "union CTE",
 			params:  url.Values{"db": []string{"db0"}},
 			command: "with u1 as (select entity_id as t1,forwarded_id as f1 from event_table union select entity_id,additional from alarm_table) select t1,f1 from u1 union select entity_id,forwarded_service from CPU",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","f1","t1"],"values":[["2021-08-16T16:00:00Z","ELB1","vm11"],["2021-08-16T16:00:00Z","ELB1","vm12"],["2021-08-16T16:00:00Z","ELB1","vm13"],["2021-08-16T16:00:00Z","ELB1","vm14"],["2021-08-16T16:00:00Z","ELB1","vm15"],["2021-08-16T16:00:00Z","add1","vm6"],["2021-08-16T16:00:00Z","add2","vm7"],["2021-08-16T16:00:00Z","add2","vm9"],["2021-08-16T16:00:00Z","add3","vm10"],["2021-08-16T16:00:00Z","add3","vm8"],["2021-08-16T16:00:00Z","forward1","vm1"],["2021-08-16T16:00:00Z","forward2","vm2"],["2021-08-16T16:00:00Z","forward3","vm3"],["2021-08-16T16:00:00Z","forward4","vm4"],["2021-08-16T16:00:00Z","forward5","vm5"]]}]}]}`,
+		},
+		{
+			name:    "union distinct CTE",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "with u1 as (select entity_id as t1,forwarded_id as f1 from event_table union distinct select entity_id,additional from alarm_table) select t1,f1 from u1 union distinct select entity_id,forwarded_service from CPU",
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","f1","t1"],"values":[["2021-08-16T16:00:00Z","ELB1","vm11"],["2021-08-16T16:00:00Z","ELB1","vm12"],["2021-08-16T16:00:00Z","ELB1","vm13"],["2021-08-16T16:00:00Z","ELB1","vm14"],["2021-08-16T16:00:00Z","ELB1","vm15"],["2021-08-16T16:00:00Z","add1","vm6"],["2021-08-16T16:00:00Z","add2","vm7"],["2021-08-16T16:00:00Z","add2","vm9"],["2021-08-16T16:00:00Z","add3","vm10"],["2021-08-16T16:00:00Z","add3","vm8"],["2021-08-16T16:00:00Z","forward1","vm1"],["2021-08-16T16:00:00Z","forward2","vm2"],["2021-08-16T16:00:00Z","forward3","vm3"],["2021-08-16T16:00:00Z","forward4","vm4"],["2021-08-16T16:00:00Z","forward5","vm5"]]}]}]}`,
 		},
 	}...)
@@ -12500,7 +12948,6 @@ func TestServer_Union_Table(t *testing.T) {
 		})
 	}
 }
-*/
 
 func TestServer_CTE_Query(t *testing.T) {
 	t.Parallel()
@@ -12644,7 +13091,7 @@ func TestServer_Write_Compatible(t *testing.T) {
 			writes: []string{
 				fmt.Sprintf(`mst,tk1=tv1,tk1=tv2 f1=6 %d`, mustParseTime(time.RFC3339Nano, "2022-06-10T22:05:00Z").UnixNano()),
 			},
-			expectErr: fmt.Errorf("duplicate tag tk1"),
+			expectErr: fmt.Errorf("duplicate tags tk1"),
 		},
 		{
 			name: "time tag",
@@ -12794,6 +13241,60 @@ func TestServer_Field_Not_In_Condition(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}, "chunk_size": []string{"1"}, "inner_chunk_size": []string{"1"}},
 			command: `select sum(*) from mst where f2=3`,
 			exp:     `{"results":[{"statement_id":0}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_AndOrAnd_Condition(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`table1,t1=a,t2=1 value=1,value1=11 1`,
+		`table1,t1=a,t2=2 value=2,value1=22 2`,
+		`table1,t1=b,t2=1 value=3,value1=22 3`,
+		`table1,t1=b,t2=2 value=4,value1=33 4`,
+		`table1,t1=b,t2=3 value=4,value1=33 5`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "select cond1 or cond2 and cond3",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 where t1='a' or value=3 and value1=22",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1","columns":["time","t1","t2","value","value1"],"values":[["1970-01-01T00:00:00.000000001Z","a","1",1,11],["1970-01-01T00:00:00.000000002Z","a","2",2,22],["1970-01-01T00:00:00.000000003Z","b","1",3,22]]}]}]}`,
+		},
+		{
+			name:    "select cond1 and cond2 or cond3 and cond4",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 where t1='b' and t2='2' or value=2 and value1=22",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1","columns":["time","t1","t2","value","value1"],"values":[["1970-01-01T00:00:00.000000002Z","a","2",2,22],["1970-01-01T00:00:00.000000004Z","b","2",4,33]]}]}]}`,
 		},
 	}...)
 
@@ -14160,9 +14661,14 @@ func TestServer_Query_Constant_Column(t *testing.T) {
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1","columns":["time","name","value"],"values":[["2021-08-16T16:00:00Z","table1",1],["2021-08-16T16:00:00Z","table1",2],["2021-08-16T16:00:00Z","table1",4]]}]}]}`,
 		},
 		{
-			name:    "raise err without alias",
+			name:    "query without alias",
 			command: `select 'table1', value from db0.rp0.table1`,
-			exp:     `{"results":[{"statement_id":0,"error":"field must contain at least one variable"}]}`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1","columns":["time","table1","value"],"values":[["2021-08-16T16:00:00Z","table1",1],["2021-08-16T16:00:00Z","table1",2],["2021-08-16T16:00:00Z","table1",4]]}]}]}`,
+		},
+		{
+			name:    "query normal without alias",
+			command: `select value, abs(10) from db0.rp0.table1`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1","columns":["time","value","abs"],"values":[["2021-08-16T16:00:00Z",1,10],["2021-08-16T16:00:00Z",2,10],["2021-08-16T16:00:00Z",4,10]]}]}]}`,
 		},
 		{
 			name:    "no result is returned with alias",
@@ -14170,9 +14676,9 @@ func TestServer_Query_Constant_Column(t *testing.T) {
 			exp:     `{"results":[{"statement_id":0}]}`,
 		},
 		{
-			name:    "err is returned without alias",
+			name:    "no result is returned without alias",
 			command: `select 'table1' from db0.rp0.table1`,
-			exp:     `{"results":[{"statement_id":0,"error":"field must contain at least one variable"}]}`,
+			exp:     `{"results":[{"statement_id":0}]}`,
 		},
 	}...)
 
@@ -14304,6 +14810,76 @@ func TestServer_Query_MultiMeasurementsInDifferentRp(t *testing.T) {
 	}
 }
 
+func TestServer_ADDiffTime_Function(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`CPU,ns=CPU,rgn=675,svc=CDN,pAgentSN=2dd,agentTP=1,agentSN=1dd cpu.total.usage=1,cpu.total.guest=2,cpu.total.user=1,cpu.total.iowait=1 1741243834649000000`,
+		`CPU,ns=CPU,rgn=675,svc=CDN,pAgentSN=2dd,agentTP=2,agentSN=2dd cpu.total.usage=2,cpu.total.guest=2,cpu.total.user=2,cpu.total.iowait=2 1741243834649000000`,
+		`CPU,ns=CPU,rgn=675,svc=CDN,pAgentSN=4dd,agentTP=1,agentSN=3dd cpu.total.usage=3,cpu.total.guest=3,cpu.total.user=3,cpu.total.iowait=3 1741243834649000000`,
+		`CPU,ns=CPU,rgn=675,svc=CDN,pAgentSN=4dd,agentTP=2,agentSN=4dd cpu.total.usage=4,cpu.total.guest=4,cpu.total.user=4,cpu.total.iowait=4 1741243834649000000`,
+		`CPU,ns=CPU,rgn=675,svc=CDN,pAgentSN=2dd,agentTP=1,agentSN=1dd cpu.total.usage=1,cpu.total.guest=4,cpu.total.user=1,cpu.total.iowait=1 1741243894000000000`,
+		`CPU,ns=CPU,rgn=675,svc=CDN,pAgentSN=2dd,agentTP=2,agentSN=2dd cpu.total.usage=2,cpu.total.guest=4,cpu.total.user=2,cpu.total.iowait=2 1741243894000000000`,
+		`CPU,ns=CPU,rgn=675,svc=CDN,pAgentSN=4dd,agentTP=1,agentSN=3dd cpu.total.usage=3,cpu.total.guest=3,cpu.total.user=3,cpu.total.iowait=3 1741243894000000000`,
+		`CPU,ns=CPU,rgn=675,svc=CDN,pAgentSN=4dd,agentTP=2,agentSN=4dd cpu.total.usage=4,cpu.total.guest=4,cpu.total.user=4,cpu.total.iowait=4 1741243894000000000`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "diff time for CPU group by *",
+			command: `select ad_diff_time(cpu.total.usage) from db0.rp0.CPU where time >= 1741243834649000000 and time <= 1741243894000000000 group by *`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU","tags":{"agentSN":"1dd","agentTP":"1","ns":"CPU","pAgentSN":"2dd","rgn":"675","svc":"CDN"},"columns":["time","ad_diff_time"],"values":[["2025-03-06T06:50:34.649Z",0]]},{"name":"CPU","tags":{"agentSN":"2dd","agentTP":"2","ns":"CPU","pAgentSN":"2dd","rgn":"675","svc":"CDN"},"columns":["time","ad_diff_time"],"values":[["2025-03-06T06:50:34.649Z",0]]},{"name":"CPU","tags":{"agentSN":"3dd","agentTP":"1","ns":"CPU","pAgentSN":"4dd","rgn":"675","svc":"CDN"},"columns":["time","ad_diff_time"],"values":[["2025-03-06T06:50:34.649Z",0]]},{"name":"CPU","tags":{"agentSN":"4dd","agentTP":"2","ns":"CPU","pAgentSN":"4dd","rgn":"675","svc":"CDN"},"columns":["time","ad_diff_time"],"values":[["2025-03-06T06:50:34.649Z",0]]}]}]}`,
+		},
+		{
+			name:    "diff time for CPU group by pAgentSN",
+			command: `select ad_diff_time(cpu.total.guest) from db0.rp0.CPU where time >= 1741243834649000000 and time <= 1741243894000000000 group by pAgentSN`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU","tags":{"pAgentSN":"2dd"},"columns":["time","ad_diff_time"],"values":[["2025-03-06T06:50:34.649Z",59351000000]]},{"name":"CPU","tags":{"pAgentSN":"4dd"},"columns":["time","ad_diff_time"],"values":[["2025-03-06T06:50:34.649Z",59351000000]]}]}]}`,
+		},
+		{
+			name:    "diff time for CPU group by pAgentSN, time(10s) fill(none)",
+			command: `select ad_diff_time(cpu.total.usage) from db0.rp0.CPU where time >= 1741243834649000000 and time <= 1741243894000000000 group by pAgentSN, time(1m) fill(null)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU","tags":{"pAgentSN":"2dd"},"columns":["time","ad_diff_time"],"values":[["2025-03-06T06:50:00Z",0],["2025-03-06T06:51:00Z",0]]},{"name":"CPU","tags":{"pAgentSN":"4dd"},"columns":["time","ad_diff_time"],"values":[["2025-03-06T06:50:00Z",0],["2025-03-06T06:51:00Z",0]]}]}]}`,
+		},
+		{
+			name:    "diff time for sum(CPU) group by pAgentSN, time(10s) fill(none)",
+			command: `select ad_diff_time(v) from (select sum(cpu.total.guest) as v from db0.rp0.CPU where time >= 1741243834649000000 and time <= 1741243894000000000 group by pAgentSN, time(1m) fill(null)) group by pAgentSN`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU","tags":{"pAgentSN":"2dd"},"columns":["time","ad_diff_time"],"values":[["2025-03-06T06:50:00Z",60000000000]]},{"name":"CPU","tags":{"pAgentSN":"4dd"},"columns":["time","ad_diff_time"],"values":[["2025-03-06T06:50:00Z",0]]}]}]}`,
+		},
+		{
+			name:    "select max subquery from diff time for CPU group by *",
+			command: `select max(diff) from (select ad_diff_time(cpu.total.guest) as diff from db0.rp0.CPU where time >= 1741243834649000000 and time <= 1741243894000000000 group by *)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU","columns":["time","max"],"values":[["2025-03-06T06:50:34.649Z",59351000000]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 func TestServer_Union_Distinct_Push_Down_Rule(t *testing.T) {
 	s := OpenServer(NewParseConfig(testCfgPath))
 	defer s.Close()
@@ -14394,6 +14970,383 @@ func TestServer_Union_Distinct_Push_Down_Rule(t *testing.T) {
 			}
 			if query.skip {
 				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Incondition_Tag(t *testing.T) {
+	t.Parallel()
+	s := OpenDefaultServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	writes := []string{
+		`alarm_table,instance_id=Nginx-ingress1,instance_name=b4,region_id=c3,service=d3,alarm_level=Critical additional=4,alarm_description="fsd",uid="Service4" 1629129603000000000`,
+		`alarm_table,instance_id=Service1,instance_name=b5,region_id=c3,service=d4,alarm_level=Warning additional=5,alarm_description="zz",uid="Service4" 1629129604000000000`,
+		`alarm_table,instance_id=Service2,instance_name=b6,region_id=c3,service=d4,level=P3 additional=6,alarm_description="golang",uid="Service4" 1629129604000000000`,
+		`alarm_table,instance_id=ELB,instance_name=b3,region_id=c2,service=d2,alarm_level=Critical additional=7,alarm_description="ffe3",uid="Service4" 1629129605000000000`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "in subquery",
+			command: `SELECT * FROM (SELECT * FROM (SELECT * FROM db0.rp0.alarm_table WHERE region_id IN (SELECT region_id FROM db0.rp0.alarm_table WHERE service = 'd3' )))`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"alarm_table","columns":["time","additional","alarm_description","alarm_level","instance_id","instance_name","level","region_id","service","uid"],"values":[["2021-08-16T16:00:03Z",4,"fsd","Critical","Nginx-ingress1","b4",null,"c3","d3","Service4"],["2021-08-16T16:00:04Z",5,"zz","Warning","Service1","b5",null,"c3","d4","Service4"],["2021-08-16T16:00:04Z",6,"golang",null,"Service2","b6","P3","c3","d4","Service4"]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Ms_Get_Node_Id(t *testing.T) {
+	s := OpenDefaultServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	writes := []string{
+		`mst,tag1=1 f1="Service1",f2=1 1629129600000000000`,
+		`mst,tag1=1 f1="Service1",f2=100 1629129601000000000`,
+		`mst,tag1=1 f1="errval",f2=120 1629129602000000000`,
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "ms_get_node_id",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `with topo as (match path = (startNode{uid:'ELB'})-[edges*..3]-() return path), uid_table as (select uid from ms_get_node_id(topo)) select f2 from mst where f1 in (select uid from uid_table)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","f2"],"values":[["2021-08-16T16:00:00Z",1],["2021-08-16T16:00:01Z",100]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_UDF_AD_Diff_Abs(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`mst,agent=A,ns=m1 metric_v=10,metric_v1=15.0 1740963600000000000`,
+		`mst,agent=A,ns=m1 metric_v=10,metric_v1=15.0 1740963660000000000`,
+		`mst,agent=A,ns=m1 metric_v=40,metric_v1=25 1740963720000000000`,
+		`mst,agent=A,ns=m1 metric_v=40,metric_v1=25 1740963780000000000`,
+		`mst,agent=A,ns=m2 metric_v=20,metric_v1=10 1740963840000000000`,
+		`mst,agent=A,ns=m2 metric_v=20,metric_v1=15.5 1740963900000000000`,
+		`mst,agent=A,ns=m2 metric_v=30,metric_v1=16.5 1740963960000000000`,
+		`mst,agent=A,ns=m2 metric_v=50,metric_v1=22.2 1740964020000000000`,
+		`mst,agent=A,ns=m2 metric_v=50,metric_v1=28.9 1740964080000000000`,
+		`mst,agent=B,ns=m1 metric_v=25,metric_v1=5 1740964140000000000`,
+		`mst,agent=B,ns=m1 metric_v=35,metric_v1=11.6 1740964200000000000`,
+		`mst,agent=B,ns=m1 metric_v=45,metric_v1=12.8 1740964260000000000`,
+		`mst,agent=B,ns=m1 metric_v=55,metric_v1=24.3 1740964320000000000`,
+		`mst,agent=B,ns=m1 metric_v=65,metric_v1=25.6 1740964380000000000`,
+		`mst,agent=B,ns=m1 metric_v=75,metric_v1=30.8 1740964440000000000`,
+		`mst,agent=B,ns=m2 metric_v=10 1740964500000000000`,
+		`mst,agent=B,ns=m2 metric_v2="a" 1740964560000000000`,
+		`mst,agent=B,ns=m2 metric_v=30 1740964620000000000`,
+		`mst,agent=B,ns=m2 metric_v2="b" 1740964680000000000`,
+		`mst,agent=A,ns=m3 metric_v=20,metric_v1=10 1740964800000000000`,
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "ad_diff_abs string",
+			command: `SELECT ad_diff_abs(metric_v2) FROM db0.rp0.mst`,
+			exp:     `{"results":[{"statement_id":0,"error":"unsupported (ad_diff_abs) iterator type: (string)"}]}`,
+		},
+		{
+			name:    "ad_diff_abs null",
+			command: `SELECT ad_diff_abs(metric_v3) FROM db0.rp0.mst`,
+			exp:     `{"results":[{"statement_id":0}]}`,
+		},
+		{
+			name:    "ad_diff_abs with null row",
+			command: `SELECT ad_diff_abs(metric_v) FROM db0.rp0.mst where agent='B' and ns='m2'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","ad_diff_abs"],"values":[["2025-03-03T01:15:00Z",20]]}]}]}`,
+		},
+		{
+			name:    "ad_diff_abs int",
+			command: `SELECT ad_diff_abs(metric_v) FROM db0.rp0.mst group by agent,ns`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"agent":"A","ns":"m1"},"columns":["time","ad_diff_abs"],"values":[["2025-03-03T01:00:00Z",30]]},{"name":"mst","tags":{"agent":"A","ns":"m2"},"columns":["time","ad_diff_abs"],"values":[["2025-03-03T01:04:00Z",30]]},{"name":"mst","tags":{"agent":"A","ns":"m3"},"columns":["time","ad_diff_abs"],"values":[["2025-03-03T01:20:00Z",0]]},{"name":"mst","tags":{"agent":"B","ns":"m1"},"columns":["time","ad_diff_abs"],"values":[["2025-03-03T01:09:00Z",30]]},{"name":"mst","tags":{"agent":"B","ns":"m2"},"columns":["time","ad_diff_abs"],"values":[["2025-03-03T01:15:00Z",20]]}]}]}`,
+		},
+		{
+			name:    "ad_diff_abs float",
+			command: `SELECT ad_diff_abs(metric_v1) FROM db0.rp0.mst group by agent,ns`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"agent":"A","ns":"m1"},"columns":["time","ad_diff_abs"],"values":[["2025-03-03T01:00:00Z",10]]},{"name":"mst","tags":{"agent":"A","ns":"m2"},"columns":["time","ad_diff_abs"],"values":[["2025-03-03T01:04:00Z",12.8]]},{"name":"mst","tags":{"agent":"A","ns":"m3"},"columns":["time","ad_diff_abs"],"values":[["2025-03-03T01:20:00Z",0]]},{"name":"mst","tags":{"agent":"B","ns":"m1"},"columns":["time","ad_diff_abs"],"values":[["2025-03-03T01:09:00Z",15.4]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_UDF_AD_Slope_Score(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`mst,agent=A,ns=m1 metric_v=10,metric_v1=15.0 1740963600000000000`,
+		`mst,agent=A,ns=m1 metric_v=10,metric_v1=15.0 1740963660000000000`,
+		`mst,agent=A,ns=m1 metric_v=40,metric_v1=25 1740963720000000000`,
+		`mst,agent=A,ns=m1 metric_v=40,metric_v1=25 1740963780000000000`,
+		`mst,agent=A,ns=m2 metric_v=20,metric_v1=10 1740963840000000000`,
+		`mst,agent=A,ns=m2 metric_v=20,metric_v1=15.5 1740963900000000000`,
+		`mst,agent=A,ns=m2 metric_v=30,metric_v1=16.5 1740963960000000000`,
+		`mst,agent=A,ns=m2 metric_v=50,metric_v1=22.2 1740964020000000000`,
+		`mst,agent=A,ns=m2 metric_v=50,metric_v1=28.9 1740964080000000000`,
+		`mst,agent=B,ns=m1 metric_v=25,metric_v1=5 1740964140000000000`,
+		`mst,agent=B,ns=m1 metric_v=35,metric_v1=11.6 1740964200000000000`,
+		`mst,agent=B,ns=m1 metric_v=45,metric_v1=12.8 1740964260000000000`,
+		`mst,agent=B,ns=m1 metric_v=55,metric_v1=24.3 1740964320000000000`,
+		`mst,agent=B,ns=m1 metric_v=65,metric_v1=25.6 1740964380000000000`,
+		`mst,agent=B,ns=m1 metric_v=75,metric_v1=30.8 1740964440000000000`,
+		`mst,agent=B,ns=m2 metric_v=10 1740964500000000000`,
+		`mst,agent=B,ns=m2 metric_v2="a" 1740964560000000000`,
+		`mst,agent=B,ns=m2 metric_v=30 1740964620000000000`,
+		`mst,agent=B,ns=m2 metric_v2="b" 1740964680000000000`,
+		`mst,agent=A,ns=m3 metric_v=20,metric_v1=10 1740964800000000000`,
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "ad_slope_score string",
+			command: `SELECT ad_slope_score(metric_v2) FROM db0.rp0.mst`,
+			exp:     `{"results":[{"statement_id":0,"error":"unsupported (ad_slope_score) iterator type: (string)"}]}`,
+		},
+		{
+			name:    "ad_slope_score null",
+			command: `SELECT ad_slope_score(metric_v3) FROM db0.rp0.mst`,
+			exp:     `{"results":[{"statement_id":0}]}`,
+		},
+		{
+			name:    "ad_slope_score with null row",
+			command: `SELECT ad_slope_score(metric_v) FROM db0.rp0.mst where agent='B' and ns='m2'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","ad_slope_score"],"values":[["2025-03-03T01:15:00Z",2.2]]}]}]}`,
+		},
+		{
+			name:    "ad_slope_score int",
+			command: `SELECT ad_slope_score(metric_v) FROM db0.rp0.mst group by agent,ns`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"agent":"A","ns":"m1"},"columns":["time","ad_slope_score"],"values":[["2025-03-03T01:00:00Z",2.2]]},{"name":"mst","tags":{"agent":"A","ns":"m2"},"columns":["time","ad_slope_score"],"values":[["2025-03-03T01:04:00Z",2.2]]},{"name":"mst","tags":{"agent":"A","ns":"m3"},"columns":["time","ad_slope_score"],"values":[["2025-03-03T01:20:00Z",0]]},{"name":"mst","tags":{"agent":"B","ns":"m1"},"columns":["time","ad_slope_score"],"values":[["2025-03-03T01:09:00Z",2.2]]},{"name":"mst","tags":{"agent":"B","ns":"m2"},"columns":["time","ad_slope_score"],"values":[["2025-03-03T01:15:00Z",2.2]]}]}]}`,
+		},
+		{
+			name:    "ad_slope_score float",
+			command: `SELECT ad_slope_score(metric_v1) FROM db0.rp0.mst group by agent,ns`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"agent":"A","ns":"m1"},"columns":["time","ad_slope_score"],"values":[["2025-03-03T01:00:00Z",2.2]]},{"name":"mst","tags":{"agent":"A","ns":"m2"},"columns":["time","ad_slope_score"],"values":[["2025-03-03T01:04:00Z",2.2]]},{"name":"mst","tags":{"agent":"A","ns":"m3"},"columns":["time","ad_slope_score"],"values":[["2025-03-03T01:20:00Z",0]]},{"name":"mst","tags":{"agent":"B","ns":"m1"},"columns":["time","ad_slope_score"],"values":[["2025-03-03T01:09:00Z",2.2]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_NoField_With_TablePrefix(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`sdinano_cpu,tid=1 sdinano_cpu.total.usage=12 1740963600000000000`,
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "no field that contains the table prefix",
+			command: `SELECT "sdinano_cpu.total.usage:string","sdinano_cpu.total.usage" FROM db0.rp0."sdinano_cpu"`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"sdinano_cpu","columns":["time","sdinano_cpu.total.usage:string","sdinano_cpu.total.usage"],"values":[["2025-03-03T01:00:00Z",null,12]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_TopBottom_BugFix(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`cpu,hostname=host_4187 usage_user=30 1762012800000000000`,
+		`cpu,hostname=host_4187 usage_user=20 1762012900000000000`,
+		`cpu,hostname=host_4187 usage_user=10 1762013000000000000`,
+		`cpu,hostname=host_4188 usage_user=30 1762012800000000000`,
+		`cpu,hostname=host_4188 usage_user=20 1762012900000000000`,
+		`cpu,hostname=host_4188 usage_user=10 1762013000000000000`,
+		`cpu,hostname=host_4189 usage_user=30 1762012800000000000`,
+		`cpu,hostname=host_4189 usage_user=20 1762012900000000000`,
+		`cpu,hostname=host_4189 usage_user=10 1762013000000000000`,
+		`cpu,hostname=host_4187 usage_user=30 1762012800000000000`,
+		`cpu,hostname=host_4187 usage_user=20 1762012900000000000`,
+		`cpu,hostname=host_4187 usage_user=10 1762013000000000000`,
+		`cpu,hostname=host_4188 usage_user=30 1762012800000000000`,
+		`cpu,hostname=host_4188 usage_user=20 1762012900000000000`,
+		`cpu,hostname=host_4188 usage_user=10 1762013000000000000`,
+		`cpu,hostname=host_4189 usage_user=30 1762012800000000000`,
+		`cpu,hostname=host_4189 usage_user=20 1762012900000000000`,
+		`cpu,hostname=host_4189 usage_user=10 1762013000000000000`,
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	// #BUG2025122557738
+	test.addQueries([]*Query{
+		{
+			name:    "select top, aux with double group by",
+			params:  url.Values{"inner_chunk_size": []string{"3"}},
+			command: `select top(value, 2), hostname from (select sum(usage_user) as value from db0.rp0.cpu where time >= 1762012800000000000 and time <= 1762013000000000000 group by time(10s),hostname fill(none))`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","top","hostname"],"values":[["2025-11-01T16:00:00Z",30,"host_4188"],["2025-11-01T16:00:00Z",30,"host_4187"]]}]}]}`,
+		},
+		{
+			name:    "select top, aux with group by tag",
+			params:  url.Values{"inner_chunk_size": []string{"3"}},
+			command: `select top(value, 2), hostname from (select sum(usage_user) as value from db0.rp0.cpu where time >= 1762012800000000000 and time <= 1762013000000000000 group by hostname fill(none))`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","top","hostname"],"values":[["2025-11-01T16:00:00Z",60,"host_4187"],["2025-11-01T16:00:00Z",60,"host_4188"]]}]}]}`,
+		},
+		{
+			name:    "select top, aux with group by time",
+			params:  url.Values{"inner_chunk_size": []string{"3"}},
+			command: `select top(value, 2), hostname from (select sum(usage_user) as value from db0.rp0.cpu where time >= 1762012800000000000 and time <= 1762013000000000000 group by time(10s) fill(none))`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","top","hostname"],"values":[["2025-11-01T16:00:00Z",90,null],["2025-11-01T16:01:40Z",60,null]]}]}]}`,
+		},
+
+		{
+			name:    "select bottom, aux with double group by",
+			params:  url.Values{"inner_chunk_size": []string{"3"}},
+			command: `select bottom(value, 2), hostname from (select sum(usage_user) as value from db0.rp0.cpu where time >= 1762012800000000000 and time <= 1762013000000000000 group by time(10s),hostname fill(none))`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","bottom","hostname"],"values":[["2025-11-01T16:03:20Z",10,"host_4188"],["2025-11-01T16:03:20Z",10,"host_4187"]]}]}]}`,
+		},
+		{
+			name:    "select bottom, aux with group by tag",
+			params:  url.Values{"inner_chunk_size": []string{"3"}},
+			command: `select bottom(value, 2), hostname from (select sum(usage_user) as value from db0.rp0.cpu where time >= 1762012800000000000 and time <= 1762013000000000000 group by hostname fill(none))`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","bottom","hostname"],"values":[["2025-11-01T16:00:00Z",60,"host_4187"],["2025-11-01T16:00:00Z",60,"host_4188"]]}]}]}`,
+		},
+		{
+			name:    "select bottom, aux with group by time",
+			params:  url.Values{"inner_chunk_size": []string{"3"}},
+			command: `select bottom(value, 2), hostname from (select sum(usage_user) as value from db0.rp0.cpu where time >= 1762012800000000000 and time <= 1762013000000000000 group by time(10s) fill(none))`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","bottom","hostname"],"values":[["2025-11-01T16:01:40Z",60,null],["2025-11-01T16:03:20Z",30,null]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
 			}
 			if err := query.Execute(s); err != nil {
 				t.Error(query.Error(err))

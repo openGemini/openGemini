@@ -531,3 +531,592 @@ func TestServer_Select_PKkey(t *testing.T) {
 		})
 	}
 }
+
+func TestServer_SelectDistinct_ForCol(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db1", NewRetentionPolicySpec("rp1", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.CreateMeasurement("CREATE measurement db1.rp1.mst (country tag, name1 tag, age int64, height float64, address string, alive bool) WITH ENGINETYPE = columnstore PRIMARYKEY country, name1"); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`mst,country=china,name1=azhu age=12i,height=70,address="shenzhen",alive=TRUE %d`, 1629129600000000000),
+		fmt.Sprintf(`mst,country=china,name1=azhu age=12i,height=70,address="shenzhen",alive=TRUE %d`, 1629129601000000000),
+		fmt.Sprintf(`mst,country=american,name1=alan age=20i,height=80,address="shanghai",alive=FALSE %d`, 1629129602000000000),
+		fmt.Sprintf(`mst,country=germany,name1=alang age=3i,height=90,address="beijin",alive=TRUE %d`, 1629129603000000000),
+		fmt.Sprintf(`mst,country=japan,name1=ahui age=30i,height=121,address="guangzhou",alive=FALSE %d`, 1629129604000000000),
+		fmt.Sprintf(`mst,country=canada,name1=aqiu age=35i,height=138,address="chengdu",alive=TRUE %d`, 1629129605000000000),
+		fmt.Sprintf(`mst,country=china,name1=agang age=48i,height=149,address="wuhan",alive=TRUE %d`, 1629129606000000000),
+	}
+
+	test := NewTest("db1", "rp1")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "select distinct single column",
+			params:  url.Values{"db": []string{"db1"}},
+			command: `SELECT DISTINCT country FROM mst order by time`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","country"],"values":[["2021-08-16T16:00:00Z","china"],["2021-08-16T16:00:02Z","american"],["2021-08-16T16:00:03Z","germany"],["2021-08-16T16:00:04Z","japan"],["2021-08-16T16:00:05Z","canada"]]}]}]}`,
+		},
+		{
+			name:    "select distinct multiple columns",
+			params:  url.Values{"db": []string{"db1"}},
+			command: `SELECT DISTINCT country, name1 FROM mst order by time`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","country","name1"],"values":[["2021-08-16T16:00:00Z","china","azhu"],["2021-08-16T16:00:02Z","american","alan"],["2021-08-16T16:00:03Z","germany","alang"],["2021-08-16T16:00:04Z","japan","ahui"],["2021-08-16T16:00:05Z","canada","aqiu"],["2021-08-16T16:00:06Z","china","agang"]]}]}]}`,
+		},
+		{
+			name:    "select distinct on single column",
+			params:  url.Values{"db": []string{"db1"}},
+			command: `SELECT DISTINCT ON (country) country, name1 FROM mst order by time`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","country","name1"],"values":[["2021-08-16T16:00:00Z","china","azhu"],["2021-08-16T16:00:02Z","american","alan"],["2021-08-16T16:00:03Z","germany","alang"],["2021-08-16T16:00:04Z","japan","ahui"],["2021-08-16T16:00:05Z","canada","aqiu"]]}]}]}`,
+		},
+		{
+			name:    "select distinct on multiple columns",
+			params:  url.Values{"db": []string{"db1"}},
+			command: `SELECT DISTINCT ON (country) country, name1 FROM mst order by name1,time desc`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","country","name1"],"values":[["2021-08-16T16:00:06Z","china","agang"],["2021-08-16T16:00:04Z","japan","ahui"],["2021-08-16T16:00:02Z","american","alan"],["2021-08-16T16:00:03Z","germany","alang"],["2021-08-16T16:00:05Z","canada","aqiu"]]}]}]}`,
+		},
+		{
+			name:    "select distinct on single column with order by",
+			params:  url.Values{"db": []string{"db1"}},
+			command: `SELECT DISTINCT ON (country, name1) country, name1 FROM mst ORDER BY country,name1,time `,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","country","name1"],"values":[["2021-08-16T16:00:02Z","american","alan"],["2021-08-16T16:00:05Z","canada","aqiu"],["2021-08-16T16:00:06Z","china","agang"],["2021-08-16T16:00:00Z","china","azhu"],["2021-08-16T16:00:03Z","germany","alang"],["2021-08-16T16:00:04Z","japan","ahui"]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+				time.Sleep(3 * time.Second)
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !CompareSortedResults(query.exp, query.act) {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Select_SubQuery_ForCol(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateMeasurement("CREATE measurement db0.rp0.mst (country tag, age int64,  height float64,  address string, alive bool) WITH  ENGINETYPE = columnstore  PRIMARYKEY country"); err != nil {
+		t.Fatal(err)
+	}
+	writes := []string{
+		fmt.Sprintf(`mst,country=china age=12i,height=70,address="shenzhen",alive=TRUE %d`, 1629129600000000000),
+		fmt.Sprintf(`mst,country=china age=20i,height=80,address="shanghai",alive=FALSE %d`, 1629129601000000000),
+		fmt.Sprintf(`mst,country=canada age=3i,height=90,address="beijin",alive=TRUE %d`, 1629129602000000000),
+		fmt.Sprintf(`mst,country=japan age=30i,height=121,address="guangzhou",alive=FALSE %d`, 1629129603000000000),
+		fmt.Sprintf(`mst,country=canada age=35i,height=138,address="chengdu",alive=TRUE %d`, 1629129604000000000),
+		fmt.Sprintf(`mst,country=japan age=48i,height=149,address="wuhan",alive=TRUE %d`, 1629129605000000000),
+		fmt.Sprintf(`mst,country=canada age=35i,height=138,address="chengdu",alive=TRUE %d`, 1629129606000000000),
+		fmt.Sprintf(`mst,country=japan age=32i,height=122,address="wuhan",alive=TRUE %d`, 1629129607000000000),
+		fmt.Sprintf(`mst,country=china age=40i,height=111,address="wuhan",alive=TRUE %d`, 1629129608000000000),
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "select and subquery with order by",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT * from (select country,age from mst where time>1629129602000000000 order by time)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","age","country"],"values":[["2021-08-16T16:00:03Z",30,"japan"],["2021-08-16T16:00:04Z",35,"canada"],["2021-08-16T16:00:05Z",48,"japan"],["2021-08-16T16:00:06Z",35,"canada"],["2021-08-16T16:00:07Z",32,"japan"],["2021-08-16T16:00:08Z",40,"china"]]}]}]}`,
+		},
+		{
+			name:    "select with order by and subquery",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT h1 from (select height as h1 from mst where country='china') order by time`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","h1"],"values":[["2021-08-16T16:00:00Z",70],["2021-08-16T16:00:01Z",80],["2021-08-16T16:00:08Z",111]]}]}]}`,
+		},
+		{
+			name:    "select with order by and subquery with order by",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT country,height from (select * from mst where alive=false order by time desc) order by country`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","country","height"],"values":[["2021-08-16T16:00:01Z","china",80],["2021-08-16T16:00:03Z","japan",121]]}]}]}`,
+		},
+		{
+			name:    "select bottom with order by(group) and subquery with order by",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT bottom(height,2) from (select * from mst where alive=true order by time) group by country order by country,time`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"country":"canada"},"columns":["time","bottom"],"values":[["2021-08-16T16:00:02Z",90],["2021-08-16T16:00:06Z",138]]},{"name":"mst","tags":{"country":"china"},"columns":["time","bottom"],"values":[["2021-08-16T16:00:00Z",70],["2021-08-16T16:00:08Z",111]]},{"name":"mst","tags":{"country":"japan"},"columns":["time","bottom"],"values":[["2021-08-16T16:00:05Z",149],["2021-08-16T16:00:07Z",122]]}]}]}`,
+		},
+		{
+			name:    "select bottom with order by and subquery with order by",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT bottom(height,2) from (select * from mst where age>30 order by time) group by country order by time`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"country":"canada"},"columns":["time","bottom"],"values":[["2021-08-16T16:00:04Z",138]]},{"name":"mst","tags":{"country":"japan"},"columns":["time","bottom"],"values":[["2021-08-16T16:00:05Z",149]]},{"name":"mst","tags":{"country":"canada"},"columns":["time","bottom"],"values":[["2021-08-16T16:00:06Z",138]]},{"name":"mst","tags":{"country":"japan"},"columns":["time","bottom"],"values":[["2021-08-16T16:00:07Z",122]]},{"name":"mst","tags":{"country":"china"},"columns":["time","bottom"],"values":[["2021-08-16T16:00:08Z",111]]}]}]}`,
+		},
+		{
+			name:    "select last group by time with subquery",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT last(height) from (select * from mst where age<40 order by time) where time>='2021-08-16T16:00:00Z' and time<='2021-08-16T16:00:08Z' group by time(2s)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","last"],"values":[["2021-08-16T16:00:00Z",80],["2021-08-16T16:00:02Z",121],["2021-08-16T16:00:04Z",138],["2021-08-16T16:00:06Z",122],["2021-08-16T16:00:08Z",null]]}]}]}`,
+		},
+		{
+			name:    "select last group by time with subquery and fill",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT first(age) from (select * from mst where height>80 order by time) where time>='2021-08-16T16:00:02Z' and time<'2021-08-16T16:00:12Z' group by time(3s) fill(2)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","first"],"values":[["2021-08-16T16:00:00Z",3],["2021-08-16T16:00:03Z",30],["2021-08-16T16:00:06Z",35],["2021-08-16T16:00:09Z",2]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+				time.Sleep(3 * time.Second)
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !CompareSortedResults(query.exp, query.act) {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_ValidFields_ForCol(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.CreateMeasurement("CREATE measurement db0.rp0.cpu (region tag, az tag, v1 int64, v2 float64, v3 bool, v4 string) WITH ENGINETYPE = columnstore SHARDKEY az,region PRIMARYKEY az,region,time"); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`cpu,region=region_0,az=az_0 v1=1i,v2=1.1,v3=true,v4="test0" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu,region=region_0,az=az_1 v1=2i,v2=2.2,v3=false,v4="test1" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu,region=region_1,az=az_0 v1=3i,v2=3.3,v3=true,v4="test2" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu,region=region_1,az=az_1 v1=4i,v2=4.4,v3=false,v4="test3" %d`, 1629129600000000000),
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "validate select *",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT * FROM cpu order by v1`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","az","region","v1","v2","v3","v4"],"values":[["2021-08-16T16:00:00Z","az_0","region_0",1,1.1,true,"test0"],["2021-08-16T16:00:00Z","az_1","region_0",2,2.2,false,"test1"],["2021-08-16T16:00:00Z","az_0","region_1",3,3.3,true,"test2"],["2021-08-16T16:00:00Z","az_1","region_1",4,4.4,false,"test3"]]}]}]}`,
+		},
+		{
+			name:    "validate field,count(field)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT v1, count(v2) FROM cpu`,
+			exp:     `{"results":[{"statement_id":0,"error":"mixing aggregate and non-aggregate queries is not supported"}]}`,
+		},
+		{
+			name:    "validate field,first(field)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT v1, first(v2) FROM cpu`,
+			exp:     `{"results":[{"statement_id":0,"error":"mixing column and first(column) queries for column store engine is not supported"}]}`,
+		},
+		{
+			name:    "validate field,last(field)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT v1, last(v2) FROM cpu`,
+			exp:     `{"results":[{"statement_id":0,"error":"mixing column and last(column) queries for column store engine is not supported"}]}`,
+		},
+		{
+			name:    "validate field,max(field)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT v1, max(v2) FROM cpu`,
+			exp:     `{"results":[{"statement_id":0,"error":"mixing column and max(column) queries for column store engine is not supported"}]}`,
+		},
+		{
+			name:    "validate field,min(field)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT v1, min(v2) FROM cpu`,
+			exp:     `{"results":[{"statement_id":0,"error":"mixing column and min(column) queries for column store engine is not supported"}]}`,
+		},
+		{
+			name:    "validate field,percentile(field)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT v1, percentile(v2,10) FROM cpu`,
+			exp:     `{"results":[{"statement_id":0,"error":"mixing column and percentile(column) queries for column store engine is not supported"}]}`,
+		},
+		{
+			name:    "validate field,top(field)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT v1,top(v2,1) FROM cpu`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","v1","top"],"values":[["2021-08-16T16:00:00Z",4,4.4]]}]}]}`,
+		},
+		{
+			name:    "validate field,bottom(field)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT v1,bottom(v2,1) FROM cpu`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","v1","bottom"],"values":[["2021-08-16T16:00:00Z",1,1.1]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+				time.Sleep(3 * time.Second)
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !CompareSortedResults(query.exp, query.act) {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Select_OptimizeCount(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateMeasurement("CREATE measurement db0.rp0.m1(t1 tag,t2 tag,f1 int64,f2 float64, f3 string) with enginetype=columnstore SHARDKEY t1,t2 primarykey t1,t2"); err != nil {
+		t.Fatal(err)
+	}
+	writes := []string{
+		fmt.Sprintf(`m1,t1=a,t2=1 f1=6i,f2=1,f3="v5" %d`, 1629129600000000000),
+		fmt.Sprintf(`m1,t1=a,t2=1 f1=3i,f2=2,f3="v4" %d`, 1629129601000000000),
+		fmt.Sprintf(`m1,t1=b,t2=1 f1=5i,f2=3,f3="v4" %d`, 1629129602000000000),
+		fmt.Sprintf(`m1,t1=b,t2=2 f1=2i,f2=4,f3="v3" %d`, 1629129603000000000),
+		fmt.Sprintf(`m1,t1=b,t2=2 f1=4i,f2=5,f3="v2" %d`, 1629129604000000000),
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "select count(time) with optimization",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT count(time) from m1`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"m1","columns":["time","count"],"values":[["1970-01-01T00:00:00Z",5]]}]}]}`,
+		},
+		{
+			name:    "select count(time) with condition",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT count(time) from m1 where f2<3`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"m1","columns":["time","count"],"values":[["1970-01-01T00:00:00Z",2]]}]}]}`,
+		},
+		{
+			name:    "select count(time) with time range",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT count(time) from m1 where time>1629129601000000000 and time<=1629129604000000000`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"m1","columns":["time","count"],"values":[["2021-08-16T16:00:01.000000001Z",3]]}]}]}`,
+		},
+		{
+			name:    "select count(field)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT count(f1) from m1`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"m1","columns":["time","count"],"values":[["1970-01-01T00:00:00Z",5]]}]}]}`,
+		},
+		{
+			name:    "select count(*)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT count(*) from m1`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"m1","columns":["time","count_f1","count_f2","count_f3"],"values":[["1970-01-01T00:00:00Z",5,5,5]]}]}]}`,
+		},
+		{
+			name:    "select count(field) with subquery",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT count(f1) from (select * from m1 where time>=1629129603000000000)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"m1","columns":["time","count"],"values":[["2021-08-16T16:00:03Z",2]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+				time.Sleep(3 * time.Second)
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !CompareSortedResults(query.exp, query.act) {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Multi_Mst_Query(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.CreateMeasurement("CREATE measurement db0.rp0.cpu1 (region tag, az tag, v1 int64, v2 float64, v3 bool, v4 string) WITH ENGINETYPE = columnstore SHARDKEY az,region PRIMARYKEY az,region,time"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.CreateMeasurement("CREATE measurement db0.rp0.cpu2 (region tag, az tag, v1 int64, v2 float64, v3 bool, v4 string) WITH ENGINETYPE = columnstore SHARDKEY az,region PRIMARYKEY az,region,time"); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`cpu1,region=region_0,az=az_0 v1=1i,v2=1.1,v3=true,v4="test0" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu1,region=region_0,az=az_1 v1=2i,v2=2.2,v3=false,v4="test1" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu1,region=region_1,az=az_0 v1=3i,v2=3.3,v3=true,v4="test2" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu1,region=region_1,az=az_1 v1=4i,v2=4.4,v3=false,v4="test3" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu2,region=region_0,az=az_0 v1=1i,v2=1.1,v3=true,v4="test0" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu2,region=region_0,az=az_1 v1=2i,v2=2.2,v3=false,v4="test1" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu2,region=region_1,az=az_0 v1=3i,v2=3.3,v3=true,v4="test2" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu2,region=region_1,az=az_1 v1=4i,v2=4.4,v3=false,v4="test3" %d`, 1629129600000000000),
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "multi mst query",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT * FROM cpu1, cpu2 group by region`,
+			exp:     `{"results":[{"statement_id":0,"error":"column store does not currently support the multi-measurement query"}]}`,
+		},
+		{
+			name:    "multi subquery",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT * FROM (select * from cpu1), (select * from cpu2)`,
+			exp:     `{"results":[{"statement_id":0,"error":"column store does not currently support the multi-measurement query"}]}`,
+		},
+		{
+			name:    "union query",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select * from cpu1 union all select * from cpu2`,
+			exp:     `{"results":[{"statement_id":0,"error":"column store does not currently support the multi-measurement query"}]}`,
+		},
+		{
+			name:    "union query",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select max(*) from cpu1 group by region union all select max(*) from cpu2 group by region`,
+			exp:     `{"results":[{"statement_id":0,"error":"column store does not currently support the multi-measurement query"}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+				time.Sleep(3 * time.Second)
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !CompareSortedResults(query.exp, query.act) {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Support_Sparse_And_Cluster_Primary_Index(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	// By default, the clustered index is the primary key index.
+	if err := s.CreateMeasurement("CREATE measurement db0.rp0.cpu1 (region tag, az tag, v1 int64, v2 float64, v3 bool, v4 string) WITH ENGINETYPE = columnstore SHARDKEY az,region PRIMARYKEY az,region,time PROPERTY primaryKeyType=\"cluster\""); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.CreateMeasurement("CREATE measurement db0.rp0.cpu2 (region tag, az tag, v1 int64, v2 float64, v3 bool, v4 string) WITH ENGINETYPE = columnstore SHARDKEY az,region PRIMARYKEY az,region,time PROPERTY primaryKeyType=\"sparse\""); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`cpu1,region=region_0,az=az_0 v1=1i,v2=1.1,v3=true,v4="test0" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu1,region=region_0,az=az_1 v1=2i,v2=2.2,v3=false,v4="test1" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu1,region=region_1,az=az_0 v1=3i,v2=3.3,v3=true,v4="test2" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu1,region=region_1,az=az_1 v1=4i,v2=4.4,v3=false,v4="test3" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu2,region=region_0,az=az_0 v1=1i,v2=1.1,v3=true,v4="test0" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu2,region=region_0,az=az_1 v1=2i,v2=2.2,v3=false,v4="test1" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu2,region=region_1,az=az_0 v1=3i,v2=3.3,v3=true,v4="test2" %d`, 1629129600000000000),
+		fmt.Sprintf(`cpu2,region=region_1,az=az_1 v1=4i,v2=4.4,v3=false,v4="test3" %d`, 1629129600000000000),
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "sparse index: point query",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT * FROM db0.rp0.cpu1 where region = 'region_0' order by v4 desc`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu1","columns":["time","az","region","v1","v2","v3","v4"],"values":[["2021-08-16T16:00:00Z","az_1","region_0",2,2.2,false,"test1"],["2021-08-16T16:00:00Z","az_0","region_0",1,1.1,true,"test0"]]}]}]}`,
+		},
+		{
+			name:    "sparse index: agg query",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT count(*) FROM db0.rp0.cpu1 where region = 'region_0'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu1","columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",2,2,2,2]]}]}]}`,
+		},
+		{
+			name:    "cluster index: point query",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT * FROM db0.rp0.cpu2 where region = 'region_0'order by v4 desc `,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu2","columns":["time","az","region","v1","v2","v3","v4"],"values":[["2021-08-16T16:00:00Z","az_1","region_0",2,2.2,false,"test1"],["2021-08-16T16:00:00Z","az_0","region_0",1,1.1,true,"test0"]]}]}]}`,
+		},
+		{
+			name:    "cluster index: agg query",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT count(*) FROM db0.rp0.cpu2 where region = 'region_0'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu2","columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",2,2,2,2]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+				time.Sleep(3 * time.Second)
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !CompareSortedResults(query.exp, query.act) {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_TimeRange_Filter(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	// By default, the clustered index is the primary key index.
+	if err := s.CreateMeasurement("CREATE measurement db0.rp0.cpu1 (region tag, az tag, v1 int64, v2 float64, v3 bool, v4 string) WITH ENGINETYPE = columnstore SHARDKEY az,region PRIMARYKEY az,region"); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`cpu1,region=region_0,az=az_0 v1=1i,v2=1.1,v3=true,v4="test0" %d`, 1),
+		fmt.Sprintf(`cpu1,region=region_0,az=az_1 v1=2i,v2=2.2,v3=false,v4="test1" %d`, 2),
+		fmt.Sprintf(`cpu1,region=region_1,az=az_0 v1=3i,v2=3.3,v3=true,v4="test2" %d`, 3),
+		fmt.Sprintf(`cpu1,region=region_1,az=az_1 v1=4i,v2=4.4,v3=false,v4="test3" %d`, 4),
+		fmt.Sprintf(`cpu1,region=region_2,az=az_0 v1=1i,v2=1.1,v3=true,v4="test0" %d`, 5),
+		fmt.Sprintf(`cpu1,region=region_2,az=az_1 v1=2i,v2=2.2,v3=false,v4="test1" %d`, 6),
+		fmt.Sprintf(`cpu1,region=region_3,az=az_0 v1=3i,v2=3.3,v3=true,v4="test2" %d`, 7),
+		fmt.Sprintf(`cpu1,region=region_3,az=az_1 v1=4i,v2=4.4,v3=false,v4="test3" %d`, 2),
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "Start Time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT * FROM db0.rp0.cpu1 where time = 1 order by time, region`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu1","columns":["time","az","region","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00.000000001Z","az_0","region_0",1,1.1,true,"test0"]]}]}]}`,
+		},
+		{
+			name:    "End Time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT * FROM db0.rp0.cpu1 where time = 2 order by time, region`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu1","columns":["time","az","region","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00.000000002Z","az_1","region_0",2,2.2,false,"test1"],["1970-01-01T00:00:00.000000002Z","az_1","region_3",4,4.4,false,"test3"]]}]}]}`,
+		},
+		{
+			name:    "Start and End Time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT * FROM db0.rp0.cpu1 where time >= 1 and time <= 2 order by time, region`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu1","columns":["time","az","region","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00.000000001Z","az_0","region_0",1,1.1,true,"test0"],["1970-01-01T00:00:00.000000002Z","az_1","region_0",2,2.2,false,"test1"],["1970-01-01T00:00:00.000000002Z","az_1","region_3",4,4.4,false,"test3"]]}]}]}`,
+		},
+		{
+			name:    "Midpoint Time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT * FROM db0.rp0.cpu1 where time >= 3 and time <= 5 order by time, region`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu1","columns":["time","az","region","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00.000000003Z","az_0","region_1",3,3.3,true,"test2"],["1970-01-01T00:00:00.000000004Z","az_1","region_1",4,4.4,false,"test3"],["1970-01-01T00:00:00.000000005Z","az_0","region_2",1,1.1,true,"test0"]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+				time.Sleep(3 * time.Second)
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !CompareSortedResults(query.exp, query.act) {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}

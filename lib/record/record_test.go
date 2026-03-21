@@ -23,6 +23,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func genRowRec(schema []record.Field, intValBitmap []int, intVal []int64, floatValBitmap []int, floatVal []float64,
@@ -2827,4 +2828,230 @@ func TestUpdateSeqIdCol(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expecting AppendSeqIdSchema fail, but not")
 	}
+}
+
+func TestRecord_IsFullAllCol(t *testing.T) {
+	type fields struct {
+		RecMeta *record.RecMeta
+		ColVals []record.ColVal
+		Schema  record.Schemas
+	}
+	type args struct {
+		colIdx map[int]struct{}
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   map[int]struct{}
+		want1  bool
+	}{
+		{
+			name: "fullCol",
+			fields: fields{
+				ColVals: []record.ColVal{
+					{Len: 1, NilCount: 0},
+					{Len: 1, NilCount: 0},
+					{Len: 1, NilCount: 0},
+				},
+				Schema: []record.Field{
+					{Name: "val1", Type: influx.Field_Type_Float},
+					{Name: "val2", Type: influx.Field_Type_Float},
+					{Name: "time", Type: influx.Field_Type_Int}},
+			},
+			args: args{
+				colIdx: map[int]struct{}{0: {}},
+			},
+			want:  map[int]struct{}{0: {}, 1: {}, 2: {}},
+			want1: true,
+		},
+		{
+			name: "emptyCol",
+			fields: fields{
+				ColVals: []record.ColVal{
+					{Len: 1, NilCount: 0},
+					{Len: 1, NilCount: 1},
+					{Len: 1, NilCount: 0},
+				},
+				Schema: []record.Field{
+					{Name: "val1", Type: influx.Field_Type_Float},
+					{Name: "val2", Type: influx.Field_Type_Float},
+					{Name: "time", Type: influx.Field_Type_Int}},
+			},
+			args: args{
+				colIdx: map[int]struct{}{},
+			},
+			want:  map[int]struct{}{0: {}, 2: {}},
+			want1: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &record.Record{
+				RecMeta: tt.fields.RecMeta,
+				ColVals: tt.fields.ColVals,
+				Schema:  tt.fields.Schema,
+			}
+			got, got1 := rec.IsFullAllCol(tt.args.colIdx)
+			assert.Equal(t, tt.want, got, "IsFullAllCol(%v)", tt.args.colIdx)
+			assert.Equal(t, tt.want1, got1, "IsFullAllCol(%v)", tt.args.colIdx)
+		})
+	}
+}
+
+type aggData struct {
+	countValues    []int64
+	intSumValues   []int64
+	intMaxValues   []int64
+	intMinValues   []int64
+	floatSumValues []float64
+	floatMaxValues []float64
+	floatMinValues []float64
+}
+
+// TestMergeRecords tests the MergeRecords method.
+func TestMergeRecords(t *testing.T) {
+
+	tests := []struct {
+		name         string
+		recordsData  []aggData
+		expectedData aggData
+		err          bool
+	}{
+		{
+			name:         "empty records",
+			recordsData:  []aggData{},
+			expectedData: aggData{},
+			err:          false,
+		},
+		{
+			name: "single record",
+			recordsData: []aggData{
+				{
+					[]int64{1},
+					[]int64{2},
+					[]int64{2},
+					[]int64{2},
+					[]float64{3.2},
+					[]float64{3.2},
+					[]float64{3.2},
+				},
+			},
+			expectedData: aggData{
+				[]int64{1},
+				[]int64{2},
+				[]int64{2},
+				[]int64{2},
+				[]float64{3.2},
+				[]float64{3.2},
+				[]float64{3.2}},
+			err: false,
+		},
+		{
+			name: "single record with many values",
+			recordsData: []aggData{
+				{
+					[]int64{1, 5},
+					[]int64{2, 10},
+					[]int64{2, 6},
+					[]int64{2, 1},
+					[]float64{3.2, 12.5},
+					[]float64{3.2, 8.8},
+					[]float64{3.2, 1.3},
+				},
+			},
+			expectedData: aggData{
+				[]int64{6},
+				[]int64{12},
+				[]int64{6},
+				[]int64{1},
+				[]float64{15.7},
+				[]float64{8.8},
+				[]float64{1.3}},
+			err: false,
+		},
+		{
+			name: "many records with many values",
+			recordsData: []aggData{
+				{
+					[]int64{4, 5},
+					[]int64{10, 10},
+					[]int64{5, 4},
+					[]int64{-1, 1},
+					[]float64{10.0, 12.0},
+					[]float64{5.0, 6.6},
+					[]float64{1.0, 2.0},
+				},
+				{
+					[]int64{2, 3, 5},
+					[]int64{2, 10, 20},
+					[]int64{1, 4, 10},
+					[]int64{1, 3, 2},
+					[]float64{10.0, 20.0, 30.0},
+					[]float64{4.0, 8.8, 12.0},
+					[]float64{1.0, 0.1, -3.0},
+				},
+			},
+			expectedData: aggData{
+				[]int64{19},
+				[]int64{52},
+				[]int64{10},
+				[]int64{-1},
+				[]float64{82.0},
+				[]float64{12.0},
+				[]float64{-3.0}},
+			err: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			var records []*record.Record
+			for _, data := range tt.recordsData {
+				rec := genAggregationRecord(data)
+				records = append(records, rec)
+			}
+
+			result := record.MergeRecords(records)
+
+			expected := genAggregationRecord(tt.expectedData)
+
+			// For comparing records, use string representation comparison
+			// because direct comparison might fail due to internal differences
+			if expected == nil {
+				require.Nil(t, result, "Merge Records failed for case %s: expected nil", tt.name)
+			} else {
+				require.NotNil(t, result, "Merge Records failed for case %s: expected non-nil", tt.name)
+				require.Equal(t, expected.String(), result.String(), "Merge Records failed for case %s", tt.name)
+			}
+		})
+	}
+}
+
+// genAggregationRecord generates a record with aggregation columns
+var aggSchema = record.Schemas{
+	record.Field{Type: influx.Field_Type_Int, Name: "int_count"},
+	record.Field{Type: influx.Field_Type_Int, Name: "int_sum"},
+	record.Field{Type: influx.Field_Type_Int, Name: "int_max"},
+	record.Field{Type: influx.Field_Type_Int, Name: "int_min"},
+	record.Field{Type: influx.Field_Type_Float, Name: "float_sum"},
+	record.Field{Type: influx.Field_Type_Float, Name: "float_max"},
+	record.Field{Type: influx.Field_Type_Float, Name: "float_min"},
+}
+
+func genAggregationRecord(recordsData aggData) *record.Record {
+	if len(recordsData.countValues) == 0 {
+		return nil
+	}
+	rec := record.NewRecord(aggSchema, false)
+	rec.ColVals[0].AppendIntegers(recordsData.countValues...)
+	rec.ColVals[1].AppendIntegers(recordsData.intSumValues...)
+	rec.ColVals[2].AppendIntegers(recordsData.intMaxValues...)
+	rec.ColVals[3].AppendIntegers(recordsData.intMinValues...)
+	rec.ColVals[4].AppendFloats(recordsData.floatSumValues...)
+	rec.ColVals[5].AppendFloats(recordsData.floatMaxValues...)
+	rec.ColVals[6].AppendFloats(recordsData.floatMinValues...)
+
+	return rec
 }

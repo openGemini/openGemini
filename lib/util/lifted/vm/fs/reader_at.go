@@ -5,8 +5,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 )
 
@@ -34,24 +34,24 @@ func (r *ReaderAt) MustReadAt(p []byte, off int64) {
 		return
 	}
 	if off < 0 {
-		logger.Panicf("off=%d cannot be negative", off)
+		logger.GetLogger().Panic(fmt.Sprintf("off=%d cannot be negative", off))
 	}
 	if len(r.mmapData) == 0 {
 		start := time.Now()
 		n, err := r.f.ReadAt(p, off)
 		if err != nil {
-			logger.Panicf("FATAL: cannot read %d bytes at offset %d of file %q: %s", len(p), off, r.f.Name(), err)
+			logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot read %d bytes at offset %d of file %q: %s", len(p), off, r.f.Name(), err))
 			return
 		}
 		if n != len(p) {
-			logger.Panicf("FATAL: unexpected number of bytes read; got %d; want %d", n, len(p))
+			logger.GetLogger().Panic(fmt.Sprintf("FATAL: unexpected number of bytes read; got %d; want %d", n, len(p)))
 		}
 		atomic.AddInt64(&statistics.IOStat.IOFrontIndexReadDuration, time.Since(start).Nanoseconds())
 		atomic.AddInt64(&statistics.IOStat.IOFrontIndexReadOkBytes, int64(len(p)))
 		atomic.AddInt64(&statistics.IOStat.IOFrontIndexReadOkCount, 1)
 	} else {
 		if off > int64(len(r.mmapData)-len(p)) {
-			logger.Panicf("off=%d is out of allowed range [0...%d] for len(p)=%d", off, len(r.mmapData)-len(p), len(p))
+			logger.GetLogger().Panic(fmt.Sprintf("off=%d is out of allowed range [0...%d] for len(p)=%d", off, len(r.mmapData)-len(p), len(p)))
 		}
 		src := r.mmapData[off:]
 		// The copy() below may result in thread block as described at https://valyala.medium.com/mmap-in-go-considered-harmful-d92a25cb161d .
@@ -65,7 +65,7 @@ func (r *ReaderAt) MustClose() {
 	fname := r.f.Name()
 	if len(r.mmapData) > 0 {
 		if err := fileops.MUnmap(r.mmapData[:cap(r.mmapData)]); err != nil {
-			logger.Panicf("FATAL: cannot unmap data for file %q: %s", fname, err)
+			logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot unmap data for file %q: %s", fname, err))
 		}
 		r.mmapData = nil
 	}
@@ -78,7 +78,7 @@ func (r *ReaderAt) MustClose() {
 // if prefetch is set, then the OS is hinted to prefetch f data.
 func (r *ReaderAt) MustFadviseSequentialRead(prefetch bool) {
 	if err := fadviseSequentialRead(r.f, prefetch); err != nil {
-		logger.Panicf("FATAL: error in fadviseSequentialRead(%q, %v): %s", r.f.Name(), prefetch, err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: error in fadviseSequentialRead(%q, %v): %s", r.f.Name(), prefetch, err))
 	}
 }
 
@@ -88,7 +88,7 @@ func (r *ReaderAt) MustFadviseSequentialRead(prefetch bool) {
 func MustOpenReaderAt(path string) *ReaderAt {
 	f, err := fileops.Open(path)
 	if err != nil {
-		logger.Panicf("FATAL: cannot open file %q for reading: %s", path, err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot open file %q for reading: %s", path, err))
 	}
 	var r ReaderAt
 	r.f = f
@@ -96,13 +96,13 @@ func MustOpenReaderAt(path string) *ReaderAt {
 		fi, err := f.Stat()
 		if err != nil {
 			MustClose(f)
-			logger.Panicf("FATAL: error in fstat(%q): %s", path, err)
+			logger.GetLogger().Panic(fmt.Sprintf("FATAL: error in fstat(%q): %s", path, err))
 		}
 		size := fi.Size()
 		data, err := mmapFile(f, size)
 		if err != nil {
 			MustClose(f)
-			logger.Panicf("FATAL: cannot mmap %q: %s", path, err)
+			logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot mmap %q: %s", path, err))
 		}
 		r.mmapData = data
 	}

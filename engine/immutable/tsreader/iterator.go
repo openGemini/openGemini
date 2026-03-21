@@ -15,7 +15,11 @@
 package tsreader
 
 import (
+	"errors"
+	"io"
+	"maps"
 	"sort"
+	"sync"
 
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -47,16 +51,30 @@ type ConsumeIterator struct {
 
 	combinedIterator CombinedIterator
 	signal           chan struct{}
+	internalDone     chan struct{}
+	once             sync.Once
+	closeStat        bool
 	logger           *logger.Logger
 	sortHelper       *record.ColumnSortHelper
 }
 
-func NewConsumeIterator(opts *ConsumeOptions) *ConsumeIterator {
-	return &ConsumeIterator{
-		opts:       opts,
-		signal:     make(chan struct{}),
-		logger:     logger.NewLogger(errno.ModuleUnknown),
-		sortHelper: record.NewColumnSortHelper(),
+func NewConsumeIterator(opts *ConsumeOptions, stop chan struct{}) *ConsumeIterator {
+	itr := &ConsumeIterator{
+		opts:         opts,
+		signal:       stop,
+		logger:       logger.NewLogger(errno.ModuleUnknown),
+		sortHelper:   record.NewColumnSortHelper(),
+		internalDone: make(chan struct{}),
+	}
+	go itr.listenStopSignal()
+	return itr
+}
+
+func (itr *ConsumeIterator) listenStopSignal() {
+	select {
+	case <-itr.signal:
+		itr.closeStat = true
+	case <-itr.internalDone:
 	}
 }
 
@@ -65,6 +83,9 @@ func (itr *ConsumeIterator) SetIndex(idx Index) {
 }
 
 func (itr *ConsumeIterator) Release() {
+	itr.once.Do(func() {
+		close(itr.internalDone)
+	})
 	itr.sortHelper.Release()
 	UnrefTSSPFile(itr.order...)
 	UnrefTSSPFile(itr.unordered...)
@@ -92,18 +113,21 @@ func (itr *ConsumeIterator) AddReader(order bool, reader immutable.TSSPFile) {
 	}
 }
 
-func (itr *ConsumeIterator) Next() (uint64, *record.ConsumeRecord, error) {
+func (itr *ConsumeIterator) Next() (*record.ConsumeRecord, error) {
 	if itr.combinedIterator == nil {
 		itr.initIterator()
 	}
 
 	for {
+		if itr.closeStat {
+			return nil, errors.New("consume stopped by signal")
+		}
 		sid, rec, err := itr.combinedIterator.Next()
 		if err != nil {
-			return 0, nil, err
+			return nil, err
 		}
 		if sid == noContentSID {
-			return 0, nil, nil
+			return nil, io.EOF
 		}
 
 		rec = itr.filterByTime(rec)
@@ -114,9 +138,9 @@ func (itr *ConsumeIterator) Next() (uint64, *record.ConsumeRecord, error) {
 
 		res, err := itr.appendTags(rec, sid)
 		if err != nil {
-			return 0, nil, err
+			return nil, err
 		}
-		return sid, res, nil
+		return res, nil
 	}
 }
 
@@ -134,6 +158,9 @@ func (itr *ConsumeIterator) filterByTime(rec *record.Record) *record.Record {
 func (itr *ConsumeIterator) removeFilterColumns(rec *record.Record) *record.Record {
 	if rec.RowNums() == 0 {
 		return nil
+	}
+	if itr.opts.sameSchema {
+		return rec
 	}
 
 	resRec := &record.Record{}
@@ -158,7 +185,7 @@ func (itr *ConsumeIterator) appendTags(rec *record.Record, sid uint64) (*record.
 	if itr.opts.tagSelected.Len() == 0 {
 		return &record.ConsumeRecord{Rec: rec}, nil
 	}
-	series := make(map[string]string, 16)
+	series := make(map[string]string, record.DefaultTagsNumPerSeriesKey)
 	if err := itr.idx.GetSeries(sid, []byte{}, nil, func(key *influx.SeriesKey) {
 		for _, tag := range key.TagSet {
 			series[string(tag.Key)] = string(tag.Value)
@@ -179,12 +206,20 @@ func (itr *ConsumeIterator) appendTags(rec *record.Record, sid uint64) (*record.
 	return res, nil
 }
 
+func (itr *ConsumeIterator) SidCnt() int {
+	if itr.opts.seriesItr != nil {
+		return itr.opts.seriesItr.Ids().Len()
+	}
+	return 0
+}
+
 type ConsumeOptions struct {
 	seriesItr     index.SeriesIDIterator
 	tr            util.TimeRange
 	schema        record.Schemas
 	tagSelected   record.Schemas
 	fieldSelected map[string]struct{}
+	sameSchema    bool // the selected fields are the same as the input fields, no field pruning is required.
 }
 
 func NewConsumeOptions(opts *query.ProcessorOptions, seriesItr index.SeriesIDIterator) (*ConsumeOptions, error) {
@@ -193,7 +228,7 @@ func NewConsumeOptions(opts *query.ProcessorOptions, seriesItr index.SeriesIDIte
 		tr:            util.TimeRange{Min: opts.StartTime, Max: opts.EndTime},
 		schema:        make(record.Schemas, len(opts.FieldAux)+len(opts.Aux)),
 		tagSelected:   make(record.Schemas, len(opts.TagAux)),
-		fieldSelected: make(map[string]struct{}),
+		fieldSelected: make(map[string]struct{}, len(opts.FieldAux)),
 	}
 
 	schemas := make(map[string]record.Field)
@@ -229,6 +264,30 @@ func NewConsumeOptions(opts *query.ProcessorOptions, seriesItr index.SeriesIDIte
 		co.tagSelected[j].Name = opts.TagAux[j].Val
 		co.tagSelected[j].Type = record.ToModelTypes(opts.TagAux[j].Type)
 	}
-
+	co.sameSchema = len(opts.Aux) == 0 && len(co.fieldSelected) == len(co.schema)
 	return co, nil
+}
+
+// Schema returns a copy of internal schema (nil if unset).
+func (c ConsumeOptions) Schema() record.Schemas {
+	if c.schema == nil {
+		return nil
+	}
+	return append(record.Schemas(nil), c.schema...)
+}
+
+// TagSelected returns a copy of internal tagSelected (nil if unset).
+func (c ConsumeOptions) TagSelected() record.Schemas {
+	if c.tagSelected == nil {
+		return nil
+	}
+	return append(record.Schemas(nil), c.tagSelected...)
+}
+
+// FieldSelected returns a clone of internal fieldSelected (nil if unset).
+func (c ConsumeOptions) FieldSelected() map[string]struct{} {
+	if c.fieldSelected == nil {
+		return nil
+	}
+	return maps.Clone(c.fieldSelected)
 }

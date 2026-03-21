@@ -23,9 +23,11 @@ import (
 
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
+	"go.uber.org/zap"
 )
 
 type WalCtx struct {
@@ -41,6 +43,10 @@ func (ctx *WalCtx) MemSize() int {
 
 func (ctx *WalCtx) Instance() *WalCtx {
 	return ctx
+}
+
+func (ctx *WalCtx) Record() *record.Record {
+	return &ctx.rec
 }
 
 var walCtxPool *pool.UnionPool[WalCtx]
@@ -190,22 +196,28 @@ type WalRecordIterator struct {
 	ctx  WalCtx
 }
 
-func NewWalRecordIterator(wal *Wal) *WalRecordIterator {
-	return &WalRecordIterator{
-		wal: wal,
+var walRecordIteratorPool *pool.UnionPool[WalRecordIterator]
+
+func init() {
+	walRecordIteratorPool = pool.NewDefaultUnionPool[WalRecordIterator](func() *WalRecordIterator {
+		return &WalRecordIterator{}
+	})
+}
+
+func NewWalRecordIterator(wal *Wal) (*WalRecordIterator, func()) {
+	itr := walRecordIteratorPool.Get()
+	itr.wal = wal
+	return itr, func() {
+		walRecordIteratorPool.PutWithMemSize(itr, 0)
 	}
 }
 
-func (itr *WalRecordIterator) WalMeasurements(fn func(mst string)) {
-	itr.wal.seriesMap.Walk(func(mst string, series map[uint64]struct{}) {
-		itr.sids = itr.sids[:0]
-		for id := range series {
-			itr.sids = append(itr.sids, id)
-		}
-		sort.Slice(itr.sids, func(i, j int) bool { return itr.sids[i] > itr.sids[j] })
-
-		fn(mst)
-	})
+func (itr *WalRecordIterator) SetSeries(series map[uint64]struct{}) {
+	itr.sids = itr.sids[:0]
+	for id := range series {
+		itr.sids = append(itr.sids, id)
+	}
+	sort.Slice(itr.sids, func(i, j int) bool { return itr.sids[i] > itr.sids[j] })
 }
 
 func (itr *WalRecordIterator) Next(dst *record.Record) (uint64, error) {
@@ -217,5 +229,118 @@ func (itr *WalRecordIterator) Next(dst *record.Record) (uint64, error) {
 	itr.sids = itr.sids[:idx]
 
 	err := itr.wal.ReadRecord(&itr.ctx, sid, dst, false)
+	stat.WALConvertRowCount.Add(int64(dst.RowNums()))
 	return sid, err
+}
+
+type WalConsumeReader struct {
+	wal *Wal
+	ctx *WalCtx
+
+	wantTable string
+	ofs       int64
+}
+
+func NewWalConsumeReader(wal *Wal, ctx *WalCtx, wantTable string, ofs int64) *WalConsumeReader {
+	wal.Ref()
+	return &WalConsumeReader{wal: wal, ctx: ctx, wantTable: wantTable, ofs: ofs}
+}
+
+func (wcr *WalConsumeReader) Release() {
+	wcr.wal.Unref()
+}
+
+func (wcr *WalConsumeReader) ReadBlock() (sid uint64, seriesKey []byte, recData []byte, err error) {
+	for {
+		if err = wcr.readHeader(wcr.ofs); err != nil {
+			return 0, nil, nil, err
+		}
+
+		if wcr.ctx.header.typeFlag == flagSeriesKey {
+			wcr.ofs += int64(walBlockHeaderSize)
+			seriesKey, err = wcr.readSeriesKey(wcr.ofs)
+			if err != nil {
+				return 0, nil, nil, err
+			}
+			wcr.ofs += int64(wcr.ctx.header.size)
+
+			if err = wcr.readHeader(wcr.ofs); err != nil {
+				return 0, nil, nil, err
+			}
+		}
+
+		tblOfs := wcr.ofs + int64(walBlockHeaderSize)
+		tableName, err := wcr.readTableName(tblOfs)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+
+		nextOfs := wcr.ofs + int64(walBlockHeaderSize) + int64(wcr.ctx.header.mstLen) + int64(wcr.ctx.header.size)
+
+		if tableName == wcr.wantTable {
+			recData, err = wcr.wal.ReadBlock(wcr.ctx, wcr.ofs)
+			if err != nil {
+				logger.GetLogger().Error("consume failed to read full block",
+					zap.Int64("offset", wcr.ofs), zap.Error(err))
+				return 0, nil, nil, err
+			}
+			wcr.ofs = nextOfs
+			return wcr.ctx.header.sid, seriesKey, recData, nil
+		}
+
+		wcr.ofs = nextOfs
+	}
+}
+
+func (wcr *WalConsumeReader) readHeader(ofs int64) error {
+	buf := &wcr.ctx.buf
+	buf.B = bufferpool.Resize(buf.B, walBlockHeaderSize)
+	if _, err := wcr.wal.readAt(buf.B, ofs); err != nil {
+		return err
+	}
+	if err := wcr.ctx.header.Unmarshal(buf.B); err != nil {
+		logger.GetLogger().Error("failed to unmarshal WAL block header",
+			zap.Int64("offset", ofs), zap.ByteString("raw", buf.B), zap.Error(err))
+		return err
+	}
+	return nil
+}
+
+func (wcr *WalConsumeReader) readSeriesKey(ofs int64) ([]byte, error) {
+	buf := &wcr.ctx.buf
+	buf.Swap = bufferpool.Resize(buf.Swap, int(wcr.ctx.header.size))
+	if _, err := wcr.wal.readAt(buf.Swap, ofs); err != nil {
+		logger.GetLogger().Error("failed to read WAL seriesKey",
+			zap.Int64("offset", ofs), zap.Error(err))
+		return nil, err
+	}
+
+	switch wcr.ctx.header.compressFlag {
+	case walCompressLz4:
+		tmp := bufferpool.Get()
+		defer bufferpool.Put(tmp)
+		dst, err := LZ4DecompressBlock(buf.Swap, tmp)
+		return dst, err
+	case walCompressSnappy:
+		tmp := bufferpool.Get()
+		defer bufferpool.Put(tmp)
+		dst, err := SnappyDecompressBlock(buf.Swap, tmp)
+		return dst, err
+	default:
+		return buf.Swap, nil
+	}
+}
+
+func (wcr *WalConsumeReader) readTableName(ofs int64) (string, error) {
+	if wcr.ctx.header.mstLen == 0 {
+		return "", nil
+	}
+	tblBytes := make([]byte, wcr.ctx.header.mstLen)
+	if _, err := wcr.wal.readAt(tblBytes, ofs); err != nil {
+		logger.GetLogger().Error("consume failed to read WAL block table name",
+			zap.Int64("offset", ofs),
+			zap.Error(err))
+		return "", err
+	}
+	return string(tblBytes), nil
 }

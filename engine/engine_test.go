@@ -24,9 +24,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/influxdata/influxdb/pkg/limiter"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -37,6 +39,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/failpoint"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
@@ -48,6 +51,8 @@ import (
 	"github.com/openGemini/openGemini/lib/raftconn"
 	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
+	"github.com/openGemini/openGemini/lib/scheduler"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -56,12 +61,12 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/pingcap/failpoint"
 	assert2 "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.etcd.io/etcd/raft/v3/raftpb"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 type mockMetaClient4Drop struct {
@@ -131,7 +136,6 @@ func init() {
 	DefaultEngineOption.MaxWriteHangTime = time.Second
 	DefaultEngineOption.MemDataReadEnabled = true
 	DefaultEngineOption.WalSyncInterval = 100 * time.Millisecond
-	DefaultEngineOption.WalEnabled = true
 	DefaultEngineOption.WalReplayParallel = false
 	DefaultEngineOption.WalReplayAsync = false
 	DefaultEngineOption.DownSampleWriteDrop = true
@@ -284,6 +288,21 @@ func getTimeRangeInfo() *meta.ShardTimeRangeInfo {
 	return timeRange
 }
 
+func getTimeRangeInfo2() *meta.ShardTimeRangeInfo {
+	tr := meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "1999-01-01T01:00:00Z"),
+		EndTime: mustParseTime(time.RFC3339Nano, "2000-01-01T01:00:00Z")}
+	shardDuration := getShardDurationInfo(defaultShardId2)
+	timeRange := &meta.ShardTimeRangeInfo{
+		TimeRange: tr,
+		OwnerIndex: meta.IndexDescriptor{
+			IndexID:      defaultShardId2,
+			IndexGroupID: defaultShGroupId,
+			TimeRange:    tr,
+		},
+		ShardDuration: shardDuration,
+	}
+	return timeRange
+}
 func getShardDurationInfo(shId uint64) *meta.ShardDurationInfo {
 	shardDuration := &meta.ShardDurationInfo{
 		Ident: meta.ShardIdentifier{
@@ -334,7 +353,7 @@ func initEngine1(dir string, engineType config.EngineType, obsOpts ...*obs.ObsOp
 		fileInfos:    nil,
 	}
 	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-	client := metaclient.NewClient("", false, 0)
+	client := mockMetaClient()
 	loadCtx := getLoadCtx()
 	lockPath := filepath.Join(eng.dataPath, "LOCK")
 	dbPTInfo := NewDBPTInfo("db0", 0, eng.dataPath, eng.walPath, loadCtx, eng.fileInfos, nil)
@@ -383,6 +402,8 @@ func initEngineWithColdShard(dir string, engineType config.EngineType) (*EngineI
 		fileInfos:    nil,
 	}
 	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	m := mockMetaClient()
+	eng.metaClient = m
 
 	loadCtx := getLoadCtx()
 	lockPath := filepath.Join(eng.dataPath, "LOCK")
@@ -398,8 +419,7 @@ func initEngineWithColdShard(dir string, engineType config.EngineType) (*EngineI
 	_ = fileops.MkdirAll(indexPath, 0755)
 
 	//indexPath := path.Join(dbPTInfo.path, "rp0", IndexFileDirectory, "1_1648544460000000000_1648548120000000000")
-	client := metaclient.NewClient("", false, 0)
-	dbPTInfo.OpenIndexes(0, "rp0", config.TSSTORE, client)
+	dbPTInfo.OpenIndexes(0, "rp0", config.TSSTORE, m)
 
 	indexBuilder := dbPTInfo.indexBuilder[659]
 	shardIdent := &meta.ShardIdentifier{ShardID: 1, ShardGroupID: 1, Policy: "rp0", OwnerDb: "db0", OwnerPt: 0}
@@ -432,6 +452,8 @@ func initEngineWithNoLockPath(dir string, engineType config.EngineType) (*Engine
 		fileInfos:    nil,
 	}
 	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	m := mockMetaClient()
+	eng.metaClient = m
 
 	loadCtx := getLoadCtx()
 	lockPath := ""
@@ -447,8 +469,7 @@ func initEngineWithNoLockPath(dir string, engineType config.EngineType) (*Engine
 	_ = fileops.MkdirAll(indexPath, 0755)
 
 	//indexPath := path.Join(dbPTInfo.path, "rp0", IndexFileDirectory, "1_1648544460000000000_1648548120000000000")
-	client := metaclient.NewClient("", false, 0)
-	dbPTInfo.OpenIndexes(0, "rp0", config.TSSTORE, client)
+	dbPTInfo.OpenIndexes(0, "rp0", config.TSSTORE, m)
 
 	indexBuilder := dbPTInfo.indexBuilder[659]
 	shardIdent := &meta.ShardIdentifier{ShardID: 1, ShardGroupID: 1, Policy: "rp0", OwnerDb: "db0", OwnerPt: 0}
@@ -522,6 +543,24 @@ func Test_Engine_DropDatabase(t *testing.T) {
 	assert(len(eng.DBPartitions) > 0, "db pt should exist")
 
 	// really drop db
+	err = eng.DeleteDatabase("db0", defaultPtId)
+	assert(err == nil, "error is not nil")
+	assert(len(eng.DBPartitions) == 0, "db pt should not exist")
+}
+
+func Test_Engine_DropDatabase_WithPtWriteStatistics(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	// really drop db
+	stat.InitPtWriteStatistics(map[string]string{
+		"hostname": "127.0.0.1:8090",
+		"app":      "ts-sql",
+	}, true, 1)
 	err = eng.DeleteDatabase("db0", defaultPtId)
 	assert(err == nil, "error is not nil")
 	assert(len(eng.DBPartitions) == 0, "db pt should not exist")
@@ -737,6 +776,10 @@ func TestEngine_DropRetentionPolicy(t *testing.T) {
 	}
 	defer eng.Close()
 
+	stat.InitPtWriteStatistics(map[string]string{
+		"hostname": "127.0.0.1:8090",
+		"app":      "ts-sql",
+	}, true, 1)
 	res := make(chan error)
 	n := 0
 	n++
@@ -950,14 +993,14 @@ func TestEngine_OpenLimitShardError(t *testing.T) {
 	}
 	dbBriefInfos[defaultDb] = dbInfo
 	for _, fp := range failpoints {
-		require.NoError(t, failpoint.Enable(fp.failPath, fp.inTerms))
+		failpoint.Enable(fp.failPath, fp.inTerms)
 
 		err := eng.Open(shardDurationInfo, dbBriefInfos, mockMetaClient())
 		if err = fp.expect(err); err != nil {
 			t.Fatal(err)
 		}
 		require.NoError(t, eng.Close())
-		require.NoError(t, failpoint.Disable(fp.failPath))
+		failpoint.Disable(fp.failPath)
 	}
 }
 
@@ -1284,6 +1327,56 @@ func TestEngine_ShowSeriesExact(t *testing.T) {
 	require.Equal(t, 3, len(seriesKeys))
 }
 
+func TestEngine_MarkDropSeries(t *testing.T) {
+	dir := t.TempDir()
+	indexBuilderId := uint64(659)
+	eng, err := initEngine1(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	dbName := "db0"
+	ptId := uint32(0)
+
+	err = eng.DBPartitions[dbName][ptId].delIndexBuilderMap["rp0"].Close()
+	require.NoError(t, err)
+	delete(eng.DBPartitions[dbName][ptId].delIndexBuilderMap, "rp0")
+	client := metaclient.NewClient("", false, 0)
+	eng.SetMetaClient(client)
+
+	msNames := []string{"rp0.cpu"}
+	tm := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord(msNames, 10, 200, time.Second, tm, false, true, false)
+
+	err = eng.WriteRows(dbName, "rp0", ptId, 1, rows, nil, nil)
+	require.NoError(t, err)
+	eng.ForceFlush()
+	database, ok := eng.DBPartitions["db0"]
+	require.True(t, ok)
+	dbInfo, ok := database[0]
+	require.True(t, ok)
+	idx, ok := dbInfo.indexBuilder[indexBuilderId].GetPrimaryIndex().(*tsi.MergeSetIndex)
+	require.True(t, ok)
+	idx.DebugFlush()
+	tr := tsi.TimeRange{Min: time.Now().UnixNano(), Max: time.Now().UnixNano()}
+	err = eng.MarkDropSeries(dbName, ptId, []byte("cpu"), nil, tr)
+	require.ErrorContains(t, err, "mstName must be like rp.mstName")
+
+	err = eng.MarkDropSeries(dbName, ptId, []byte("rp1.cpu"), nil, tr)
+	require.NoError(t, err)
+
+	err = eng.MarkDropSeries(dbName, ptId, []byte(msNames[0]), nil, tr)
+	require.NoError(t, err)
+
+	expr := &influxql.VarRef{
+		Val:  "v1",
+		Type: influxql.Integer,
+	}
+	err = eng.MarkDropSeries(dbName, ptId, []byte(msNames[0]), expr, tr)
+	require.NoError(t, err)
+}
+
 func TestEngine_TagValuesDisorder(t *testing.T) {
 	dir := t.TempDir()
 	fmt.Println(dir)
@@ -1463,6 +1556,10 @@ func initEngineForDropSeries(dir string, allTsids []uint64, delTsids []uint64, t
 	}
 
 	if e := eng.CreateShard(defaultDb, defaultRp, defaultPtId, defaultShardId, shardTimeRange, msInfo); e != nil {
+		return eng, e
+	}
+
+	if e := eng.CreateShard(defaultDb, "rpnew", defaultPtId, defaultShardId2, getTimeRangeInfo2(), msInfo); e != nil {
 		return eng, e
 	}
 
@@ -1725,7 +1822,7 @@ func TestEngine_OpenShardGetDBBriefInfoError(t *testing.T) {
 	}
 	dbBriefInfos["db1"] = dbInfo
 	for _, fp := range failpoints {
-		require.NoError(t, failpoint.Enable(fp.failPath, fp.inTerms))
+		failpoint.Enable(fp.failPath, fp.inTerms)
 
 		err := eng.Open(shardDurationInfo, dbBriefInfos, mockMetaClient())
 		if err = fp.expect(err); err != nil {
@@ -1734,7 +1831,7 @@ func TestEngine_OpenShardGetDBBriefInfoError(t *testing.T) {
 			}
 		}
 		require.NoError(t, eng.Close())
-		require.NoError(t, failpoint.Disable(fp.failPath))
+		failpoint.Disable(fp.failPath)
 	}
 }
 
@@ -1767,7 +1864,7 @@ func TestEngine_StatisticsOps(t *testing.T) {
 	m := mockMetaClient()
 	eng.metaClient = m
 	stats := eng.StatisticsOps()
-	expectStats := 2
+	expectStats := 1
 	require.Equal(t, expectStats, len(stats))
 
 	var expectSeriesNum int64
@@ -1842,7 +1939,7 @@ func TestEngine_SeriesLimited(t *testing.T) {
 	require.EqualError(t, err, errno.NewError(errno.SeriesLimited, defaultDb, 10, 20).Error())
 }
 
-func TestEngine_RowCount(t *testing.T) {
+func TestEngine_RowCountAndPreAgg(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := initEngine1(dir, config.TSSTORE)
 	if err != nil {
@@ -1858,8 +1955,10 @@ func TestEngine_RowCount(t *testing.T) {
 	schema := executor.NewQuerySchema(fields, names, &opt, nil)
 	m := &influxql.Measurement{Name: "students"}
 	schema.AddTable(m, schema.MakeRefs())
-	count, err := eng.RowCount("db0", 0, []uint64{1}, schema)
+	count, err := eng.RowCount("db0", 0, []uint64{1}, schema, false)
 	assert2.Equal(t, count, int64(0))
+	rec, err := eng.GetPreAgg("db0", 0, []uint64{1}, schema, nil)
+	assert2.Equal(t, rec.RowNums(), 0)
 }
 
 func TestEngine_RowCount_ShardLockPath(t *testing.T) {
@@ -1881,6 +1980,7 @@ func TestEngine_RowCount_ShardLockPath(t *testing.T) {
 
 type mockShard struct {
 	shard
+	immTables immutable.TablesStore
 }
 
 func (ms *mockShard) IsOpened() bool {
@@ -1897,6 +1997,14 @@ func (ms *mockShard) CreateDDLBasePlan(client metaclient.MetaClient, ddl hybridq
 
 func (ms *mockShard) Intersect(tr *influxql.TimeRange) bool {
 	return true
+}
+
+func (ms *mockShard) FreeMemTableSequencer() bool { return true }
+
+func (ms *mockShard) RecoverParquetLog() error { return nil }
+
+func (ms *mockShard) GetTableStore() immutable.TablesStore {
+	return ms.immTables
 }
 
 func Test_openShardLazy(t *testing.T) {
@@ -1990,14 +2098,21 @@ func TestStoreHierarchicalStorage(t *testing.T) {
 	defer eng.Close()
 	sh := eng.DBPartitions["db0"][0].shards[1]
 	sh.GetDuration().Tier = util.Warm
+	sh.(*shard).lastWriteTime = uint64(time.Now().Add(-2 * time.Hour).Second())
 	syscontrol.SetWriteColdShardEnabled(true)
+	shard, _ := eng.getShard("db0", 0, 1)
+	p := gomonkey.ApplyMethod(shard, "FreeMemTableSequencer", func(_ Shard) bool {
+		return true
+	})
+	defer p.Reset()
+
 	ok := eng.HierarchicalStorage("db0", 0, 1)
+
 	require.Equal(t, ok, true)
 
-	shard, _ := eng.getShard("db0", 0, 1)
 	shard.DisableHierarchicalStorage()
 	syscontrol.SetWriteColdShardEnabled(false)
-	defer shard.SetEnableHierarchicalStorage()
+	shard.SetEnableHierarchicalStorage()
 }
 
 func TestStoreIndexHierarchicalStorage(t *testing.T) {
@@ -2052,6 +2167,9 @@ func TestStoreHierarchicalStorage_CanNotDoShardMove(t *testing.T) {
 	}
 	shard.ForceFlush()
 	time.Sleep(1 * time.Second)
+	tmp := atomic.LoadUint64(&fullCompColdDuration)
+	SetFullCompColdDuration(time.Minute * 60)
+	defer SetFullCompColdDuration(time.Duration(tmp))
 	syscontrol.SetWriteColdShardEnabled(true)
 	ok := eng.HierarchicalStorage("db0", 0, 1)
 	syscontrol.SetWriteColdShardEnabled(false)
@@ -2068,8 +2186,7 @@ func TestStoreHierarchicalStorage_DBPTNotFound(t *testing.T) {
 	sh := eng.DBPartitions["db0"][0].shards[1]
 	sh.GetDuration().Tier = util.Warm
 
-	var errPtId uint32
-	errPtId = 1
+	var errPtId uint32 = 1
 	syscontrol.SetWriteColdShardEnabled(true)
 	ok := eng.HierarchicalStorage("db0", errPtId, 1)
 	syscontrol.SetWriteColdShardEnabled(false)
@@ -2086,8 +2203,7 @@ func TestStoreHierarchicalStorage_ShardNotFound(t *testing.T) {
 	sh := eng.DBPartitions["db0"][0].shards[1]
 	sh.GetDuration().Tier = util.Warm
 
-	var errShardId uint64
-	errShardId = 0
+	var errShardId uint64 = 0
 	syscontrol.SetWriteColdShardEnabled(true)
 	ok := eng.HierarchicalStorage("db0", 0, errShardId)
 	syscontrol.SetWriteColdShardEnabled(false)
@@ -2101,7 +2217,15 @@ func TestStoreHierarchicalStorage_ShardIsCold(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eng.Close()
+	sh := eng.DBPartitions["db0"][0].shards[1]
+	sh.(*shard).lastWriteTime = uint64(time.Now().Add(-2 * time.Hour).Second())
 	syscontrol.SetWriteColdShardEnabled(true)
+	shard, _ := eng.getShard("db0", 0, 1)
+	p := gomonkey.ApplyMethod(shard, "FreeMemTableSequencer", func(_ Shard) bool {
+		return true
+	})
+	defer p.Reset()
+
 	ok := eng.HierarchicalStorage("db0", 0, 1)
 	syscontrol.SetWriteColdShardEnabled(false)
 	require.Equal(t, ok, true)
@@ -2360,6 +2484,28 @@ func TestRegisterColdShard(t *testing.T) {
 	compWorker.RegisterShard(sh.(*shard))
 	_, ok := compWorker.sources[sh.GetID()]
 	require.Equal(t, ok, false)
+}
+
+func TestMerger(t *testing.T) {
+	dir := t.TempDir()
+	config.GetStoreConfig().SkipRegisterColdShard = true
+	eng, err := initEngineWithColdShard(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	sh := eng.DBPartitions["db0"][0].shards[1]
+	sh.GetDuration().Tier = util.Warm
+	compWorker.sources = make(map[uint64]*shard)
+	compWorker.RegisterShard(sh.(*shard))
+	_, ok := compWorker.sources[sh.GetID()]
+	require.Equal(t, ok, true)
+	config.GetStoreConfig().Merge.UnorderedMergeSelf = false
+	compWorker.SetAllOutOfOrderMergeSwitch(true)
+	compWorker.merger()
+
+	config.GetStoreConfig().Merge.UnorderedMergeSelf = true
+	compWorker.merger()
 }
 
 func TestEngineDeleteMstInShard(t *testing.T) {
@@ -3075,7 +3221,10 @@ func TestReplaceShards(t *testing.T) {
 	newShard := &shard{
 		ident:        &meta2.ShardIdentifier{ShardID: 1},
 		durationInfo: &meta.DurationDescriptor{},
+		log:          eng.log,
+		immTables:    immutable.NewTableStore("", nil, nil, false, nil),
 	}
+	newShard.immTables.SetImmTableType(config.TSSTORE)
 	shards := []Shard{&shard{
 		ident:        &meta2.ShardIdentifier{ShardID: 1},
 		cacheClosed:  1,
@@ -3090,6 +3239,9 @@ func TestReplaceShards(t *testing.T) {
 
 	eng.DBPartitions["db0"] = map[uint32]*DBPTInfo{}
 	eng.DBPartitions["db0"][0] = dbpt
+	err = eng.ReplaceShards(newShard, shards, "", dbpt, mergeShards)
+	assert2.NotEqual(t, err, nil)
+	newShard.opened = true
 	err = eng.ReplaceShards(newShard, shards, "", dbpt, mergeShards)
 	assert2.Equal(t, err, nil)
 
@@ -3108,7 +3260,7 @@ func TestReplaceShards(t *testing.T) {
 	dbpt.lockPath = &lockPath
 	eng.DBPartitions["db0"] = map[uint32]*DBPTInfo{}
 	eng.DBPartitions["db0"][0] = dbpt
-	nodeMutableLimit.initNodeMemBucket(time.Second*10, 100)
+	resourceallocator.NodeMutableLimit.InitNodeMemBucket(time.Second*10, 100)
 	err = eng.ReplaceShards(newShard, shards1, "", dbpt, mergeShards)
 	assert2.Equal(t, err, nil)
 }
@@ -3364,6 +3516,19 @@ func TestStoreMergeShardsErr(t *testing.T) {
 		err = eng.MergeShards(mergeShards)
 		assert2.Equal(t, err.Error(), "getTimeRange err")
 	}
+
+	eng.DBPartitions["db0"][0].pendingShardDeletes[1] = struct{}{}
+	for _, mergeShards := range mergeShardss {
+		err = eng.MergeShards(mergeShards)
+		assert2.Equal(t, err.Error(), "shard is being delete")
+	}
+
+	err = eng.startDrop("rp0", eng.droppingRP)
+	assert2.Equal(t, err, nil)
+	for _, mergeShards := range mergeShardss {
+		err = eng.MergeShards(mergeShards)
+		assert2.Equal(t, err.Error(), "engine is doing user drop command")
+	}
 }
 
 type mockMetaObs struct {
@@ -3380,4 +3545,137 @@ func (m *mockMetaObs) DatabaseOption(database string) (*obs.ObsOptions, error) {
 		BasePath:   "test_1",
 	}
 	return opt, nil
+}
+
+func TestEngine_DropRetentionPolicyError(t *testing.T) {
+	dir := t.TempDir()
+	dataPath := filepath.Join(dir, dPath)
+	eng := &EngineImpl{
+		DBPartitions: make(map[string]map[uint32]*DBPTInfo, 64),
+		droppingDB:   make(map[string]string),
+		droppingRP:   make(map[string]string),
+		droppingMst:  make(map[string]string),
+		fileInfos:    nil,
+		dataPath:     dataPath + "/data",
+		walPath:      dataPath + "/wal",
+	}
+	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	client := mockMetaClient()
+	loadCtx := getLoadCtx()
+	lockPath := filepath.Join(eng.dataPath, "LOCK")
+	dbPTInfo := NewDBPTInfo("db0", 0, eng.dataPath, eng.walPath, loadCtx, eng.fileInfos, nil)
+	dbPTInfo.lockPath = &lockPath
+	dbPTInfo.logger = eng.log
+	dbPTInfo.doingShardMoveN = 1
+	eng.addDBPTInfo(dbPTInfo)
+	eng.metaClient = client
+
+	err := eng.DropRetentionPolicy("db0", "rp0", 0)
+	assert2.Equal(t, err.Error(), "pt is doing some shard move")
+}
+
+func TestGetLastIndex(t *testing.T) {
+	tmpDir := t.TempDir()
+	rds, err := raftlog.Init(tmpDir, 0)
+	require.NoError(t, err)
+	defer rds.Close()
+
+	ents := []raftpb.Entry{{Index: 3, Term: 3}}
+	err = rds.Save(nil, ents, nil)
+	require.NoError(t, err)
+
+	eng := &EngineImpl{
+		DBPartitions: make(map[string]map[uint32]*DBPTInfo),
+		log:          logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+	}
+	dbpt := &DBPTInfo{database: "db0", shards: make(map[uint64]Shard), logger: eng.log}
+	eng.DBPartitions["db0"] = map[uint32]*DBPTInfo{}
+	eng.DBPartitions["db0"][0] = dbpt
+	_, err = eng.GetLastIndex("db0", 0)
+	assert2.Equal(t, err.Error(), "dbpt is not a raftnode db:db0 ptId:0")
+
+	node := &mockNode{storage: rds}
+	dbpt.SetNode(node)
+	index, err := eng.GetLastIndex("db0", 0)
+	assert2.Equal(t, err, nil)
+	assert2.Equal(t, index, uint64(3))
+}
+
+func TestStartDropRP(t *testing.T) {
+	eng := &EngineImpl{
+		DBPartitions: make(map[string]map[uint32]*DBPTInfo),
+		log:          logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+		droppingRP:   make(map[string]string),
+	}
+	dbpt := &DBPTInfo{database: "db0", shards: make(map[uint64]Shard), logger: eng.log}
+	eng.droppingRP["rp0"] = ""
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		eng.startDropRP("rp0", dbpt)
+	}()
+	time.Sleep(2 * time.Second)
+	eng.dropMu.Lock()
+	delete(eng.droppingRP, "rp0")
+	eng.dropMu.Unlock()
+	wg.Wait()
+}
+
+type MockTbStore struct {
+	immutable.MmsTables
+	f         bool
+	Scheduler *scheduler.TaskScheduler
+}
+
+func (m *MockTbStore) FullyCompacted() bool {
+	return m.f
+}
+
+func (m *MockTbStore) GetScheduler() *scheduler.TaskScheduler {
+	return m.Scheduler
+}
+
+func TestGetCompactTask(t *testing.T) {
+	sche := scheduler.NewTaskScheduler(func(signal chan struct{}, onClose func()) {}, limiter.NewFixed(1))
+	eng := &EngineImpl{
+		DBPartitions: make(map[string]map[uint32]*DBPTInfo),
+	}
+	cg := immutable.NewCompactGroup("mst_0000", "", 2, 0)
+	store := &immutable.MmsTables{
+		ImmTable: immutable.NewTsImmTable(),
+	}
+
+	sche.RegisterCompactTask(immutable.NewCompactTask(store, cg, true))
+	t.Run("1", func(t *testing.T) {
+		dbpt := &DBPTInfo{
+			database: "db0",
+			shards: map[uint64]Shard{1: &mockShard{
+				immTables: &MockTbStore{
+					Scheduler: sche,
+				},
+			}},
+		}
+		eng.DBPartitions["db0"] = map[uint32]*DBPTInfo{}
+		eng.DBPartitions["db0"][0] = dbpt
+		task, err := eng.GetTask(scheduler.CompactTask, 0)
+		assert2.NoError(t, err)
+		assert2.NotNil(t, task)
+
+		task2, err := eng.GetTask(scheduler.CompactTask, task.UUID())
+		assert2.NoError(t, err)
+		assert2.Equal(t, task, task2)
+
+		err = eng.CompactFiles(scheduler.CompactTask, task.UUID(), &immutable.CompactedFileInfo{})
+		assert2.Error(t, err)
+	})
+	t.Run("2", func(t *testing.T) {
+		dbpt := &DBPTInfo{database: "db0", shards: make(map[uint64]Shard)}
+		eng.DBPartitions["db0"] = map[uint32]*DBPTInfo{}
+		eng.DBPartitions["db0"][0] = dbpt
+
+		task, err := eng.GetTask(scheduler.CompactTask, 0)
+		assert2.NoError(t, err)
+		assert2.Nil(t, task)
+	})
 }

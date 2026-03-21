@@ -33,10 +33,11 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"github.com/smartystreets/goconvey/convey"
 	assert2 "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestCheckLeaderChanged(t *testing.T) {
@@ -139,7 +140,7 @@ func (m MockRaft) ShowDebugInfo(witch string) ([]byte, error) {
 }
 
 func (m MockRaft) UserSnapshot() error {
-	panic("implement me")
+	return nil
 }
 
 func (m MockRaft) LeadershipTransfer() error {
@@ -358,7 +359,7 @@ func Test_applyDropDatabaseCommand(t *testing.T) {
 		Name: proto.String("db999"),
 	}
 	cmd := &proto2.Command{Type: &typ}
-	_ = proto.SetExtension(cmd, desc, value)
+	proto.SetExtension(cmd, desc, value)
 	err := fsm.applyDropDatabaseCommand(cmd)
 	assert2.Nil(t, err)
 
@@ -367,7 +368,7 @@ func Test_applyDropDatabaseCommand(t *testing.T) {
 		Name: proto.String("db0"),
 	}
 	cmd = &proto2.Command{Type: &typ}
-	_ = proto.SetExtension(cmd, desc, value)
+	proto.SetExtension(cmd, desc, value)
 	err = fsm.applyDropDatabaseCommand(cmd)
 	assert2.Nil(t, err)
 	assert2.Equal(t, uint64(1), fsm.data.MaxCQChangeID)
@@ -393,8 +394,7 @@ func Test_applyCreateContinuousQuery(t *testing.T) {
 	}
 	typ := proto2.Command_CreateContinuousQueryCommand
 	cmd := &proto2.Command{Type: &typ}
-	err := proto.SetExtension(cmd, proto2.E_CreateContinuousQueryCommand_Command, value)
-	require.NoError(t, err)
+	proto.SetExtension(cmd, proto2.E_CreateContinuousQueryCommand_Command, value)
 
 	// database not found
 	resErr := applyCreateContinuousQuery(fsm, cmd)
@@ -419,7 +419,7 @@ func Test_applyCreateContinuousQuery(t *testing.T) {
 		Name:     proto.String("cq0"),
 		Query:    proto.String(`CREATE CONTINUOUS QUERY "cq0" ON "db0" RESAMPLE EVERY 1h FOR 20m BEGIN SELECT max("passengers") INTO "max_passengers" FROM "bus_data" GROUP BY time(1m) END`),
 	}
-	_ = proto.SetExtension(cmd, proto2.E_CreateContinuousQueryCommand_Command, value)
+	proto.SetExtension(cmd, proto2.E_CreateContinuousQueryCommand_Command, value)
 	resErr = applyCreateContinuousQuery(fsm, cmd) // try to create the same name CQ
 	require.EqualError(t, resErr.(error), "continuous query name already exists")
 }
@@ -455,8 +455,7 @@ func Test_applyContinuousQueryReportCommand(t *testing.T) {
 	}
 	typ := proto2.Command_ContinuousQueryReportCommand
 	cmd := &proto2.Command{Type: &typ}
-	err := proto.SetExtension(cmd, proto2.E_ContinuousQueryReportCommand_Command, value)
-	require.NoError(t, err)
+	proto.SetExtension(cmd, proto2.E_ContinuousQueryReportCommand_Command, value)
 
 	resErr := applyContinuousQueryReport(fsm, cmd)
 	require.Nil(t, resErr)
@@ -489,8 +488,7 @@ func Test_applyDropContinuousQuery(t *testing.T) {
 	}
 	typ := proto2.Command_DropContinuousQueryCommand
 	cmd := &proto2.Command{Type: &typ}
-	err := proto.SetExtension(cmd, proto2.E_DropContinuousQueryCommand_Command, value)
-	require.NoError(t, err)
+	proto.SetExtension(cmd, proto2.E_DropContinuousQueryCommand_Command, value)
 
 	resErr := applyDropContinuousQuery(fsm, cmd)
 	require.Nil(t, resErr)
@@ -521,8 +519,7 @@ func Test_applyNotifyCQLeaseChanged(t *testing.T) {
 	value := &proto2.NotifyCQLeaseChangedCommand{}
 	typ := proto2.Command_NotifyCQLeaseChangedCommand
 	cmd := &proto2.Command{Type: &typ}
-	err := proto.SetExtension(cmd, proto2.E_NotifyCQLeaseChangedCommand_Command, value)
-	require.NoError(t, err)
+	proto.SetExtension(cmd, proto2.E_NotifyCQLeaseChangedCommand_Command, value)
 
 	resErr := applyNotifyCQLeaseChanged(fsm, cmd)
 	require.Nil(t, resErr)
@@ -570,8 +567,7 @@ func Test_applyUpdateMeasuremt(t *testing.T) {
 	}
 	typ := proto2.Command_UpdateMeasurementCommand
 	cmd := &proto2.Command{Type: &typ}
-	err := proto.SetExtension(cmd, proto2.E_UpdateMeasurementCommand_Command, value)
-	require.NoError(t, err)
+	proto.SetExtension(cmd, proto2.E_UpdateMeasurementCommand_Command, value)
 
 	resErr := applyUpdateMeasurement(fsm, cmd)
 	require.Nil(t, resErr)
@@ -641,9 +637,7 @@ func Test_getSnapshotV2(t *testing.T) {
 	}, proto2.E_CreateDatabaseCommand_Command
 	typ := proto2.Command_CreateDatabaseCommand
 	cmd2 := &proto2.Command{Type: &typ}
-	if err := proto.SetExtension(cmd2, ext, cmd1); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd2, ext, cmd1)
 	ret := applyCreateDatabase((*storeFSM)(s), cmd2)
 	if ret != nil {
 		t.Fatal("Test_getSnapshotV2 err2-1", ret.(error).Error())
@@ -655,7 +649,7 @@ func Test_getSnapshotV2(t *testing.T) {
 	}
 
 	s.data.OpsMap = make(map[uint64]*meta2.Op)
-	s.data.AddCmdAsOpToOpMap(*cmd2, 3)
+	s.data.AddCmdAsOpToOpMap(cmd2, 3)
 	s.data.Index = 3
 	s.data.UpdateNodeTmpIndexCommandStart = 3
 	storeBytes2 := s.getSnapshotV2(metaclient.STORE, 2, 2)
@@ -770,8 +764,7 @@ func Test_applyInsertFilesErr(t *testing.T) {
 	}
 	typ := proto2.Command_InsertFilesCommand
 	cmd := &proto2.Command{Type: &typ}
-	err := proto.SetExtension(cmd, proto2.E_InsertFilesCommand_Command, value)
-	require.NoError(t, err)
+	proto.SetExtension(cmd, proto2.E_InsertFilesCommand_Command, value)
 
 	applyInsertFilesCommand(fsm, cmd)
 }
@@ -820,7 +813,7 @@ func Test_applyInsertFiles(t *testing.T) {
 	}
 	typ := proto2.Command_InsertFilesCommand
 	cmd := &proto2.Command{Type: &typ}
-	err = proto.SetExtension(cmd, proto2.E_InsertFilesCommand_Command, value)
+	proto.SetExtension(cmd, proto2.E_InsertFilesCommand_Command, value)
 	require.NoError(t, err)
 
 	resErr := applyInsertFilesCommand(fsm, cmd)
@@ -835,11 +828,10 @@ func Test_executeCmdErr(t *testing.T) {
 	typ := proto2.Command_InsertFilesCommand
 	cmd := &proto2.Command{Type: &typ}
 	value := &proto2.InsertFilesCommand{}
-	err := proto.SetExtension(cmd, proto2.E_InsertFilesCommand_Command, value)
-	require.NoError(t, err)
+	proto.SetExtension(cmd, proto2.E_InsertFilesCommand_Command, value)
 	var errType proto2.Command_Type = math.MaxInt32
 	cmd.Type = &errType
-	fsm.executeCmd(*cmd)
+	fsm.executeCmd(cmd)
 }
 
 func Test_DeleteRpForLogkeeper(t *testing.T) {
@@ -936,11 +928,10 @@ func Test_executeUpdateIndexTierCmd(t *testing.T) {
 	typ := proto2.Command_UpdateIndexInfoTierCommand
 	cmd := &proto2.Command{Type: &typ}
 	value := &proto2.UpdateIndexInfoTierCommand{}
-	err := proto.SetExtension(cmd, proto2.E_UpdateIndexInfoTierCommand_Command, value)
-	require.NoError(t, err)
+	proto.SetExtension(cmd, proto2.E_UpdateIndexInfoTierCommand_Command, value)
 	var errType proto2.Command_Type = proto2.Command_UpdateIndexInfoTierCommand
 	cmd.Type = &errType
-	re := fsm.executeCmd(*cmd)
+	re := fsm.executeCmd(cmd)
 	assert2.NotEqual(t, re, nil)
 }
 
@@ -950,9 +941,8 @@ func Test_executeReplaceMergeShardsCmd(t *testing.T) {
 	typ := proto2.Command_ReplaceMergeShardsCommand
 	cmd := &proto2.Command{Type: &typ}
 	value := &proto2.ReplaceMergeShardsCommand{}
-	err := proto.SetExtension(cmd, proto2.E_ReplaceMergeShardsCommand_Command, value)
-	require.NoError(t, err)
-	re := fsm.executeCmd(*cmd)
+	proto.SetExtension(cmd, proto2.E_ReplaceMergeShardsCommand_Command, value)
+	re := fsm.executeCmd(cmd)
 	assert2.NotEqual(t, re, nil)
 }
 
@@ -1019,4 +1009,78 @@ func TestRepairPT(t *testing.T) {
 
 	store.config.RepairPT = false
 	assertPtStatus(meta2.Offline)
+}
+
+func Test_executeAlterShardsNumCmd(t *testing.T) {
+	s := &Store{Logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()), data: &meta2.Data{Databases: make(map[string]*meta2.DatabaseInfo)}}
+	fsm := (*storeFSM)(s)
+	typ := proto2.Command_AlterShardsNumCommand
+	cmd := &proto2.Command{Type: &typ}
+	value := &proto2.AlterShardsNumCommand{}
+	proto.SetExtension(cmd, proto2.E_AlterShardsNumCommand_Command, value)
+	re := fsm.executeCmd(cmd)
+	assert2.NotEqual(t, re, nil)
+}
+
+func Test_forceMetaData(t *testing.T) {
+	newData := &meta2.Data{
+		PtNumPerNode: 6,
+	}
+	s := &Store{
+		raft:   &MockRaft{isLeader: true},
+		config: config.NewMeta(),
+		cacheData: &meta2.Data{
+			PtNumPerNode: 5,
+		},
+		cacheDataBytes:   []byte{1, 2, 3},
+		cacheDataChanged: make(chan struct{}),
+	}
+	err := s.forceMetaData(newData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.data.PtNumPerNode != newData.PtNumPerNode {
+		t.Fatal("forceMetaData fail")
+	}
+}
+
+func TestStoreServeSnapshot(t *testing.T) {
+	convey.Convey("test store serve snapshot", t, func() {
+		s := &Store{closing: make(chan struct{}), dataChanged: make(chan struct{})}
+		p1 := gomonkey.ApplyPrivateMethod(s, "index", func(_ *Store) uint64 {
+			return 8
+		})
+		defer p1.Reset()
+
+		p2 := gomonkey.ApplyPrivateMethod(s, "cacheIndex", func(_ *Store) uint64 {
+			return 0
+		})
+		defer p2.Reset()
+
+		callCount := 0
+		p3 := gomonkey.ApplyPrivateMethod(s, "updateCacheData", func(_ *Store) {
+			callCount++
+			if callCount >= 3 {
+				close(s.closing)
+			}
+		})
+		defer p3.Reset()
+
+		s.wg.Add(1)
+		go s.serveSnapshot()
+		s.wg.Wait()
+		convey.So(callCount, convey.ShouldBeGreaterThanOrEqualTo, 3)
+		close(s.dataChanged)
+	})
+}
+
+func Test_executeUpdateShardingPlanCmd(t *testing.T) {
+	s := &Store{Logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()), data: &meta2.Data{Databases: make(map[string]*meta2.DatabaseInfo)}}
+	fsm := (*storeFSM)(s)
+	typ := proto2.Command_UpdateShardingPlanCommand
+	cmd := &proto2.Command{Type: &typ}
+	value := &proto2.UpdateShardingPlanCommand{}
+	proto.SetExtension(cmd, proto2.E_UpdateShardingPlanCommand_Command, value)
+	re := fsm.executeCmd(cmd)
+	assert2.Equal(t, re, nil)
 }

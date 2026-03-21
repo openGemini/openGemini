@@ -5,7 +5,7 @@ import (
 	"io"
 	"sort"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 )
 
 // metaindexRow describes a block of blockHeaders aka index block.

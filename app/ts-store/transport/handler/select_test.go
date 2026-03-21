@@ -22,10 +22,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/transport/query"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/lastrowcache"
 	"github.com/openGemini/openGemini/lib/cache"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -40,6 +42,8 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	qry "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
 
@@ -221,6 +225,7 @@ func TestCreateSerfInstance(t *testing.T) {
 		PtID:     2,
 		NodeID:   1,
 		ShardIDs: shardIDs,
+		Opt:      qry.ProcessorOptions{Sources: []influxql.Source{&influxql.Measurement{}}},
 		Node:     node,
 	}
 
@@ -339,6 +344,7 @@ func TestSelectProcessor(t *testing.T) {
 func mockStorage(dir string) *storage.Storage {
 	node := metaclient.NewNode(dir + "/meta")
 	storeConfig := config.NewStore()
+	storeConfig.InitFields()
 	monitorConfig := config.Monitor{
 		Pushers:      "http",
 		StoreEnabled: true,
@@ -421,4 +427,146 @@ func TestSelectForCsstore(t *testing.T) {
 	if err == nil {
 		t.Fatal()
 	}
+}
+
+func TestProcessLastRowCache(t *testing.T) {
+	convey.Convey("test last row cache normal", t, func() {
+		s := Select{}
+		w := &transport.Responser{}
+
+		fields := influxql.Fields{{Expr: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "test"}}}}}
+		fakeSchema := &executor.QuerySchema{}
+		p := gomonkey.ApplyMethod(fakeSchema, "GetQueryFields", func() influxql.Fields {
+			return fields
+		})
+		defer p.Reset()
+		planSingle := executor.NewLogicalPlanSingle(nil, fakeSchema)
+
+		node := &executor.LogicalExchange{LogicalPlanSingle: *planSingle}
+		remoteQuery := &executor.RemoteQuery{Opt: qry.ProcessorOptions{Sources: influxql.Sources{&influxql.Measurement{Database: "test", RetentionPolicy: "autogen"}}, SeriesKey: []byte("test,vin=65535")}}
+
+		p2 := gomonkey.ApplyFunc(lastrowcache.Get, func(_, _ string, _ []byte, _ []string) (int64, map[string]any, bool) {
+			return 0, map[string]any{"test": int64(1), "test2": "w", "test3": true, "test4": 2.22, "test6": false}, true
+		})
+		defer p2.Reset()
+		p3 := gomonkey.ApplyFunc(influx.MeasurementName, func(src []byte) ([]byte, []byte, error) {
+			return []byte("test"), []byte{}, nil
+		})
+		defer p3.Reset()
+
+		p4 := gomonkey.ApplyMethod(node, "RowDataType", func() hybridqp.RowDataType {
+			return hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "test", Type: influxql.Integer}, influxql.VarRef{Val: "test2", Type: influxql.String},
+				influxql.VarRef{Val: "test3", Type: influxql.Boolean}, influxql.VarRef{Val: "test4", Type: influxql.Float},
+				influxql.VarRef{Val: "test4", Type: influxql.Float}, influxql.VarRef{Val: "test6", Type: influxql.Boolean})
+		})
+		defer p4.Reset()
+
+		p5 := gomonkey.ApplyFunc(influx.IndexKeyToTags, func(_ []byte, _ bool, _ *influx.PointTags) (*influx.PointTags, error) {
+			return nil, nil
+		})
+		defer p5.Reset()
+
+		p6 := gomonkey.ApplyMethod(w, "Response", func(*transport.Responser, interface{}, bool) error {
+			return nil
+		})
+		defer p6.Reset()
+
+		rnoutputs := []gomonkey.OutputCell{
+			{Values: gomonkey.Params{"test"}},
+			{Values: gomonkey.Params{"test2"}},
+			{Values: gomonkey.Params{"test3"}},
+			{Values: gomonkey.Params{"test4"}},
+			{Values: gomonkey.Params{"test5"}},
+			{Values: gomonkey.Params{"test6"}},
+		}
+		p7 := gomonkey.ApplyFuncSeq(executor.LastRowFieldKey, rnoutputs)
+		defer p7.Reset()
+
+		ok := s.processLastRowCache(w, node, remoteQuery)
+		convey.So(ok, convey.ShouldBeTrue)
+
+	})
+
+	convey.Convey("test last row cache wrong type", t, func() {
+		s := Select{}
+		w := &transport.Responser{}
+
+		fields := influxql.Fields{{Expr: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "test"}}}}}
+		fakeSchema := &executor.QuerySchema{}
+		p := gomonkey.ApplyMethod(fakeSchema, "GetQueryFields", func() influxql.Fields {
+			return fields
+		})
+		defer p.Reset()
+		planSingle := executor.NewLogicalPlanSingle(nil, fakeSchema)
+
+		node := &executor.LogicalExchange{LogicalPlanSingle: *planSingle}
+		remoteQuery := &executor.RemoteQuery{Opt: qry.ProcessorOptions{Sources: influxql.Sources{&influxql.Measurement{Database: "test", RetentionPolicy: "autogen"}}, SeriesKey: []byte("test,vin=65535")}}
+
+		p2 := gomonkey.ApplyFunc(lastrowcache.Get, func(_, _ string, _ []byte, _ []string) (int64, map[string]any, bool) {
+			return 0, map[string]any{"test": int64(1), "test2": "w", "test3": true, "test4": 2.22, "test6": time.Now()}, true
+		})
+		defer p2.Reset()
+		p3 := gomonkey.ApplyFunc(influx.MeasurementName, func(src []byte) ([]byte, []byte, error) {
+			return []byte("test"), []byte{}, nil
+		})
+		defer p3.Reset()
+
+		p4 := gomonkey.ApplyMethod(node, "RowDataType", func() hybridqp.RowDataType {
+			return hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "test", Type: influxql.Integer}, influxql.VarRef{Val: "test2", Type: influxql.String},
+				influxql.VarRef{Val: "test3", Type: influxql.Boolean}, influxql.VarRef{Val: "test4", Type: influxql.Float},
+				influxql.VarRef{Val: "test4", Type: influxql.Float}, influxql.VarRef{Val: "test6", Type: influxql.Duration})
+		})
+		defer p4.Reset()
+
+		p5 := gomonkey.ApplyFunc(influx.IndexKeyToTags, func(_ []byte, _ bool, _ *influx.PointTags) (*influx.PointTags, error) {
+			return nil, nil
+		})
+		defer p5.Reset()
+
+		p6 := gomonkey.ApplyMethod(w, "Response", func(*transport.Responser, interface{}, bool) error {
+			return nil
+		})
+		defer p6.Reset()
+
+		rnoutputs := []gomonkey.OutputCell{
+			{Values: gomonkey.Params{"test"}},
+			{Values: gomonkey.Params{"test2"}},
+			{Values: gomonkey.Params{"test3"}},
+			{Values: gomonkey.Params{"test4"}},
+			{Values: gomonkey.Params{"test5"}},
+			{Values: gomonkey.Params{"test6"}},
+		}
+		p7 := gomonkey.ApplyFuncSeq(executor.LastRowFieldKey, rnoutputs)
+		defer p7.Reset()
+
+		ok := s.processLastRowCache(w, node, remoteQuery)
+		convey.So(ok, convey.ShouldBeFalse)
+
+	})
+}
+
+func TestProcessLastRowCacheAbnormal(t *testing.T) {
+	convey.Convey("processLastRowCache abnormal scenario", t, func() {
+		w := &transport.Responser{}
+		fakeSchema := &executor.QuerySchema{}
+		planSingle := executor.NewLogicalPlanSingle(nil, fakeSchema)
+
+		node := &executor.LogicalExchange{LogicalPlanSingle: *planSingle}
+		s := &Select{}
+		req := &executor.RemoteQuery{Opt: qry.ProcessorOptions{Sources: influxql.Sources{&influxql.SubQuery{}}}}
+
+		ans := s.processLastRowCache(w, node, req)
+		convey.So(ans, convey.ShouldBeFalse)
+	})
+}
+
+func TestAllCacheValuesAreNil(t *testing.T) {
+	convey.Convey("", t, func() {
+		allNisMap := make(map[string]any)
+		allNisMap["test1"] = nil
+		allNisMap["test2"] = 333
+		convey.So(checkAllValuesNil(allNisMap), convey.ShouldBeFalse)
+		allNisMap["test2"] = nil
+		convey.So(checkAllValuesNil(allNisMap), convey.ShouldBeTrue)
+	})
 }

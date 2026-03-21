@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/prompb"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/prompb"
 	"github.com/prometheus/common/model"
 )
 

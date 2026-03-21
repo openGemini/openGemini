@@ -465,3 +465,11 @@ func (l *entryLog) Close() error {
 	}
 	return errors.CombineErrors(l.current.Close(), err)
 }
+
+func (l *entryLog) FileRLock() {
+	l.filesSync.RLock()
+}
+
+func (l *entryLog) FileRUnLock() {
+	l.filesSync.RUnlock()
+}

@@ -28,6 +28,8 @@ import (
 	"github.com/openGemini/openGemini/app/ts-store/transport"
 	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/immutable/compactor"
+	"github.com/openGemini/openGemini/engine/lastrowcache"
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/compress"
@@ -41,6 +43,7 @@ import (
 	spdyTransport "github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	lastrowcache2 "github.com/openGemini/openGemini/lib/statisticsPusher/statistics/lastrowcache"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
@@ -48,8 +51,10 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 	"github.com/openGemini/openGemini/services"
 	"github.com/openGemini/openGemini/services/consume"
+	"github.com/openGemini/openGemini/services/export"
 	"github.com/openGemini/openGemini/services/sherlock"
 	stream2 "github.com/openGemini/openGemini/services/stream"
+	"github.com/openGemini/openGemini/services/task"
 	"go.uber.org/zap"
 )
 
@@ -77,7 +82,8 @@ type Server struct {
 	metaClient   metaclient.MetaClient
 	OpsService   *Service // provide a kernel metric collection channel for cloud service versions
 
-	iodetector *iodetector.IODetector
+	iodetector  *iodetector.IODetector
+	monitorPass string
 }
 
 // NewServer returns a new instance of Server built from a config.
@@ -86,6 +92,8 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 		info:   info,
 		Logger: logger,
 	}
+	s.monitorPass = *info.MonitorPass
+	*info.MonitorPass = ""
 
 	conf := c.(*config.TSStore)
 	conf.Data.Corrector(cpu.GetCpuNum(), conf.Common.MemorySize)
@@ -104,7 +112,9 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	immutable.SetChunkMetaCompressMode(conf.Data.ChunkMetaCompressMode)
 	config.SetStoreConfig(conf.Data)
 	config.SetIndexConfig(conf.Index)
+	config.SetLastRowCacheConfig(conf.LastRowCache)
 	config.SetShelfMode(conf.ShelfMode)
+	config.SetAdaptiveShardEnabled(conf.Meta.AdaptiveShardingEnabled)
 	compress.Init()
 	mutable.Init(cpu.GetCpuNum())
 	shelf.Open()
@@ -154,6 +164,7 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	logstore.StartHotDataDetector()
 	immutable.NewHotFileManager().Run()
 	immutable.NewCSParquetManager().Run()
+	compactor.InitColStoreCompactor()
 
 	return s, nil
 }
@@ -222,6 +233,9 @@ func (s *Server) Open() error {
 	} // wait for ts-meta to be ready
 
 	log := Logger.GetLogger()
+	if err = config.UpdateTimeZoneLoc(s.config.Meta.ShardGroupTimeZone); err != nil {
+		log.Warn("invaild time zone config, use default time zone (UTC)", zap.Error(err))
+	}
 	s.storage, err = storage.OpenStorage(s.storageDataPath, s.node, s.metaClient.(*metaclient.Client), s.config)
 	if err != nil {
 		er := fmt.Errorf("cannot open a storage at %s, %s", s.storageDataPath, err)
@@ -258,12 +272,20 @@ func (s *Server) Open() error {
 	if role := s.info.App; s.config.HTTPD.FlightEnabled && (role == config.AppSingle || role == config.AppData) {
 		services.SetStorageEngine(s.stream)
 	}
+
+	if s.config.LastRowCache.CacheEnabled {
+		lastrowcache.SetLastRowCacheEnabled(true)
+		if err = lastrowcache.InitCache(); err != nil {
+			return err
+		}
+	}
 	return err
 }
 
 func (s *Server) openService() error {
 	s.OpsService = NewService(&s.config.Data)
 	s.OpsService.Init(s.metaClient, s.statisticsPusher)
+	s.group.Add(s.OpsService)
 
 	if s.config.Sherlock.SherlockEnable {
 		sherlockService := sherlock.NewService(s.config.Sherlock)
@@ -272,6 +294,15 @@ func (s *Server) openService() error {
 	}
 	if s.config.Data.Consume.ConsumeEnable {
 		s.group.Add(consume.NewService(s.metaClient, s.storage.GetEngine()))
+	}
+	if s.config.Data.DataExport.Enabled {
+		s.group.Add(export.NewService(s.metaClient, s.storage.GetEngine(), time.Duration(s.config.Data.DataExport.RunInterval)))
+	}
+	if s.config.Common.TaskNodeEnabled && s.config.Data.Compact.CompactionMode == config.CompactOnLocal {
+		compactService := task.NewCompactService(task.CompactionInterval, s.storage.GetEngine())
+		compactService.WithLogger(s.Logger)
+		compactService.MetaClient = s.metaClient
+		s.group.Add(compactService)
 	}
 	return s.group.Open()
 }
@@ -313,6 +344,12 @@ func (s *Server) initStatisticsPusher() {
 		return
 	}
 
+	if s.monitorPass != "" {
+		s.config.Monitor.Password = s.monitorPass
+		s.config.Monitor.RetentionPolicy = config.MonitorServitizationRetentionPolicy
+		s.monitorPass = ""
+	}
+
 	s.statisticsPusher = statisticsPusher.NewStatisticsPusher(&s.config.Monitor, s.Logger)
 	if s.statisticsPusher == nil {
 		return
@@ -341,6 +378,9 @@ func (s *Server) initStatisticsPusher() {
 		stat.CollectSpdyStatistics,
 		stat.NewOOOTimeDistribution().Collect,
 		stat.NewCollector().Collect,
+		stat.NewMetaStatistics().Collect,
+		lastrowcache2.CollectLastRowCacheStatistics,
+		stat.CollectPtWriteStatistics,
 	)
 
 	s.statisticsPusher.RegisterOps(stat.CollectOpsPerfStatistics)
@@ -352,6 +392,8 @@ func (s *Server) initStatisticsPusher() {
 	s.statisticsPusher.RegisterOps(stat.NewErrnoStat().CollectOps)
 	s.statisticsPusher.RegisterOps(s.storage.GetEngine().StatisticsOps)
 	s.statisticsPusher.RegisterOps(stat.NewCollector().CollectOps)
+	s.statisticsPusher.RegisterOps(stat.NewMetaStatistics().CollectOps)
+	s.statisticsPusher.RegisterOps(lastrowcache2.CollectOpsLastRowCacheStatistics)
 	s.statisticsPusher.Start()
 }
 
@@ -380,4 +422,7 @@ func (s *Server) initStatistics() {
 	stat.InitSpdyStatistics(globalTags)
 	spdyTransport.InitStatistics(spdyTransport.AppStore)
 	stat.NewOOOTimeDistribution().Init(globalTags)
+	stat.NewMetaStatistics().Init(globalTags)
+	lastrowcache2.InitLastRowCacheStatistics(globalTags)
+	stat.InitPtWriteStatistics(globalTags, s.config.Meta.MetaStatisticsPullEnabled, s.config.Meta.WriteTrafficCollectRatio)
 }
