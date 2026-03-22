@@ -13,7 +13,16 @@ if [[ $has_proto -ne 0 ]]; then
 fi
 
 shopt -s expand_aliases
-alias protoc='protoc_v32' # compatibility with historical code
+
+if command -v protoc_v32 >/dev/null 2>&1; then
+    alias protoc='protoc_v32' # compatibility with historical code
+elif command -v protoc >/dev/null 2>&1; then
+    alias protoc='protoc'
+else
+    echo "protoc/protoc_v32 not found. Please install protoc ${PROTOC_VERSION:-32.0}."
+    exit 127
+fi
+
 protoc --version
 go generate -x ./...
 
@@ -26,6 +35,7 @@ cd $WORKSPACE || exit 1;
 
 sed -i "s#package data#package msgservice_data#" lib/msgservice/data/data.pb.go
 sed -i "s#proto \"../proto\"#\"github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto\"#"  lib/msgservice/data/data.pb.go
+sed -i "s#proto \"github.com/gogo/protobuf/proto\"#proto \"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto\"#" lib/util/lifted/influx/influxql/internal/internal.pb.go
 
 checkGrammarDepth() {
   processed=$1

@@ -16,6 +16,7 @@ package immutable
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/comm"
@@ -295,13 +296,14 @@ func (m MocTsspFile) RenameOnObs(newName string, tmp bool, opt *obs.ObsOptions) 
 }
 
 func TestGetTsspFiles(t *testing.T) {
+	mockPath := filepath.Join(t.TempDir(), "openGemini")
 	m := &MmsTables{
 		Order: map[string]*TSSPFiles{"table1": &TSSPFiles{files: []TSSPFile{MocTsspFile{
-			path: "/tmp/openGemini",
+			path: mockPath,
 		}}}},
 	}
 	f, _ := m.GetTSSPFiles("table1", true)
-	if f.files[0].Path() != "/tmp/openGemini" {
+	if f.files[0].Path() != mockPath {
 		t.Fatal()
 	}
 }

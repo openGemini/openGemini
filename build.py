@@ -623,4 +623,3 @@ if __name__ == '__main__':
     # We use Click to parse arguments, so ignore the warning by PyLint complaining that
     # calling main() without arguments.
     main()      # pylint: disable=no-value-for-parameter
-

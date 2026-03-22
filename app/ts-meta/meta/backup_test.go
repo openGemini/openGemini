@@ -16,6 +16,7 @@ package meta
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/config"
@@ -30,7 +31,8 @@ import (
 func TestRunBackup(t *testing.T) {
 	conf := config.NewMeta()
 	_ = NewService(conf, nil, nil)
-	CreateMeteFile()
+	metaPath := CreateMeteFile(t)
+	backupPath := t.TempDir()
 
 	t.Run("1", func(t *testing.T) {
 		s := &Store{
@@ -40,7 +42,7 @@ func TestRunBackup(t *testing.T) {
 					meta.DataNode{NodeInfo: meta.NodeInfo{ID: 1}},
 				},
 			},
-			path:   "/tmp/openGemini/backup_dir/data/meta",
+			path:   metaPath,
 			Logger: logger.NewLogger(errno.ModuleMeta).With(zap.String("service", "meta")),
 			cacheData: &meta.Data{
 				MetaNodes: []meta.NodeInfo{meta.NodeInfo{ID: 1}, meta.NodeInfo{ID: 2}},
@@ -49,7 +51,7 @@ func TestRunBackup(t *testing.T) {
 		globalService.store = s
 
 		b := &Backup{
-			BackupPath: "/tmp",
+			BackupPath: backupPath,
 			IsNode:     true,
 			IsRemote:   false,
 		}
@@ -62,7 +64,7 @@ func TestRunBackup(t *testing.T) {
 			raft: &MockRaftForSG{isLeader: false},
 		}
 		b := &Backup{
-			BackupPath: "/tmp",
+			BackupPath: backupPath,
 			IsNode:     true,
 			IsRemote:   false,
 		}
@@ -76,7 +78,7 @@ func TestRunBackup(t *testing.T) {
 			raft: &MockRaftForSG{isLeader: true},
 		}
 		b := &Backup{
-			BackupPath: "/tmp",
+			BackupPath: backupPath,
 			IsNode:     true,
 			IsRemote:   false,
 		}
@@ -95,7 +97,7 @@ func TestRunBackup(t *testing.T) {
 			},
 		}
 		b := &Backup{
-			BackupPath: "/tmp",
+			BackupPath: backupPath,
 			IsNode:     true,
 			IsRemote:   false,
 			Databases:  []string{"prom"},
@@ -106,14 +108,16 @@ func TestRunBackup(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	os.RemoveAll("/tmp/openGemini/backup_dir")
 }
 
-func CreateMeteFile() {
-	_ = os.MkdirAll("/tmp/openGemini/backup_dir/data/meta/", 0700)
-	fd, _ := fileops.OpenFile("/tmp/openGemini/backup_dir/data/meta/meta.json", os.O_CREATE|os.O_WRONLY, 0640)
+func CreateMeteFile(t *testing.T) string {
+	t.Helper()
+
+	metaDir := filepath.Join(t.TempDir(), "backup_dir", "data", "meta")
+	_ = os.MkdirAll(metaDir, 0700)
+	fd, _ := fileops.OpenFile(filepath.Join(metaDir, "meta.json"), os.O_CREATE|os.O_WRONLY, 0640)
 	defer fd.Close()
 
 	fd.Write([]byte("123"))
-
+	return metaDir
 }

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -55,9 +56,10 @@ func killTsstore3(t *testing.T) error {
 }
 
 func startTsstore3(t *testing.T) {
-	_ = os.MkdirAll("/tmp/openGemini/logs/3", 0700)
+	logDir := filepath.Join(os.TempDir(), "openGemini", "logs", "3")
+	_ = os.MkdirAll(logDir, 0700)
 	confFile := "config/openGemini-3.conf "
-	logFile := "/tmp/openGemini/logs/3/store_extra3.log"
+	logFile := filepath.Join(logDir, "store_extra3.log")
 
 	command := "cd ..; nohup build/ts-store -config " + confFile + ">" + logFile + " 2>&1 &"
 	cmd := exec.Command("/bin/bash", "-c", command)

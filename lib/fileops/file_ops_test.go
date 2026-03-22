@@ -490,7 +490,8 @@ func TestOpenObsFile(t *testing.T) {
 }
 
 func TestGetRemoteDataPath(t *testing.T) {
-	rootDir := "/tmp/openGemini/data/GetRemoteDataPath"
+	prefixBase := filepath.Join(t.TempDir(), "openGemini", "data")
+	rootDir := filepath.Join(prefixBase, "GetRemoteDataPath")
 	obsOpt := &obs.ObsOptions{
 		Endpoint:   "mock_endpoint",
 		Ak:         "mock_ak",
@@ -503,11 +504,11 @@ func TestGetRemoteDataPath(t *testing.T) {
 	targetPath := GetRemoteDataPath(nil, rootDir)
 	assert.Equal(t, "", targetPath)
 
-	obs.SetPrefixDataPath("/tmp/openGemini/data")
+	obs.SetPrefixDataPath(prefixBase)
 	targetPath = GetRemoteDataPath(obsOpt, rootDir)
 	assert.Equal(t, "obs:/mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/GetRemoteDataPath", targetPath)
 
-	obs.SetPrefixDataPath("/tmp/openGemini/data/")
+	obs.SetPrefixDataPath(prefixBase + "/")
 	targetPath = GetRemoteDataPath(obsOpt, rootDir)
 	assert.Equal(t, "obs:/mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/GetRemoteDataPath", targetPath)
 
@@ -604,7 +605,7 @@ func TestGetSubDirInfosForObsReadDirs(t *testing.T) {
 }
 
 //func TestFileOps(t *testing.T) {
-//	obs.SetPrefixDataPath("/tmp/openGemini/data")
+//	obs.SetPrefixDataPath("/tmp/prefixDataPath")
 //	dbObsOptions := &obs.ObsOptions{
 //		Enabled:    true,
 //		BucketName: "gemini-test01",
@@ -614,7 +615,7 @@ func TestGetSubDirInfosForObsReadDirs(t *testing.T) {
 //		BasePath:   "",
 //	}
 //	var vfsInstance vfs
-//	actual := (*vfs).GetOBSTmpIndexFileName(&vfsInstance, "/tmp/openGemini/data", dbObsOptions)
+//	actual := (*vfs).GetOBSTmpIndexFileName(&vfsInstance, "/tmp/prefixDataPath", dbObsOptions)
 //	assert.Equal(t, actual, "obs://ep/ak/sk/gemini-test01/test/openGemini/txTest")
 //}
 

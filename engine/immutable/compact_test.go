@@ -3765,9 +3765,10 @@ func TestGenFilePath(t *testing.T) {
 }
 
 func TestFullyCompacted(t *testing.T) {
+	mockPath := filepath.Join(t.TempDir(), "openGemini")
 	m := &MmsTables{
 		CSFiles: map[string]*TSSPFiles{"table1": &TSSPFiles{files: []TSSPFile{MocTsspFile{
-			path: "/tmp/openGemini",
+			path: mockPath,
 		}}}},
 		stopCompMerge: make(chan struct{}),
 	}
