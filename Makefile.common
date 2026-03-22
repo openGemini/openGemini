@@ -60,8 +60,8 @@ install-exhaustruct:
 	@$(GO) install github.com/GaijinEntertainment/go-exhaustruct/v3/cmd/exhaustruct@v3.3.1
 
 install-protoc:
-	@VERSION=$$(protoc --version); if [ "$$VERSION" = "libprotoc $(PROTOC_VERSION)" ]; then exit 0; fi; \
-	VERSION32=$$(protoc_v32 --version); if [ "$$VERSION32" = "libprotoc $(PROTOC_VERSION)" ]; then exit 0; fi; \
+	@VERSION=$$(protoc --version 2>/dev/null || true); if [ "$$VERSION" = "libprotoc $(PROTOC_VERSION)" ]; then exit 0; fi; \
+	VERSION32=$$(protoc_v32 --version 2>/dev/null || true); if [ "$$VERSION32" = "libprotoc $(PROTOC_VERSION)" ]; then exit 0; fi; \
 	if [ $$(uname -s) = "Linux" ];  then \
   		make install-protoc-linux; \
 	elif [ $$(uname -s) = "Darwin" ];  then \

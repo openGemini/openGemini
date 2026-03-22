@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  release:
-    types: [ created ]
 
 jobs:
   release-tag-docker:

@@ -17,6 +17,7 @@ package meta_test
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"sort"
@@ -2653,7 +2654,7 @@ func TestStore_meteRecover(t *testing.T) {
 
 	dir := t.TempDir()
 	mms, err := meta.BuildMockMetaService(dir, "127.0.0.1")
-	mms.GetConfig().DataDir = "/tmp/openGemini/data"
+	mms.GetConfig().DataDir = filepath.Join(dir, "openGemini", "data")
 	mms.GetConfig().MetaRecover = true
 	mms.GetConfig().Version = 1
 	if err != nil {

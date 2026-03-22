@@ -40,9 +40,3 @@ class Series_decomp(nn.Module):
         denoise_signal = torch.Tensor(pywt.waverec([cA]+details, self.wavelet))
         noise = x - denoise_signal
         return denoise_signal, noise
-
-
-
-
-
-

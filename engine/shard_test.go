@@ -6444,8 +6444,9 @@ func TestInterEngine_DoShardMove_Mock(t *testing.T) {
 	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
 	require.NoError(t, err)
 
+	mockPath := filepath.Join(t.TempDir(), "openGemini")
 	file := MocTsspFile{
-		path: "/tmp/openGemini",
+		path: mockPath,
 	}
 	mockobsName := "00000001-0000-00000000.tssp.init"
 

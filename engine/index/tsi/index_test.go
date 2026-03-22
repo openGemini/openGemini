@@ -2861,12 +2861,13 @@ func TestGroupSeries_Reverse(t *testing.T) {
 }
 
 func TestReplaceByNoClearIndexId(t *testing.T) {
+	testDir := t.TempDir()
 	ib := &IndexBuilder{}
-	ib.SetPath("/tmp/openGemini/backup_dir/data/data/db0/0/rp0/index")
+	ib.SetPath(filepath.Join(testDir, "backup_dir", "data", "data", "db0", "0", "rp0", "index"))
 	_, _, err := ib.ReplaceByNoClearIndexId(1)
 	assert.Error(t, err)
 
-	ib.SetPath("/tmp/openGemini/backup_dir/data/data/db0/0/rp0/index/5_1708905600000000000_1709510400000000000")
+	ib.SetPath(filepath.Join(testDir, "backup_dir", "data", "data", "db0", "0", "rp0", "index", "5_1708905600000000000_1709510400000000000"))
 	_, _, err = ib.ReplaceByNoClearIndexId(1)
 	assert.NoError(t, err)
 }

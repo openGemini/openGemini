@@ -21,7 +21,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -95,15 +95,16 @@ func TestRecoverDatabase(t *testing.T) {
 	go mockHTTPServer(false, "127.0.0.1:8901", t)
 
 	time.Sleep(1 * time.Second)
-	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
-	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
+	backupRoot := filepath.Join(t.TempDir(), "backup_dir")
+	fullBackupPath := filepath.Join(backupRoot, "backup")
+	incBackupPath := filepath.Join(backupRoot, "backup_inc")
 
 	opt := &recover2.RecoverOptions{
 		RecoverMode:        "2",
 		FullBackupDataPath: fullBackupPath,
 		IncBackupDataPath:  incBackupPath,
 		Host:               "127.0.0.1:8086",
-		DataDir:            "/tmp/openGemini/backup_dir/data",
+		DataDir:            filepath.Join(backupRoot, "data"),
 	}
 
 	result := backup.BackupResult{Result: "success", Databases: map[string]struct{}{"prom": {}}}
@@ -118,8 +119,6 @@ func TestRecoverDatabase(t *testing.T) {
 		}
 	})
 
-	os.RemoveAll(fullBackupPath)
-	os.RemoveAll(incBackupPath)
 }
 
 func TestHttpHandler_ServeHTTP(t *testing.T) {
