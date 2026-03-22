@@ -30,11 +30,13 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
@@ -507,6 +509,22 @@ func (g *RowsGenerator) buildColumnNames(name string, rdt hybridqp.RowDataType) 
 	return g.columnNames
 }
 
+func (g *RowsGenerator) buildColumnNamesFromRec(name string, schema record.Schemas) []string {
+	if g.name == name {
+		return g.columnNames
+	}
+	if g.name != "" {
+		g.columnNames = make([]string, 0, len(schema)+1)
+	}
+
+	g.name = name
+	g.columnNames = append(g.columnNames[:0], "time")
+	for i := 0; i < len(schema)-1; i++ {
+		g.columnNames = append(g.columnNames, schema[i].Name)
+	}
+	return g.columnNames
+}
+
 func (g *RowsGenerator) Generate(chunk Chunk, loc *time.Location) models.Rows {
 	chunkTags := chunk.Tags()
 	tagIndex := chunk.TagIndex()
@@ -540,6 +558,23 @@ func (g *RowsGenerator) Generate(chunk Chunk, loc *time.Location) models.Rows {
 	return rows
 }
 
+func (g *RowsGenerator) GenerateFromRecord(rec *record.Record, loc *time.Location, name string, schema record.Schemas) models.Rows {
+	times := rec.Times()
+	colVals := rec.ColVals
+	columnNames := g.buildColumnNamesFromRec(name, rec.Schema)
+
+	rows := make(models.Rows, 0, 1)
+	tmpRows := g.allocRows(1)
+	start := 0
+	end := len(times)
+	row := &tmpRows[0]
+	row.Name = name
+	row.Columns = columnNames
+	row.Values = g.buildValuesFromRec(end, start, times, loc, colVals, schema)
+	rows = append(rows, row)
+	return rows
+}
+
 func (g *RowsGenerator) buildValues(end int, start int, times []int64, loc *time.Location, columns []Column) [][]interface{} {
 	var values = make([][]interface{}, end-start)
 	for i := 0; i < end-start; i++ {
@@ -550,6 +585,40 @@ func (g *RowsGenerator) buildValues(end int, start int, times []int64, loc *time
 		}
 	}
 	return values
+}
+
+func (g *RowsGenerator) buildValuesFromRec(end int, start int, times []int64, loc *time.Location, colVals []record.ColVal, schema record.Schemas) [][]interface{} {
+	var values = make([][]interface{}, end-start)
+	for i := 0; i < end-start; i++ {
+		values[i] = g.allocValues(len(colVals))
+		values[i][0] = time.Unix(0, times[start+i]).In(loc)
+		for j := 0; j < len(colVals)-1; j++ {
+			values[i][j+1], _ = g.GetColValueFromRec(colVals[j], start+i, schema[j])
+		}
+	}
+	return values
+}
+
+func (g *RowsGenerator) GetColValueFromRec(col record.ColVal, idx int, ref record.Field) (interface{}, bool) {
+	if col.NilCount > 0 {
+		if col.IsNil(idx) {
+			return nil, true
+		}
+	}
+	switch ref.Type {
+	case influx.Field_Type_Float:
+		return col.FloatValue(idx)
+	case influx.Field_Type_Int:
+		return col.IntegerValue(idx)
+	case influx.Field_Type_Boolean:
+		return col.BooleanValue(idx)
+	case influx.Field_Type_String, influx.Field_Type_Tag:
+		oriStr, isNil := col.StringValue(idx)
+		newStr := g.allocBytes(len(oriStr))
+		copy(newStr, oriStr)
+		return util.Bytes2str(newStr), isNil
+	}
+	return nil, true
 }
 
 func (g *RowsGenerator) GetColValue(col2 Column, idx int) interface{} {
@@ -636,6 +705,9 @@ func SetTimeZero(schema *QuerySchema) bool {
 		}
 		return false
 	}
+	if schema.IsLastRowQuery() || schema.IsLastFieldQuery() {
+		return false
+	}
 	for i := range calls {
 		if transformationCall[calls[i].Name] {
 			return false
@@ -652,13 +724,15 @@ type RecordsGenerator struct {
 	chunkedSize   int
 	name          string
 	err           error
+	opt           hybridqp.Options
 }
 
-func NewRecordsGenerator(chunkedSize int) *RecordsGenerator {
+func NewRecordsGenerator(chunkedSize int, opt hybridqp.Options) *RecordsGenerator {
 	pool := memory.NewGoAllocator()
 	return &RecordsGenerator{
 		pool:        pool,
 		chunkedSize: chunkedSize,
+		opt:         opt,
 	}
 }
 
@@ -688,10 +762,6 @@ func (g *RecordsGenerator) Generate(chunk Chunk, lastChunk bool, records []*mode
 		g.recordBuilder = array.NewRecordBuilder(g.pool, g.schema)
 	}
 	tagIndexLen := len(tagIndex)
-	if tagIndexLen > 0 && g.prevTags != nil && !hybridqp.EqualMap(chunkTags[0].KeyValues(), g.prevTags) {
-		record := g.recordBuilder.NewRecord()
-		records = append(records, &models.RecordContainer{Name: name, Data: record, Tags: chunkTags[0].KeyValues()})
-	}
 	var start, end int
 	for index := 0; index < tagIndexLen; index++ {
 		start = tagIndex[index]
@@ -700,6 +770,11 @@ func (g *RecordsGenerator) Generate(chunk Chunk, lastChunk bool, records []*mode
 		} else {
 			end = tagIndex[index+1]
 		}
+		tags := chunkTags[index].KeyValues()
+		if index == 0 && tagIndexLen > 0 && g.prevTags != nil && !hybridqp.EqualMap(tags, g.prevTags) {
+			record := g.recordBuilder.NewRecord()
+			records = append(records, &models.RecordContainer{Name: name, Data: record, Tags: g.prevTags})
+		}
 		err = g.buildRecords(g.recordBuilder, start, end, times, columns)
 		if err != nil {
 			g.err = err
@@ -707,19 +782,22 @@ func (g *RecordsGenerator) Generate(chunk Chunk, lastChunk bool, records []*mode
 		}
 		// Next Chunk may have the same tags as the last record, so last record was left waiting for merge
 		if index == tagIndexLen-1 && !lastChunk && g.recordBuilder.Field(0).Len() < g.chunkedSize {
-			g.prevTags = chunkTags[index].KeyValues()
+			g.prevTags = tags
 			break
 		}
 		g.prevTags = nil
 		record := g.recordBuilder.NewRecord()
-		records = append(records, &models.RecordContainer{Name: name, Data: record, Tags: chunkTags[index].KeyValues()})
+		records = append(records, &models.RecordContainer{Name: name, Data: record, Tags: tags})
 	}
 	return records
 }
 
 func (g *RecordsGenerator) buildSchema(dataType hybridqp.RowDataType) error {
 	fields := make([]arrow.Field, 0, len(dataType.Fields())+1)
-	fields = append(fields, arrow.Field{Name: "time", Type: arrow.PrimitiveTypes.Int64})
+	// Add time column only if QueryType is not "sql"
+	if !g.opt.IsSQL() {
+		fields = append(fields, arrow.Field{Name: "time", Type: arrow.PrimitiveTypes.Int64})
+	}
 	for _, f := range dataType.Fields() {
 		varRef, ok := f.Expr.(*influxql.VarRef)
 		if !ok {
@@ -744,22 +822,29 @@ func (g *RecordsGenerator) buildSchema(dataType hybridqp.RowDataType) error {
 
 func (g *RecordsGenerator) buildRecords(b *array.RecordBuilder, start int, end int, times []int64, columns []Column) error {
 	b.Reserve(end - start)
+	// If QueryType is "sql", time field is not present, so start from field 0
+	fieldIndex := 0
+	if !g.opt.IsSQL() {
+		// If QueryType is not "sql", time field is present at index 0, so start from field 1
+		fieldIndex = 1
+		// setup timestamp
+		b.Field(0).(*array.Int64Builder).AppendValues(times[start:end], nil)
+	}
+
 	for i, col := range columns {
 		switch col.DataType() {
 		case influxql.Float:
-			g.appendArrowFloat64(b, col, i+1, start, end)
+			g.appendArrowFloat64(b, col, fieldIndex+i, start, end)
 		case influxql.Integer:
-			g.appendArrowInt64(b, col, i+1, start, end)
+			g.appendArrowInt64(b, col, fieldIndex+i, start, end)
 		case influxql.String, influxql.Tag:
-			g.appendArrowString(b, col, i+1, start, end)
+			g.appendArrowString(b, col, fieldIndex+i, start, end)
 		case influxql.Boolean:
-			g.appendArrowBoolean(b, col, i+1, start, end)
+			g.appendArrowBoolean(b, col, fieldIndex+i, start, end)
 		default:
 			return errors.New("type not supported")
 		}
 	}
-	// setup timestamp
-	b.Field(0).(*array.Int64Builder).AppendValues(times[start:end], nil)
 	return nil
 }
 
@@ -908,7 +993,7 @@ type ArrowChunkSender struct {
 func NewArrowChunkSender(opt *query.ProcessorOptions) *ArrowChunkSender {
 	a := &ArrowChunkSender{
 		opt:              opt,
-		recordsGenerator: NewRecordsGenerator(opt.ChunkedSize),
+		recordsGenerator: NewRecordsGenerator(opt.ChunkedSize, opt),
 		Logger:           logger.NewLogger(errno.ModuleQueryEngine),
 	}
 

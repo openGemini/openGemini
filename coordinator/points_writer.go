@@ -23,17 +23,19 @@ import (
 	"sync"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/app/ts-store/stream"
 	"github.com/openGemini/openGemini/app/ts-store/transport"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/pointsdecoder"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	strings2 "github.com/openGemini/openGemini/lib/strings"
@@ -48,27 +50,26 @@ import (
 
 const MaxShardKey = 64 * 1024
 
-var injestionCtxPool sync.Pool
+var injestionCtxPool = pool.NewUnionPool(cpu.GetCpuNum(), 0, 0, func() *injestionCtx {
+	return &injestionCtx{
+		streamInfos:            []*meta2.StreamInfo{},
+		streamDBs:              []*meta2.DatabaseInfo{},
+		streamMSTs:             []*meta2.MeasurementInfo{},
+		streamShardKeyInfos:    []*meta2.ShardKeyInfo{},
+		streamWriteHelpers:     []*writeHelper{},
+		streamAliveShardIdxes:  [][]int{},
+		srcStreamDstShardIdMap: map[uint64]map[uint64]uint64{},
+		mstShardIdRowMap:       map[string]map[uint64]*[]*influx.Row{}}
+})
 
 func getInjestionCtx() *injestionCtx {
 	v := injestionCtxPool.Get()
-	if v == nil {
-		return &injestionCtx{
-			streamInfos:            []*meta2.StreamInfo{},
-			streamDBs:              []*meta2.DatabaseInfo{},
-			streamMSTs:             []*meta2.MeasurementInfo{},
-			streamShardKeyInfos:    []*meta2.ShardKeyInfo{},
-			streamWriteHelpers:     []*writeHelper{},
-			streamAliveShardIdxes:  [][]int{},
-			srcStreamDstShardIdMap: map[uint64]map[uint64]uint64{},
-			mstShardIdRowMap:       map[string]map[uint64]*[]*influx.Row{}}
-	}
-	return v.(*injestionCtx)
+	return v
 }
 
 func putInjestionCtx(s *injestionCtx) {
 	s.Reset()
-	injestionCtxPool.Put(s)
+	injestionCtxPool.PutWithMemSize(s, 0)
 }
 
 type PWMetaClient interface {
@@ -101,6 +102,9 @@ type PointsWriter struct {
 	TSDBStore TSDBStore
 
 	logger *logger.Logger
+
+	blacklist    []string
+	blacklistMap map[string]bool
 }
 
 // NewPointsWriter returns a new instance of PointsWriter for a node.
@@ -407,6 +411,12 @@ func (w *PointsWriter) routeAndMapOriginRows(
 	for i := 0; i < len(rows); i++ {
 		r = &rows[i]
 
+		if w.OnBlacklist(r.Name) {
+			partialErr = errno.NewError(errno.MstOnBlacklist, r.Name)
+			dropped++
+			continue
+		}
+
 		// the filter-only stream destination measurement cannot be written
 		if len(ctx.streamDstMstNames) > 0 {
 			streamInfo, exist := ctx.streamDstMstNames[r.Name]
@@ -429,8 +439,15 @@ func (w *PointsWriter) routeAndMapOriginRows(
 			continue
 		}
 
-		if err := models.CheckTime(time.Unix(0, r.Timestamp)); err != nil {
+		if err = r.CheckDuplicateTags(); err != nil {
+			w.logger.Error("write failed", zap.Error(err))
 			partialErr = err
+			dropped++
+			continue
+		}
+
+		if err := models.CheckTime(time.Unix(0, r.Timestamp)); err != nil {
+			partialErr = fmt.Errorf("unable to parse points, %s", err)
 			dropped++
 			continue
 		}
@@ -777,6 +794,12 @@ func (w *PointsWriter) updateShardGroupAndShardKey(
 
 	if !sameSg {
 		*asis = w.MetaClient.GetAliveShards(database, sg, false)
+		// update mst info if shard group is newly created.
+		mi, err = w.MetaClient.Measurement(database, retentionPolicy, mi.OriginName())
+		if err != nil {
+			w.logger.Error("write failed", zap.Error(err))
+			return
+		}
 	}
 
 	if (*si).Type == influxql.RANGE {
@@ -785,19 +808,10 @@ func (w *PointsWriter) updateShardGroupAndShardKey(
 		if len((*si).ShardKey) > 0 && !reuseShardKey {
 			r.ShardKey = r.ShardKey[len(r.Name)+1:]
 		}
-		var shardIdxes []int
-		if mi.InitNumOfShards == 0 {
+		shardIdxes := meta2.GetShardIdxes(mi.ShardIdexes, sg.ID)
+		// num of shards not specified and adaptive shard not enabled
+		if len(shardIdxes) == 0 {
 			shardIdxes = *asis
-		} else {
-			shardIdxes = mi.ShardIdexes[sg.ID]
-			if len(shardIdxes) == 0 { // need to update mst info if shard group is newly created.
-				mi, err = w.MetaClient.Measurement(database, retentionPolicy, mi.OriginName())
-				if err != nil {
-					w.logger.Error("write failed", zap.Error(err))
-					return
-				}
-				shardIdxes = mi.ShardIdexes[sg.ID]
-			}
 		}
 		r.SkipMarshalShardKey()
 		sh = sg.ShardFor(meta2.HashID(r.ShardKey), shardIdxes)
@@ -900,6 +914,35 @@ func (w *PointsWriter) inTimeRange(ts int64) bool {
 	return ts > w.timeRange.Min && ts < w.timeRange.Max
 }
 
+func (w *PointsWriter) ApplyMstBlacklist(list []string) {
+	// Through benchmark testing, using map performs better when there are more than 4 elements
+	const mapThreshold = 4
+	if len(list) > mapThreshold {
+		w.blacklistMap = make(map[string]bool)
+		for i := range list {
+			w.blacklistMap[list[i]] = true
+		}
+	}
+	w.blacklist = list
+}
+
+func (w *PointsWriter) OnBlacklist(mst string) bool {
+	if len(w.blacklist) == 0 {
+		return false
+	}
+
+	if len(w.blacklistMap) > 0 {
+		return w.blacklistMap[mst]
+	}
+
+	for i := range w.blacklist {
+		if w.blacklist[i] == mst {
+			return true
+		}
+	}
+	return false
+}
+
 func (w *PointsWriter) ApplyTimeRangeLimit(limit []toml.Duration) {
 	if len(limit) != 2 {
 		return
@@ -982,7 +1025,7 @@ func (s *LocalStore) WriteRows(ctx *netstorage.WriteContext, nodeID uint64, pt u
 	// Determine the location of this shard and whether it still exists
 	db, rpName, sgi := cli.ShardOwner(ctx.Shard.ID)
 	if sgi == nil {
-		return fmt.Errorf("shard group not found, shardID: %d", ctx.Shard.ID)
+		return errno.NewError(errno.ShardMetaNotFound, ctx.Shard.ID)
 	}
 
 	if db != database || rpName != rp {

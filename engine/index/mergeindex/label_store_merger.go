@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"log"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 )
 

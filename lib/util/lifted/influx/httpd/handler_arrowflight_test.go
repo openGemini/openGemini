@@ -35,6 +35,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/smart_query"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/peer"
@@ -80,6 +81,10 @@ func (m *mockQueryAuthorizer) AuthorizeQuery(u meta2.User, query *influxql.Query
 }
 
 type mockStatementExecutor struct {
+}
+
+func (e *mockStatementExecutor) ExecuteSmartStatement(stmt *smart_query.SmartSelectStatement, results chan *query.Result) error {
+	return nil
 }
 
 func (e *mockStatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query.ExecutionContext, seq int) error {
@@ -192,7 +197,7 @@ func TestHandler_handlerQueryErr(t *testing.T) {
 	assert.Equal(t, err.Error(), `missing required parameter "Q"`)
 
 	err = h.HandleQuery([]byte(`{"q":"err query", "params": "dsfdsf"}`), nil, &mockDoGetServer2{})
-	assert.Equal(t, err.Error(), `error parsing query parameters: ReadMapCB: expect { or n, but found d, error found in #1 byte of ...|dsfdsf|..., bigger context ...|dsfdsf|...`)
+	assert.Equal(t, err.Error(), `error parsing query parameters: EOF`)
 
 	err = h.HandleQuery([]byte(`{"q":"err query", "params": "{\"p\":\"abc\", \"i\": 111, \"f\":1.1}"}`), nil, &mockDoGetServer2{})
 	assert.Equal(t, err.Error(), `error parsing query: syntax error: unexpected IDENT`)
@@ -206,13 +211,13 @@ func TestHandler_handlerQueryErr(t *testing.T) {
 		Name:  "test",
 		Admin: true,
 	}
-	err = h.HandleQuery([]byte(`{"q":"select * from mst", "chunked": "true", "chunkSize": "600000", "innerChunkSize": "1042", "db":"db0"}`), user, &mockDoGetServer2{})
+	err = h.HandleQuery([]byte(`{"q":"select * from mst", "chunked": "true", "chunk_size": "600000", "inner_chunk_size": "1042", "db":"db0"}`), user, &mockDoGetServer2{})
 	assert.Equal(t, err.Error(), `request chunk_size:600000 larger than max chunk_size(500000)`)
 
-	err = h.HandleQuery([]byte(`{"q":"select * from mst", "chunked": "true", "chunkSize": "20000", "innerChunkSize": "600000", "db":"db0"}`), user, &mockDoGetServer2{})
+	err = h.HandleQuery([]byte(`{"q":"select * from mst", "chunked": "true", "chunk_size": "20000", "inner_chunk_size": "600000", "db":"db0"}`), user, &mockDoGetServer2{})
 	assert.Equal(t, err.Error(), `request inner_chunk_size:600000 larger than max inner_chunk_size(4096)`)
 
-	err = h.HandleQuery([]byte(`{"q":"select * from mst", "chunked": "true", "chunkSize": "100000", "innerChunkSize": "1042", "db":"db0"}`), user, &mockDoGetServer2{})
+	err = h.HandleQuery([]byte(`{"q":"select * from mst", "chunked": "true", "chunk_size": "100000", "inner_chunk_size": "1042", "db":"db0"}`), user, &mockDoGetServer2{})
 	assert.Equal(t, err.Error(), `EOF`)
 
 }
@@ -231,4 +236,56 @@ func TestHandler_getAuthorizer(t *testing.T) {
 	}
 	u := h.getAuthorizer(user)
 	assert.Equal(t, user, u)
+}
+
+func TestHandler_GetSchema(t *testing.T) {
+	h := Handler{
+		Logger:        logger.NewLogger(errno.ModuleHTTP),
+		Config:        &config.Config{},
+		QueryExecutor: newQueryExecutorForTest(),
+	}
+
+	syscontrol.DisableReads = true
+	schema, err := h.GetSchema(FlightRequest{}, nil, context.Background())
+	assert.Nil(t, schema)
+	assert.Equal(t, err.Error(), "disable read")
+	syscontrol.DisableReads = false
+
+	schema, err = h.GetSchema(FlightRequest{Q: ""}, nil, context.Background())
+	assert.Nil(t, schema)
+	assert.Equal(t, err.Error(), `missing required parameter "Q"`)
+
+	schema, err = h.GetSchema(FlightRequest{Q: "err query", Params: "dsfdsf"}, nil, context.Background())
+	assert.Nil(t, schema)
+	assert.Equal(t, err.Error(), `error parsing query parameters: EOF`)
+
+	schema, err = h.GetSchema(FlightRequest{Q: "err query", Params: "{\"p\":\"abc\", \"i\": 111, \"f\":1.1}"}, nil, context.Background())
+	assert.Nil(t, schema)
+	assert.Equal(t, err.Error(), `error parsing query: syntax error: unexpected IDENT`)
+
+	h.Config.AuthEnabled = true
+	h.QueryAuthorizer = &mockQueryAuthorizer{}
+	schema, err = h.GetSchema(FlightRequest{Q: "select * from mst"}, nil, context.Background())
+	assert.Nil(t, schema)
+	assert.Equal(t, err.Error(), `error authorizing query: `)
+
+	user := &meta2.UserInfo{
+		Name:  "test",
+		Admin: true,
+	}
+	schema, err = h.GetSchema(FlightRequest{Q: "select * from mst", Chunked: "true", ChunkSize: "600000", InnerChunkSize: "1042", DB: "db0"}, user, context.Background())
+	assert.Nil(t, schema)
+	assert.Equal(t, err.Error(), `request chunk_size:600000 larger than max chunk_size(500000)`)
+
+	schema, err = h.GetSchema(FlightRequest{Q: "select * from mst", Chunked: "true", ChunkSize: "20000", InnerChunkSize: "600000", DB: "db0"}, user, context.Background())
+	assert.Nil(t, schema)
+	assert.Equal(t, err.Error(), `request inner_chunk_size:600000 larger than max inner_chunk_size(4096)`)
+
+	schema, err = h.GetSchema(FlightRequest{Q: "select * from mst", Chunked: "true", ChunkSize: "100000", InnerChunkSize: "1042", DB: "db0"}, user, context.Background())
+	assert.Nil(t, schema)
+	assert.NoError(t, err)
+
+	schema, err = h.GetSchema(FlightRequest{Q: "select * from mst", NodeID: "invalid"}, user, context.Background())
+	assert.Nil(t, schema)
+	assert.Equal(t, err.Error(), `strconv.ParseUint: parsing "invalid": invalid syntax`)
 }

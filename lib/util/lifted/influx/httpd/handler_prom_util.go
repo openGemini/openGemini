@@ -19,17 +19,18 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 	"unsafe"
 
-	prompb2 "github.com/VictoriaMetrics/VictoriaMetrics/lib/prompb"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promutil"
 	"github.com/gorilla/mux"
+	prompb2 "github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/prompb"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	strings2 "github.com/openGemini/openGemini/lib/strings"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -310,9 +311,9 @@ func respondError(w http.ResponseWriter, apiErr *apiError) {
 	}
 }
 
-type timeSeries2RowsFunc func(mst string, dst []influx.Row, tss []prompb2.TimeSeries, invalidTss map[int]bool) ([]influx.Row, error)
+type timeSeries2RowsFunc func(mst string, dst []influx.Row, tss []prompb2.TimeSeries, invalidTss map[int]bool, labelsMerge bool) ([]influx.Row, error)
 
-func timeSeries2Rows(mst string, dst []influx.Row, tss []prompb2.TimeSeries, invalidTss map[int]bool) ([]influx.Row, error) {
+func timeSeries2Rows(mst string, dst []influx.Row, tss []prompb2.TimeSeries, invalidTss map[int]bool, labelsMerge bool) ([]influx.Row, error) {
 	var i int
 	for tsIdx, ts := range tss {
 		if invalidTss[tsIdx] {
@@ -363,55 +364,119 @@ func unmarshalPromTags(dst influx.PointTags, ts prompb2.TimeSeries) (influx.Poin
 	return dst, measurement
 }
 
-func timeSeries2RowsV2(mst string, dst []influx.Row, tss []prompb2.TimeSeries, invalidTss map[int]bool) ([]influx.Row, error) {
+func timeSeries2RowsV2(mst string, dst []influx.Row, tss []prompb2.TimeSeries, invalidTss map[int]bool, labelsMerge bool) ([]influx.Row, error) {
 	var i int
-	for tsIdx, ts := range tss {
-		if invalidTss[tsIdx] {
-			continue
-		}
-		dst[i].ResizeTags(len(ts.Labels))
-		tags := dst[i].Tags
-		tags = unmarshalPromTagsV2(tags, ts)
-		for j, s := range ts.Samples {
-			// convert and append
-			dst[i].Timestamp = s.Timestamp * int64(time.Millisecond)
-			dst[i].Name = mst
-			if j == 0 {
-				dst[i].Tags = tags
-			} else {
-				dst[i].CloneTags(tags)
+	if labelsMerge {
+		for tsIdx, ts := range tss {
+			if invalidTss[tsIdx] {
+				continue
 			}
-			if cap(dst[i].Fields) > 0 {
-				dst[i].Fields = dst[i].Fields[:1]
-				dst[i].Fields[0].Type = influx.Field_Type_Float
-				dst[i].Fields[0].Key = promql2influxql.DefaultFieldKey
-				dst[i].Fields[0].NumValue = s.Value
-			} else {
-				dst[i].Fields = []influx.Field{
-					{
-						Type:     influx.Field_Type_Float,
-						Key:      promql2influxql.DefaultFieldKey,
-						NumValue: s.Value,
-					},
+			dst[i].ResizeTags(1)
+			tags := dst[i].Tags
+			tags = unmarshalPromTagsV2MergeLabels(tags, ts)
+			for j, s := range ts.Samples {
+				// convert and append
+				dst[i].Timestamp = s.Timestamp * int64(time.Millisecond)
+				dst[i].Name = mst
+				if j == 0 {
+					dst[i].Tags = tags
+				} else {
+					dst[i].CloneTags(tags)
 				}
+				if cap(dst[i].Fields) > 0 {
+					dst[i].Fields = dst[i].Fields[:1]
+					dst[i].Fields[0].Type = influx.Field_Type_Float
+					dst[i].Fields[0].Key = promql2influxql.DefaultFieldKey
+					dst[i].Fields[0].NumValue = s.Value
+				} else {
+					dst[i].Fields = []influx.Field{
+						{
+							Type:     influx.Field_Type_Float,
+							Key:      promql2influxql.DefaultFieldKey,
+							NumValue: s.Value,
+						},
+					}
+				}
+				i++
 			}
-			i++
+		}
+	} else {
+		for tsIdx, ts := range tss {
+			if invalidTss[tsIdx] {
+				continue
+			}
+			dst[i].ResizeTags(len(ts.Labels))
+			tags := dst[i].Tags
+			tags = unmarshalPromTagsV2(tags, ts)
+			for j, s := range ts.Samples {
+				// convert and append
+				dst[i].Timestamp = s.Timestamp * int64(time.Millisecond)
+				dst[i].Name = mst
+				if j == 0 {
+					dst[i].Tags = tags
+				} else {
+					dst[i].CloneTags(tags)
+				}
+				if cap(dst[i].Fields) > 0 {
+					dst[i].Fields = dst[i].Fields[:1]
+					dst[i].Fields[0].Type = influx.Field_Type_Float
+					dst[i].Fields[0].Key = promql2influxql.DefaultFieldKey
+					dst[i].Fields[0].NumValue = s.Value
+				} else {
+					dst[i].Fields = []influx.Field{
+						{
+							Type:     influx.Field_Type_Float,
+							Key:      promql2influxql.DefaultFieldKey,
+							NumValue: s.Value,
+						},
+					}
+				}
+				i++
+			}
 		}
 	}
 	return dst, nil
 }
 
 func unmarshalPromTagsV2(dst influx.PointTags, ts prompb2.TimeSeries) influx.PointTags {
-	x := promutil.GetLabels()
-	labelsOrig := x.Labels
-	x.Labels = ts.Labels
-	x.Sort()
-	x.Labels = labelsOrig
-	promutil.PutLabels(x)
+	if len(ts.Labels) > 1 {
+		if !slices.IsSortedFunc(ts.Labels, func(x, y prompb2.Label) int {
+			return strings.Compare(x.Name, y.Name)
+		}) {
+			sort.Slice(&ts.Labels, func(i, j int) bool {
+				return ts.Labels[i].Name < ts.Labels[j].Name
+			})
+		}
+	}
 	for i, label := range ts.Labels {
 		dst[i].Key = label.Name
 		dst[i].Value = label.Value
 	}
+	return dst
+}
+
+func unmarshalPromTagsV2MergeLabels(dst influx.PointTags, ts prompb2.TimeSeries) influx.PointTags {
+	if len(ts.Labels) > 1 {
+		if !slices.IsSortedFunc(ts.Labels, func(x, y prompb2.Label) int {
+			return strings.Compare(x.Name, y.Name)
+		}) {
+			sort.Slice(&ts.Labels, func(i, j int) bool {
+				return ts.Labels[i].Name < ts.Labels[j].Name
+			})
+		}
+	}
+	dst[0].Key = influxql.DefaultLabels
+	sb := strings2.GetStringBuilder()
+	defer strings2.PutStringBuilder(sb)
+	for i, label := range ts.Labels {
+		if i != 0 {
+			sb.AppendString(influxql.DefaultLabelKeySplit)
+		}
+		sb.AppendString(label.Name)
+		sb.AppendString(influxql.DefaultLabelValueSplit)
+		sb.AppendString(label.Value)
+	}
+	dst[0].Value = sb.NewString()
 	return dst
 }
 
@@ -878,16 +943,23 @@ func isMetaDataReq(r *http.Request) bool {
 	return r.FormValue("metadata") == WriteMetaOK
 }
 
-// getMstByProm get the mst name from the url path parameters.
-func getMstByProm(h *Handler, w http.ResponseWriter, r *http.Request) (string, bool) {
-	mst := strings.TrimSpace(mux.Vars(r)[MetricStore])
+// getParaByProm get the mst name from the url path parameters.
+func getParaByProm(h *Handler, w http.ResponseWriter, r *http.Request) *promWriteParam {
+	para := mux.Vars(r)
+	_, labelsMerge := para[LabelsMerge]
+	mst := strings.TrimSpace(para[MetricStore])
 	if len(mst) == 0 {
 		err := errno.NewError(errno.InvalidPromMstName, mst)
 		h.httpError(w, err.Error(), http.StatusNotFound)
 		h.Logger.Error("invalid the metric store", zap.Error(err))
-		return mst, false
+		return nil
 	}
-	return mst, true
+	return &promWriteParam{mst: mst, labelsMerge: labelsMerge}
+}
+
+type promWriteParam struct {
+	mst         string
+	labelsMerge bool
 }
 
 type promQueryParam struct {

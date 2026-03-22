@@ -19,9 +19,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/memory"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"go.uber.org/zap"
 )
@@ -29,6 +30,8 @@ import (
 var (
 	compWorker           *Compactor
 	fullCompColdDuration = uint64(time.Minute.Seconds() * 60)
+
+	compactMemUsageLimit int64 = 90
 )
 
 func SetFullCompColdDuration(d time.Duration) {
@@ -38,6 +41,24 @@ func SetFullCompColdDuration(d time.Duration) {
 
 	atomic.StoreUint64(&fullCompColdDuration, uint64(d.Seconds()))
 	log.Info("set fullCompColdDuration", zap.Duration("duration", d))
+}
+
+func SetCompactMemUsageLimit(limit int64) {
+	atomic.StoreInt64(&compactMemUsageLimit, limit)
+	log.Info("set compactMemUsageLimit", zap.Int64("limit", limit))
+}
+
+func IsCompactMemUsageExceeded() bool {
+	limit := atomic.LoadInt64(&compactMemUsageLimit)
+	if limit >= 100 || limit <= 0 {
+		return false
+	}
+
+	if usage := memory.GetMemMonitor().MemUsedPct(); usage > float64(limit) {
+		log.Warn("compact mem usage exceeded", zap.Float64("usage", usage), zap.Int64("limit", limit))
+		return true
+	}
+	return false
 }
 
 func init() {
@@ -107,7 +128,7 @@ func (c *Compactor) free() {
 		id := sh.GetID()
 		select {
 		case <-sh.closed.Signal():
-			log.Info("closed", zap.Uint64("shardId", id))
+			log.GetZapLogger().Info("closed", zap.Uint64("shardId", id))
 			return
 		default:
 			nowTime := fasttime.UnixTimestamp()
@@ -116,7 +137,7 @@ func (c *Compactor) free() {
 			if d >= atomic.LoadUint64(&fullCompColdDuration) {
 				sh.ForceFlush() // make sure memtable finish flush
 				if sh.immTables.FreeSequencer() {
-					log.Info("finish free shard", zap.Uint64("id", sh.ident.ShardID))
+					log.GetZapLogger().Info("finish free shard", zap.Uint64("id", sh.ident.ShardID))
 				}
 			}
 		}
@@ -140,15 +161,18 @@ func (c *Compactor) merger() {
 		if !sh.immTables.MergeEnabled() {
 			continue
 		}
+		if IsCompactMemUsageExceeded() {
+			break
+		}
 		id := sh.GetID()
 		select {
 		case <-sh.closed.Signal():
-			log.Info("closed", zap.Uint64("shardId", id))
+			log.GetZapLogger().Info("closed", zap.Uint64("shardId", id))
 			return
 		default:
 			conf := config.GetStoreConfig()
 			full := false
-			if conf.UnorderedOnly || conf.Merge.MergeSelfOnly {
+			if conf.UnorderedOnly || conf.Merge.UnorderedMergeSelf {
 				d := fasttime.UnixTimestamp() - sh.LastWriteTime()
 				full = d >= atomic.LoadUint64(&fullCompColdDuration)
 			}
@@ -166,6 +190,9 @@ func (c *Compactor) compact() {
 	c.mu.RUnlock()
 
 	for _, sh := range c.compactShards {
+		if IsCompactMemUsageExceeded() {
+			break
+		}
 		_ = sh.Compact()
 	}
 }
@@ -174,6 +201,9 @@ func (c *Compactor) run() {
 	tm := time.NewTicker(time.Second * 10)
 	defer tm.Stop()
 	for range tm.C {
+		if IsCompactMemUsageExceeded() {
+			continue
+		}
 		c.merger()
 		c.compact()
 		c.free()

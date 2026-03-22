@@ -23,12 +23,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/cockroachdb/errors"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/pool"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"go.uber.org/zap"
 )
 

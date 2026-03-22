@@ -16,6 +16,8 @@ package statistics
 
 import (
 	"sync"
+
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd/config"
 )
 
 const Query = "query"
@@ -50,7 +52,7 @@ func (s *QueryInfoStatistics) AddQueryInfo(q string, d int64, db string) {
 		}
 		queryInfo.UpdateAvgDuration()
 	} else {
-		m[q] = &QueryInfo{QueryCount: 1, AvgDuration: d, MinDuration: d, MaxDuration: d, DB: db}
+		m[q] = &QueryInfo{QueryCount: 1, AvgDuration: d, MinDuration: d, MaxDuration: d, SumDuration: d, DB: db}
 	}
 }
 
@@ -83,7 +85,7 @@ func CollectQueryInfoStatistics(buffer []byte) ([]byte, error) {
 	for q, info := range queryStat.QueryInfoMap {
 		queryTagMap[Query] = q
 		valueMap := map[string]interface{}{
-			"QueryCount":  info.QueryCount,
+			"QueryCount":  int64(float64(info.QueryCount) / config.GetHttpConfig().QueryStatRatio),
 			"AvgDuration": info.AvgDuration,
 			"MinDuration": info.MinDuration,
 			"MaxDuration": info.MaxDuration,

@@ -394,21 +394,21 @@ func (c *RegisterQueryIDOffsetCallback) Handle(data interface{}) error {
 	return nil
 }
 
-type Sql2MetaHeartbeatCallback struct {
+type CQ2MetaHeartbeatCallback struct {
 	BaseCallback
 }
 
-func (c *Sql2MetaHeartbeatCallback) Handle(data interface{}) error {
+func (c *CQ2MetaHeartbeatCallback) Handle(data interface{}) error {
 	metaMsg, err := c.Trans2MetaMsg(data)
 	if err != nil {
 		return err
 	}
-	msg, ok := metaMsg.Data().(*message.Sql2MetaHeartbeatResponse)
+	msg, ok := metaMsg.Data().(*message.CQ2MetaHeartbeatResponse)
 	if !ok {
-		return fmt.Errorf("data is not a Sql2MetaHeartbeatResponse, got type %T", metaMsg.Data())
+		return fmt.Errorf("data is not a CQ2MetaHeartbeatResponse, got type %T", metaMsg.Data())
 	}
 	if msg.Err != "" {
-		return fmt.Errorf("get sql to meta heartbeat callback error: %s", msg.Err)
+		return fmt.Errorf("get cq node to meta heartbeat callback error: %s", msg.Err)
 	}
 
 	return nil
@@ -509,6 +509,31 @@ func (c *ShowClusterCallback) Handle(data interface{}) error {
 	msg, ok := metaMsg.Data().(*message.ShowClusterResponse)
 	if !ok {
 		return errors.New("data is not a ShowClusterResponse")
+	}
+	if msg.ErrCode != 0 {
+		return errno.NewError(msg.ErrCode, msg.Err)
+	}
+	if msg.Err != "" {
+		return errors.New(msg.Err)
+	}
+	c.Data = msg.Data
+	return nil
+}
+
+type GetShardingPlanCallback struct {
+	BaseCallback
+
+	Data []byte
+}
+
+func (c *GetShardingPlanCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.GetShardingPlanResponse)
+	if !ok {
+		return errors.New("data is not a GetShardingPlanResponse")
 	}
 	if msg.ErrCode != 0 {
 		return errno.NewError(msg.ErrCode, msg.Err)

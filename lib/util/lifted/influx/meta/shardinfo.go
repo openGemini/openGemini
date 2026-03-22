@@ -22,8 +22,8 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"google.golang.org/protobuf/proto"
 )
 
 // ShardGroupInfo represents metadata about a shard group. The DeletedAt field is important
@@ -39,6 +39,7 @@ type ShardGroupInfo struct {
 	TruncatedAt time.Time
 	EngineType  config.EngineType
 	Version     uint32
+	Timezone    string
 }
 
 func (sgi *ShardGroupInfo) GetMergedShardCount() int {
@@ -94,10 +95,9 @@ func (sgi ShardGroupInfo) getShardsAndSeriesKeyForHintQuery(tagsGroup *influx.Po
 		return sgi.genShardInfosByIndex(aliveShardIdxes), r.IndexKey
 	}
 	var shardIdxes []int
-	if mst.InitNumOfShards == 0 {
+	shardIdxes = GetShardIdxes(mst.ShardIdexes, sgi.ID)
+	if len(shardIdxes) == 0 {
 		shardIdxes = aliveShardIdxes
-	} else {
-		shardIdxes = mst.ShardIdexes[sgi.ID]
 	}
 	shard := sgi.ShardFor(HashID(r.ShardKey), shardIdxes)
 	shards = append(shards, *shard)
@@ -148,18 +148,24 @@ func (sgi *ShardGroupInfo) genShardInfosByIndex(aliveShardIdxes []int) []ShardIn
 }
 
 func (sgi ShardGroupInfo) TargetShards(mst *MeasurementInfo, ski *ShardKeyInfo, condition influxql.Expr, aliveShardIdxes []int) []ShardInfo {
+	// Force the query to be broadcast
+	if sysconfig.GetEnableForceBroadcastQuery() == sysconfig.OnForceBroadcastQuery {
+		return sgi.genShardInfosByIndex(aliveShardIdxes)
+	}
+
 	if ski == nil || ski.ShardKey == nil || (ski.Type == HASH && condition == nil) {
+		if shardIdxes := GetShardIdxes(mst.ShardIdexes, sgi.ID); len(shardIdxes) > 0 {
+			return sgi.genShardInfosByIndex(shardIdxes)
+		}
 		return sgi.genShardInfosByIndex(aliveShardIdxes)
 	}
 	mst.SchemaLock.RLock()
 	tagsGroup := getConditionTags(condition, mst.Schema)
 	mst.SchemaLock.RUnlock()
 	if len(tagsGroup) == 0 {
-		return sgi.genShardInfosByIndex(aliveShardIdxes)
-	}
-
-	// Force the query to be broadcast
-	if sysconfig.GetEnableForceBroadcastQuery() == sysconfig.OnForceBroadcastQuery {
+		if shardIdxes := GetShardIdxes(mst.ShardIdexes, sgi.ID); len(shardIdxes) > 0 {
+			return sgi.genShardInfosByIndex(shardIdxes)
+		}
 		return sgi.genShardInfosByIndex(aliveShardIdxes)
 	}
 	var shardKeyAndValue []byte
@@ -196,11 +202,9 @@ func (sgi ShardGroupInfo) TargetShards(mst *MeasurementInfo, ski *ShardKeyInfo, 
 			return sgi.genShardInfosByIndex(aliveShardIdxes)
 		}
 
-		var shardIdxes []int
-		if mst.InitNumOfShards == 0 {
+		shardIdxes := GetShardIdxes(mst.ShardIdexes, sgi.ID)
+		if len(shardIdxes) == 0 {
 			shardIdxes = aliveShardIdxes
-		} else {
-			shardIdxes = mst.ShardIdexes[sgi.ID]
 		}
 		shard := sgi.ShardFor(HashID(shardKeyAndValue[len(mst.Name)+1:]), shardIdxes)
 		if shard == nil {
@@ -407,6 +411,7 @@ func (sgi *ShardGroupInfo) marshal() *proto2.ShardGroupInfo {
 		DeletedAt:  proto.Int64(MarshalTime(sgi.DeletedAt)),
 		EngineType: proto.Uint32(uint32(sgi.EngineType)),
 		Version:    proto.Uint32(sgi.Version),
+		Timezone:   proto.String(sgi.Timezone),
 	}
 
 	if !sgi.TruncatedAt.IsZero() {
@@ -437,6 +442,7 @@ func (sgi *ShardGroupInfo) unmarshal(pb *proto2.ShardGroupInfo) {
 	}
 	sgi.DeletedAt = UnmarshalTime(pb.GetDeletedAt())
 	sgi.EngineType = config.EngineType(pb.GetEngineType())
+	sgi.Timezone = pb.GetTimezone()
 
 	if pb != nil && pb.TruncatedAt != nil {
 		sgi.TruncatedAt = UnmarshalTime(pb.GetTruncatedAt())

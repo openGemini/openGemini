@@ -15,8 +15,8 @@
 package compress
 
 import (
-	"github.com/golang/snappy"
 	"github.com/influxdata/influxdb/tsdb/engine/tsm1"
+	"github.com/klauspost/compress/snappy"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util"

@@ -17,12 +17,15 @@ package util_test
 import (
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/stretchr/testify/assert"
@@ -543,28 +546,390 @@ func TestSyncMap_Range(t *testing.T) {
 
 }
 
-func TestSplitUint64(t *testing.T) {
-	original := uint64(0)
-	high, low := util.SplitUint64(original)
-	if high != 0 || low != 0 {
-		t.Errorf("expected high and low to be 0, got high: %d, low: %d", high, low)
+func TestMedian(t *testing.T) {
+	type medianTestCase struct {
+		name    string
+		data    []float64
+		want    float64
+		wantErr error
 	}
 
-	original = uint64(0xFFFFFFFFFFFFFFFF)
-	high, low = util.SplitUint64(original)
-	if high != uint32(0xFFFFFFFF) || low != uint32(0xFFFFFFFF) {
-		t.Errorf("expected high and low to be uint32(0xFFFFFFFF), got high: %d, low: %d", high, low)
+	testCases := []medianTestCase{
+		{name: "empty slice", data: []float64{}, want: 0, wantErr: errors.New("empty data")},
+		{name: "single element (int)", data: []float64{5}, want: 5, wantErr: nil},
+		{name: "single element (float)", data: []float64{3.14}, want: 3.14, wantErr: nil},
+		{name: "odd length (sorted)", data: []float64{1, 2, 3, 4, 5}, want: 3, wantErr: nil},
+		{name: "odd length (unsorted)", data: []float64{5, 2, 7, 1, 3}, want: 3, wantErr: nil},
+		{name: "even length (sorted)", data: []float64{1, 2, 3, 4}, want: 2.5, wantErr: nil},
+		{name: "even length (unsorted)", data: []float64{4, 1, 3, 2}, want: 2.5, wantErr: nil},
+		{name: "negative numbers (odd)", data: []float64{-5, -3, -1}, want: -3, wantErr: nil},
+		{name: "mixed positive and negative (odd)", data: []float64{-3, 0, 5}, want: 0, wantErr: nil},
+		{name: "mixed positive and negative (even)", data: []float64{-2, -1, 1, 2}, want: 0, wantErr: nil},
+		{name: "large numbers", data: []float64{1000000, 2000000, 3000000, 4000000}, want: 2500000, wantErr: nil},
+		{name: "small decimals", data: []float64{0.1, 0.2, 0.3, 0.6, 0.4, 0.5}, want: 0.35, wantErr: nil},
+		{
+			name:    "extreme float values",
+			data:    []float64{math.SmallestNonzeroFloat64, math.MaxFloat64, -math.MaxFloat64, 0},
+			want:    (math.SmallestNonzeroFloat64 + 0) / 2,
+			wantErr: nil,
+		},
+		{
+			name:    "precision sensitive (small differences)",
+			data:    []float64{0.123456789012345, 0.123456789012346, 0.123456789012344, 0.123456789012347},
+			want:    (0.123456789012345 + 0.123456789012346) / 2,
+			wantErr: nil,
+		},
 	}
 
-	original = uint64(0xFFFFFFFF)
-	high, low = util.SplitUint64(original)
-	if high != 0 || low != uint32(0xFFFFFFFF) {
-		t.Errorf("expected high to be 0 and low to be uint32(0xFFFFFFFF), got high: %d, low: %d", high, low)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := util.Median(tc.data)
+			if tc.wantErr != nil {
+				require.Error(t, err)
+				require.Equal(t, tc.wantErr.Error(), err.Error())
+			} else {
+				require.NoError(t, err)
+			}
+			require.InDelta(t, tc.want, got, util.PrecisionThreshold,
+				"Median calculation error: want %v, got %v", tc.want, got)
+		})
+	}
+}
+
+func TestTrimMean(t *testing.T) {
+	type trimMeanTestCase struct {
+		name            string
+		data            []float64
+		proportiontocut float64
+		want            float64
+		wantErr         error
 	}
 
-	original = uint64(0x100000000)
-	high, low = util.SplitUint64(original)
-	if high != 1 || low != 0 {
-		t.Errorf("expected high to be 1 and low to be 0, got high: %d, low: %d", high, low)
+	testCases := []trimMeanTestCase{
+		{name: "empty data", data: []float64{}, proportiontocut: 0.1, want: 0, wantErr: errors.New("empty data")},
+		{name: "negative proportion", data: []float64{1, 2, 3}, proportiontocut: -0.1, want: 0, wantErr: errors.New("proportionToCut must be in [0, 0.5)")},
+		{name: "proportion >=0.5", data: []float64{1, 2, 3}, proportiontocut: 0.5, want: 0, wantErr: errors.New("proportionToCut must be in [0, 0.5)")},
+		{name: "proportion 0 (no trim)", data: []float64{1, 2, 3, 4, 5}, proportiontocut: 0, want: 3.0, wantErr: nil},
+		{name: "odd length with trim", data: []float64{1, 2, 3, 4, 5, 6, 7}, proportiontocut: 0.2, want: 4.0, wantErr: nil},
+		{name: "even length with trim", data: []float64{10, 20, 30, 40, 50, 60}, proportiontocut: 0.2, want: 35.0, wantErr: nil},
+		{name: "unsorted data", data: []float64{5, 3, 1, 2, 4}, proportiontocut: 0.2, want: 3.0, wantErr: nil},
+		{name: "with duplicates", data: []float64{2, 2, 3, 3, 3, 3, 4, 4}, proportiontocut: 0.25, want: 3.0, wantErr: nil},
+		{name: "negative numbers", data: []float64{-5, -3, -1, 1, 3, 5}, proportiontocut: 0.2, want: 0.0, wantErr: nil},
+		{name: "mixed positive and negative", data: []float64{-10, -5, 0, 5, 10, 15, 20}, proportiontocut: 0.2, want: 5.0, wantErr: nil},
+		{name: "large numbers", data: []float64{100, 200, 300, 400, 500, 600, 700, 800, 900}, proportiontocut: 0.2, want: 500.0, wantErr: nil},
+		{name: "small decimals", data: []float64{0.1, 0.2, 0.3, 0.4, 0.5}, proportiontocut: 0.2, want: 0.3, wantErr: nil},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := util.TrimMean(tc.data, tc.proportiontocut)
+			if tc.wantErr != nil {
+				require.Error(t, err)
+				require.Equal(t, tc.wantErr.Error(), err.Error())
+				return
+			}
+			require.NoError(t, err)
+			require.InDelta(t, tc.want, got, util.PrecisionThreshold,
+				"TrimMean calculation error: want %v, got %v", tc.want, got)
+		})
+	}
+}
+
+func TestQuantile(t *testing.T) {
+	type quantileTestCase struct {
+		name    string
+		data    []float64
+		q       float64
+		want    float64
+		wantErr error
+	}
+
+	testCases := []quantileTestCase{
+		{name: "empty data", data: []float64{}, q: 0.5, want: 0, wantErr: errors.New("empty data")},
+		{name: "q < 0", data: []float64{1, 2, 3}, q: -0.1, want: 0, wantErr: errors.New("q must be in [0, 1], got -0.1")},
+		{name: "q > 1", data: []float64{1, 2, 3}, q: 1.1, want: 0, wantErr: errors.New("q must be in [0, 1], got 1.1")},
+		{name: "single element", data: []float64{5}, q: 0.5, want: 5, wantErr: nil},
+		{name: "q=0 (min)", data: []float64{3, 1, 2}, q: 0, want: 1, wantErr: nil},
+		{name: "q=1 (max)", data: []float64{3, 1, 2}, q: 1, want: 3, wantErr: nil},
+		{name: "odd length median (q=0.5)", data: []float64{1, 3, 5, 7, 9}, q: 0.5, want: 5, wantErr: nil},
+		{name: "even length median (q=0.5)", data: []float64{1, 3, 5, 7}, q: 0.5, want: 4, wantErr: nil},            // (3 + 5)/2
+		{name: "linear interpolation (q=0.25)", data: []float64{10, 20, 30, 40}, q: 0.25, want: 17.5, wantErr: nil}, // index=0.75 → k=0, d=0.75 → (1-0.75)*10 + 0.75*20 = 17.5
+		{name: "linear interpolation (q=0.75)", data: []float64{10, 20, 30, 40}, q: 0.75, want: 32.5, wantErr: nil}, // index=2.25 → k=2, d=0.25 → 0.75*30 + 0.25*40 = 32.5
+		{name: "unsorted data (q=0.3)", data: []float64{5, 2, 8, 1, 9}, q: 0.3, want: 2.6, wantErr: nil},            // index=1.2 → k=1, d=0.2 → 0.8*2 + 0.2*5 = 2.8
+		{name: "duplicate values", data: []float64{2, 2, 2, 2}, q: 0.5, want: 2, wantErr: nil},
+		{name: "negative numbers", data: []float64{-5, -3, -1, 1}, q: 0.75, want: -0.5, wantErr: nil},      // → 0.75*(-1) + 0.25*1 = -0.5
+		{name: "mixed sign (q=0.6)", data: []float64{-10, 0, 10, 20, 30}, q: 0.6, want: 14, wantErr: nil},  // index=2.4 → k=2（10）, d=0.4 → 0.6*10 + 0.4*20 = 14
+		{name: "large numbers", data: []float64{100, 200, 300, 400, 500}, q: 0.9, want: 460, wantErr: nil}, // index=3.6 → k=3（400）, d=0.6 → 0.4*400 + 0.6*500 = 460
+		{name: "small decimals", data: []float64{0.1, 0.2, 0.3, 0.4}, q: 0.3, want: 0.19, wantErr: nil},    // index=0.9 → k=0（0.1）, d=0.9 → 0.1*0.1 + 0.9*0.2 = 0.19
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := util.Quantile(tc.data, tc.q)
+			if tc.wantErr != nil {
+				require.Error(t, err)
+				require.Equal(t, tc.wantErr.Error(), err.Error())
+				return
+			}
+			require.NoError(t, err)
+			require.InDelta(t, tc.want, got, util.PrecisionThreshold,
+				"quantile calculation error: want %v, got %v", tc.want, got)
+		})
+	}
+}
+
+func TestWaitTimeOut(t *testing.T) {
+	var run = func() bool {
+		wg := sync.WaitGroup{}
+		wg.Add(1)
+
+		ok := false
+		go func() {
+			util.WaitTimeOut(wg.Wait, wg.Done, time.Millisecond*100)
+			fmt.Println(222)
+			ok = true
+		}()
+
+		for range 10 {
+			if ok {
+				break
+			}
+			time.Sleep(time.Millisecond * 100)
+		}
+		return ok
+	}
+	require.True(t, run())
+
+	pt := gomonkey.ApplyFunc(util.TickerRun, func(d time.Duration, stopSignal <-chan struct{}, onTick func(), onStop func()) {
+		panic(1)
+	})
+	defer pt.Reset()
+	require.False(t, run())
+}
+
+func TestMergeMaps(t *testing.T) {
+	type args struct {
+		oldMap map[string]int
+		newMap map[string]int
+	}
+	tests := []struct {
+		name string
+		args args
+		want map[string]int
+	}{
+		{
+			name: "Both maps are non-nil and have no overlapping keys",
+			args: args{
+				oldMap: map[string]int{"a": 1, "b": 2},
+				newMap: map[string]int{"c": 3, "d": 4},
+			},
+			want: map[string]int{"a": 1, "b": 2, "c": 3, "d": 4},
+		},
+		{
+			name: "Both maps are non-nil and have overlapping keys",
+			args: args{
+				oldMap: map[string]int{"a": 1, "b": 2},
+				newMap: map[string]int{"b": 3, "c": 4},
+			},
+			want: map[string]int{"a": 1, "b": 3, "c": 4},
+		},
+		{
+			name: "Old map is nil",
+			args: args{
+				oldMap: nil,
+				newMap: map[string]int{"a": 1, "b": 2},
+			},
+			want: map[string]int{"a": 1, "b": 2},
+		},
+		{
+			name: "New map is nil",
+			args: args{
+				oldMap: map[string]int{"a": 1, "b": 2},
+				newMap: nil,
+			},
+			want: map[string]int{"a": 1, "b": 2},
+		},
+		{
+			name: "Both maps are nil",
+			args: args{
+				oldMap: nil,
+				newMap: nil,
+			},
+			want: map[string]int{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := util.MergeMaps(tt.args.oldMap, tt.args.newMap); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("MergeMaps() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEpochDivisor(t *testing.T) {
+	require.Equal(t, int64(1), util.EpochDivisor("rfc3339"))
+	require.Equal(t, int64(1), util.EpochDivisor("ns"))
+	require.Equal(t, int64(1), util.EpochDivisor("mm"))
+
+	require.Equal(t, int64(time.Microsecond), util.EpochDivisor("u"))
+	require.Equal(t, int64(time.Microsecond), util.EpochDivisor("us"))
+	require.Equal(t, int64(time.Millisecond), util.EpochDivisor("ms"))
+	require.Equal(t, int64(time.Second), util.EpochDivisor("s"))
+	require.Equal(t, int64(time.Minute), util.EpochDivisor("m"))
+	require.Equal(t, int64(time.Hour), util.EpochDivisor("h"))
+}
+
+// TestCalculateSum tests the CalculateSum function
+func TestCalculateSum(t *testing.T) {
+	type sumTestCase struct {
+		name     string
+		values   []int64
+		expected int64
+	}
+
+	// Test int64 values
+	intTestCases := []sumTestCase{
+		{name: "empty slice", values: []int64{}, expected: 0},
+		{name: "single element", values: []int64{5}, expected: 5},
+		{name: "multiple positive numbers", values: []int64{1, 2, 3, 4, 5}, expected: 15},
+		{name: "multiple negative numbers", values: []int64{-1, -2, -3, -4, -5}, expected: -15},
+		{name: "mixed positive and negative", values: []int64{-1, 2, -3, 4, -5}, expected: -3},
+		{name: "with zero", values: []int64{0, 0, 0}, expected: 0},
+		{name: "large numbers", values: []int64{1000000, 2000000, 3000000}, expected: 6000000},
+	}
+
+	for _, tc := range intTestCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := util.CalculateSum(tc.values)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+
+	// Test float64 values
+	floatTestCases := []struct {
+		name     string
+		values   []float64
+		expected float64
+	}{
+		{name: "empty slice", values: []float64{}, expected: 0.0},
+		{name: "single element", values: []float64{3.14}, expected: 3.14},
+		{name: "multiple positive numbers", values: []float64{1.1, 2.2, 3.3}, expected: 6.6},
+		{name: "multiple negative numbers", values: []float64{-1.1, -2.2, -3.3}, expected: -6.6},
+		{name: "mixed positive and negative", values: []float64{-1.5, 2.5, -3.5, 4.5}, expected: 2.0},
+		{name: "with zero", values: []float64{0.0, 0.0, 0.0}, expected: 0.0},
+		{name: "small decimals", values: []float64{0.1, 0.2, 0.3, 0.4}, expected: 1.0},
+		{name: "precision test", values: []float64{0.1, 0.2}, expected: 0.3},
+	}
+
+	for _, tc := range floatTestCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := util.CalculateSum(tc.values)
+			// Use InDelta for floating point comparison to handle precision issues
+			assert.InDelta(t, tc.expected, result, util.PrecisionThreshold)
+		})
+	}
+}
+
+// TestCalculateMax tests the CalculateMax function
+func TestCalculateMax(t *testing.T) {
+	type maxTestCase[T util.NumberOnly] struct {
+		name     string
+		values   []T
+		expected T
+	}
+
+	defaultInt64Max := int64(math.MinInt64)
+	// Test int64 values
+	intTestCases := []maxTestCase[int64]{
+		{name: "empty slice", values: []int64{}, expected: math.MinInt64},
+		{name: "single element", values: []int64{5}, expected: 5},
+		{name: "ascending order", values: []int64{1, 2, 3, 4, 5}, expected: 5},
+		{name: "descending order", values: []int64{5, 4, 3, 2, 1}, expected: 5},
+		{name: "random order", values: []int64{3, 1, 4, 1, 5, 9, 2, 6}, expected: 9},
+		{name: "all negative", values: []int64{-5, -3, -1, -2, -4}, expected: -1},
+		{name: "mixed positive and negative", values: []int64{-5, 3, -1, 0, -2}, expected: 3},
+		{name: "with min int64", values: []int64{math.MinInt64, 0, 1}, expected: 1},
+	}
+
+	for _, tc := range intTestCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := util.CalculateMax(tc.values, defaultInt64Max)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+
+	defaultFloat64Max := -math.MaxFloat64
+	// Test float64 values
+	floatTestCases := []maxTestCase[float64]{
+		{name: "empty slice", values: []float64{}, expected: -math.MaxFloat64},
+		{name: "single element", values: []float64{3.14}, expected: 3.14},
+		{name: "maximum values", values: []float64{1.1, -math.MaxFloat64, 3.3}, expected: 3.3},
+		{name: "all positive", values: []float64{1.1, 2.2, 3.3}, expected: 3.3},
+		{name: "all negative", values: []float64{-1.1, -2.2, -3.3}, expected: -1.1},
+		{name: "mixed positive and negative", values: []float64{-1.5, 2.5, -3.5, 4.5}, expected: 4.5},
+		{name: "positive and zero", values: []float64{0.0, 1.5, -2.5}, expected: 1.5},
+		{name: "with nan", values: []float64{1.0, math.NaN(), 2.0}, expected: 2.0},
+	}
+
+	for _, tc := range floatTestCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := util.CalculateMax(tc.values, defaultFloat64Max)
+			assert.InDelta(t, tc.expected, result, util.PrecisionThreshold)
+		})
+	}
+}
+
+// TestCalculateMin tests the CalculateMin function
+func TestCalculateMin(t *testing.T) {
+	type minTestCase[T util.NumberOnly] struct {
+		name     string
+		values   []T
+		expected T
+	}
+
+	defaultInt64Min := int64(math.MaxInt64)
+	// Test int64 values
+	intTestCases := []minTestCase[int64]{
+		{name: "empty slice", values: []int64{}, expected: math.MaxInt64},
+		{name: "single element", values: []int64{5}, expected: 5},
+		{name: "ascending order", values: []int64{1, 2, 3, 4, 5}, expected: 1},
+		{name: "descending order", values: []int64{5, 4, 3, 2, 1}, expected: 1},
+		{name: "random order", values: []int64{3, 1, 4, 1, 5, 9, 2, 6}, expected: 1},
+		{name: "all negative", values: []int64{-5, -3, -1, -2, -4}, expected: -5},
+		{name: "mixed positive and negative", values: []int64{-5, 3, -1, 0, -2}, expected: -5},
+		{name: "with max int64", values: []int64{math.MaxInt64, 0, 1}, expected: 0},
+	}
+
+	for _, tc := range intTestCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := util.CalculateMin(tc.values, defaultInt64Min)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+
+	defaultFloat64Min := math.MaxFloat64
+	// Test float64 values
+	floatTestCases := []struct {
+		name     string
+		values   []float64
+		expected float64
+	}{
+		{name: "empty slice", values: []float64{}, expected: math.MaxFloat64},
+		{name: "single element", values: []float64{3.14}, expected: 3.14},
+		{name: "minimum values", values: []float64{1.1, math.MaxFloat64, 3.3}, expected: 1.1},
+		{name: "all positive", values: []float64{1.1, 2.2, 3.3}, expected: 1.1},
+		{name: "all negative", values: []float64{-1.1, -2.2, -3.3}, expected: -3.3},
+		{name: "mixed positive and negative", values: []float64{-1.5, 2.5, -3.5, 4.5}, expected: -3.5},
+		{name: "positive and zero", values: []float64{0.0, 1.5, -2.5}, expected: -2.5},
+		{name: "with nan", values: []float64{1.0, math.NaN(), 2.0}, expected: 1.0},
+	}
+
+	for _, tc := range floatTestCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := util.CalculateMin(tc.values, defaultFloat64Min)
+			assert.InDelta(t, tc.expected, result, util.PrecisionThreshold)
+		})
 	}
 }

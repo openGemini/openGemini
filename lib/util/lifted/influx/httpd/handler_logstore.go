@@ -32,8 +32,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bytedance/sonic"
 	"github.com/gorilla/mux"
+	"github.com/indirect/valyala/fastjson"
 	"github.com/influxdata/influxdb/uuid"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	compression "github.com/openGemini/openGemini/lib/compress"
@@ -59,7 +59,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/valyala/fastjson"
 	"go.uber.org/zap"
 )
 
@@ -791,7 +790,7 @@ func getTimestamp(i interface{}, req *LogWriteRequest) (int64, error) {
 func Interface2str(i interface{}) string {
 	switch v := i.(type) {
 	case map[string]interface{}:
-		str, err := sonic.MarshalString(i)
+		str, err := json2.MarshalToString(i)
 		if err != nil {
 			break
 		}
@@ -1011,7 +1010,7 @@ func appendFailRow(failRows *record.Record, req *LogWriteRequest, val interface{
 	var err error
 	content, ok := val.([]byte)
 	if !ok {
-		content, err = sonic.Marshal(val)
+		content, err = json2.Marshal(val)
 		if err != nil {
 			content = util.Str2bytes(Interface2str(val))
 		}
@@ -1220,7 +1219,7 @@ func (h *Handler) parseJsonArray(body io.ReadCloser, req *LogWriteRequest, rows,
 		return totalLen
 	}
 
-	err = sonic.Unmarshal(b, &jsonArray)
+	err = json2.Unmarshal(b, &jsonArray)
 	if err != nil {
 		h.Logger.Error("sonic unmarshal json fail", zap.Error(err), zap.String(Repository, req.repository),
 			zap.String(LogStream, req.logStream), zap.Any("json length", len(b)))
@@ -1995,7 +1994,7 @@ func (h *Handler) parseLogQuery(logP *logparser.Parser, info *measurementInfo, q
 	var ok bool
 	if stmt, currOk := q.Statements[0].(*influxql.ExplainStatement); currOk {
 		ok = true
-		selectStmt = stmt.Statement
+		selectStmt, ok = stmt.Statement.(*influxql.SelectStatement)
 	} else {
 		selectStmt, ok = q.Statements[0].(*influxql.SelectStatement)
 	}
@@ -2327,7 +2326,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 
 	epoch := strings.TrimSpace(r.FormValue("epoch"))
 	var qDuration *statistics.SQLSlowQueryStatistics
-	if !isInternalDatabase(info.database) {
+	if !util.IsInternalDatabase(info.database) {
 		qDuration = statistics.NewSqlSlowQueryStatistics(info.database)
 		defer func() {
 			d := time.Since(start).Nanoseconds()

@@ -235,11 +235,10 @@ func TestSeriesByBinaryExprSetLiteral(t *testing.T) {
 }
 
 func TestDoPruneWithSet(t *testing.T) {
-	mem := 1 * 1024 * 1024
 	path := t.TempDir()
 	is := &indexSearch{
 		idx: &MergeSetIndex{
-			cache: newIndexCache(mem/32, mem/32, mem/16, mem/128, path, false, false),
+			cache: newIndexCache(path, false),
 			tb:    &mergeset.Table{},
 		},
 		ts: mergeset.TableSearch{},

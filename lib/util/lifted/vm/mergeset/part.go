@@ -7,8 +7,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/memory"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/filestream"
@@ -154,6 +154,9 @@ func (p *part) MustClose() {
 
 type indexBlock struct {
 	bhs []blockHeader
+
+	// The buffer for holding the data referred by bhs
+	buf []byte
 }
 
 func (idxb *indexBlock) SizeBytes() int {

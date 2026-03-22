@@ -31,6 +31,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/clv"
+	"github.com/openGemini/openGemini/engine/lastrowcache"
 	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
@@ -263,7 +264,6 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 
 	// for wal
 	opt.WalSyncInterval = time.Duration(conf.Data.Wal.WalSyncInterval)
-	opt.WalEnabled = conf.Data.Wal.WalEnabled
 	opt.WalReplayParallel = conf.Data.Wal.WalReplayParallel
 	opt.WalReplayAsync = conf.Data.Wal.WalReplayAsync
 	opt.WalReplayBatchSize = int(conf.Data.Wal.WalReplayBatchSize)
@@ -282,7 +282,7 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.MaxFullCompactions = conf.Data.Compact.MaxFullCompactions
 	opt.FullCompactColdDuration = time.Duration(conf.Data.Compact.CompactFullWriteColdDuration)
 	opt.CompactionMethod = conf.Data.Compact.CompactionMethod
-	opt.CsCompactionEnabled = conf.Data.Compact.CsCompactionEnabled
+	opt.CompactMemUsageLimit = int64(conf.Data.Compact.CompactMemUsageLimit)
 
 	// for readCache
 	opt.ReadPageSize = conf.Data.ReadCache.ReadPageSize
@@ -580,16 +580,22 @@ func (s *Storage) MustClose() {
 }
 
 func (s *Storage) ExecuteDelete(req *msgservice.DeleteRequest) error {
+	var err error
 	switch req.Type {
 	case msgservice.DatabaseDelete:
-		return s.engine.DeleteDatabase(req.Database, req.PtId)
+		err = s.engine.DeleteDatabase(req.Database, req.PtId)
 	case msgservice.RetentionPolicyDelete:
-		return s.engine.DropRetentionPolicy(req.Database, req.Rp, req.PtId)
+		err = s.engine.DropRetentionPolicy(req.Database, req.Rp, req.PtId)
 	case msgservice.MeasurementDelete:
 		// imply delete measurement
-		return s.engine.DropMeasurement(req.Database, req.Rp, req.Measurement, req.ShardIds)
+		err = s.engine.DropMeasurement(req.Database, req.Rp, req.Measurement, req.ShardIds)
+	default:
+		return nil
 	}
-	return nil
+
+	// clear last row cache after delete action
+	lastrowcache.ClearCache()
+	return err
 }
 
 func (s *Storage) GetShardSplitPoints(db string, pt uint32, shardID uint64, idxes []int64) ([]string, error) {
@@ -597,11 +603,11 @@ func (s *Storage) GetShardSplitPoints(db string, pt uint32, shardID uint64, idxe
 }
 
 func (s *Storage) RefEngineDbPt(db string, ptId uint32) error {
-	return s.engine.DbPTRef(db, ptId)
+	return s.engine.DbPTRef(db, ptId, true)
 }
 
 func (s *Storage) UnrefEngineDbPt(db string, ptId uint32) {
-	s.engine.DbPTUnref(db, ptId)
+	s.engine.DbPTUnref(db, ptId, true)
 }
 
 func (s *Storage) GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int {
@@ -614,7 +620,7 @@ func (s *Storage) CreateLogicPlan(ctx context.Context, db string, ptId uint32, s
 }
 
 func (s *Storage) ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDS []uint64, schema hybridqp.Catalog) (hybridqp.IShardsFragments, error) {
-	filesFragments, err := s.engine.ScanWithSparseIndex(ctx, db, ptId, shardIDS, schema.(*executor.QuerySchema))
+	filesFragments, err := s.engine.ScanWithSparseIndex(ctx, db, ptId, shardIDS, schema)
 	return filesFragments, err
 }
 
@@ -623,8 +629,13 @@ func (s *Storage) GetIndexInfo(db string, ptId uint32, shardID uint64, schema hy
 }
 
 func (s *Storage) RowCount(db string, ptId uint32, shardIDS []uint64, schema hybridqp.Catalog) (int64, error) {
-	rowCount, err := s.engine.RowCount(db, ptId, shardIDS, schema.(*executor.QuerySchema))
+	rowCount, err := s.engine.RowCount(db, ptId, shardIDS, schema, false)
 	return rowCount, err
+}
+
+func (s *Storage) GetPreAgg(db string, ptId uint32, shardIDS []uint64, schema hybridqp.Catalog, queryAggExprs []string) (*record.Record, error) {
+	preAggRecord, err := s.engine.GetPreAgg(db, ptId, shardIDS, schema, queryAggExprs)
+	return preAggRecord, err
 }
 
 func (s *Storage) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (influxql.TablesTagSets, error) {
@@ -667,12 +678,20 @@ func (s *Storage) GetEngine() engine.Engine {
 	return s.engine
 }
 
-func (s *Storage) RegisterOnPTOffload(id uint64, f func(ptID uint32)) {
-	s.engine.RegisterOnPTOffload(id, f)
+func (s *Storage) RegisterOnPTLoaded(key engine.CallbackKey, f engine.PtLoadFunc) {
+	s.engine.RegisterOnPTLoaded(key, f)
 }
 
-func (s *Storage) UninstallOnPTOffload(id uint64) {
-	s.engine.UninstallOnPTOffload(id)
+func (s *Storage) UninstallOnPTLoaded(key engine.CallbackKey) {
+	s.engine.UninstallOnPTLoaded(key)
+}
+
+func (s *Storage) RegisterOnPTOffload(key engine.CallbackKey, f engine.PtOffLoadFunc) {
+	s.engine.RegisterOnPTOffload(key, f)
+}
+
+func (s *Storage) UninstallOnPTOffload(key engine.CallbackKey) {
+	s.engine.UninstallOnPTOffload(key)
 }
 
 func (s *Storage) PreOffload(opId uint64, ptInfo *meta.DbPtInfo) error {

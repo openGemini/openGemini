@@ -12,18 +12,19 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"unsafe"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/indirect/valyala/fastjson/fastfloat"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/valyala/fastjson/fastfloat"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"go.uber.org/zap"
 )
 
@@ -40,14 +41,9 @@ var (
 var hasIndexOption byte
 var hasNoIndexOption byte
 
-var streamOnlyOption byte
-var streamDataOption byte
-
 func init() {
 	hasIndexOption = 'y'
 	hasNoIndexOption = 'n'
-	streamOnlyOption = 'y'
-	streamDataOption = 'n'
 }
 
 const (
@@ -308,9 +304,6 @@ func (r *Row) UnmarshalShardKeyByTag(tags []string) error {
 	r.ShardKey = append(r.ShardKey[:0], r.Name...)
 	if len(tags) == 0 {
 		for j := range r.Tags {
-			if err := r.CheckDuplicateTag(j); err != nil {
-				return err
-			}
 			r.appendShardKey(j)
 		}
 		return nil
@@ -334,10 +327,6 @@ searchTag:
 			return ErrPointShouldHaveAllShardKey
 		}
 
-		if err := r.CheckDuplicateTag(j); err != nil {
-			return err
-		}
-
 		if tags[i] == r.Tags[j].Key {
 			r.appendShardKey(j)
 			i++
@@ -348,12 +337,6 @@ searchTag:
 
 	if i < len(tags) {
 		return ErrPointShouldHaveAllShardKey
-	}
-	for j < len(r.Tags)-1 {
-		if err := r.CheckDuplicateTag(j); err != nil {
-			return err
-		}
-		j++
 	}
 	return nil
 }
@@ -421,6 +404,19 @@ func (r *Row) UnmarshalShardKeyByTagOp(tags []string) error {
 func (r *Row) CheckDuplicateTag(idx int) error {
 	if idx < len(r.Tags)-1 && r.Tags[idx].Key == r.Tags[idx+1].Key {
 		return fmt.Errorf("duplicate tag %s", r.Tags[idx].Key)
+	}
+	return nil
+}
+
+func (r *Row) CheckDuplicateTags() error {
+	tags := r.Tags
+	if tags.Len() == 0 {
+		return nil
+	}
+	for i := 0; i < len(r.Tags)-1; i++ {
+		if tags[i].Key == tags[i+1].Key {
+			return fmt.Errorf("duplicate tags %s", tags[i].Key)
+		}
 	}
 	return nil
 }
@@ -770,17 +766,13 @@ func (r *Row) unmarshalIndexOptions(src []byte, indexOptionPool []IndexOption) (
 		}
 
 		indexOpt := &indexOptionPool[start+i]
-
 		indexOpt.Oid = encoding.UnmarshalUint32(src[:4])
 		src = src[4:]
 		indexListLen := encoding.UnmarshalUint16(src[:2])
-		if int(indexListLen) < cap(indexOpt.IndexList) {
-			indexOpt.IndexList = indexOpt.IndexList[:indexListLen]
-		} else {
-			indexOpt.IndexList = append(indexOpt.IndexList, make([]uint16, int(indexListLen)-cap(indexOpt.IndexList))...)
-		}
 		src = src[2:]
-		for j := 0; j < int(indexListLen); j++ {
+
+		indexOpt.IndexList = slices.Grow(indexOpt.IndexList[:0], int(indexListLen))[:indexListLen]
+		for j := range indexListLen {
 			indexOpt.IndexList[j] = encoding.UnmarshalUint16(src[:2])
 			src = src[2:]
 		}
@@ -1379,6 +1371,14 @@ var FieldTypeName = map[int]string{
 	Field_Type_Boolean: "Boolean",
 	Field_Type_Tag:     "Tag",
 	Field_Type_Last:    "Unknown",
+}
+
+func IsBasicDataType(fieldType int) bool {
+	return fieldType == Field_Type_Int ||
+		fieldType == Field_Type_Float ||
+		fieldType == Field_Type_Boolean ||
+		fieldType == Field_Type_String ||
+		fieldType == Field_Type_Tag
 }
 
 func FieldType2Val(fieldType int) (interface{}, error) {

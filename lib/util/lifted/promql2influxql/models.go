@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	jsoniter "github.com/json-iterator/go"
 	"github.com/prometheus/prometheus/promql/parser"
 	"github.com/tinylib/msgp/msgp"
 )
@@ -80,8 +79,6 @@ type Response interface {
 
 func (p *PromResponse) IsPromResponse()      {}
 func (p *PromQueryResponse) IsPromResponse() {}
-
-var json2 = jsoniter.ConfigCompatibleWithStandardLibrary
 
 // Response represents a list of statement results.
 type PromResponse struct {

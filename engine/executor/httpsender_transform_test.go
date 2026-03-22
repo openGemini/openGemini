@@ -16,6 +16,7 @@ package executor_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -28,8 +29,11 @@ import (
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/spf13/cast"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -576,7 +580,7 @@ func BenchmarkHttpChunkSender_GenRecords(b *testing.B) {
 	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
 	chunk := genChunk(inRowDataType)
 
-	g := executor.NewRecordsGenerator(0)
+	g := executor.NewRecordsGenerator(0, &query.ProcessorOptions{QueryType: "influxql"})
 	_ = g
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -646,12 +650,12 @@ func TestRecordsGenerator_Generate(t *testing.T) {
 	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
 	chunk := genChunk(inRowDataType)
 
-	g := executor.NewRecordsGenerator(1000)
+	g := executor.NewRecordsGenerator(1000, &query.ProcessorOptions{QueryType: "influxql"})
 	recordContainers := g.Generate(chunk, false, nil)
 	recordContainers = g.Generate(chunk, true, recordContainers)
 	err := MatchContent(genTestChunk(), recordContainers)
 
-	g = executor.NewRecordsGenerator(1000)
+	g = executor.NewRecordsGenerator(1000, &query.ProcessorOptions{QueryType: "influxql"})
 	recordContainers = g.Generate(chunk, true, nil)
 	err = MatchContent(chunk, recordContainers)
 	assert.NoError(t, err)
@@ -669,15 +673,174 @@ func TestRecordsGenerator_Generate(t *testing.T) {
 	assert.Nil(t, recordContainers)
 	g.Release()
 
-	g = executor.NewRecordsGenerator(0)
+	g = executor.NewRecordsGenerator(0, &query.ProcessorOptions{QueryType: "influxql"})
 	recordContainers = g.Generate(iChunk, true, nil)
 	assert.Nil(t, recordContainers)
 	g.Release()
 
-	g = executor.NewRecordsGenerator(0)
+	g = executor.NewRecordsGenerator(0, &query.ProcessorOptions{QueryType: "influxql"})
 	recordContainers = g.Generate(&mockChunk{}, true, nil)
 	assert.Nil(t, recordContainers)
 	g.Release()
+
+	chunks := genChunksWithDifferentTags(inRowDataType)
+	g = executor.NewRecordsGenerator(100, &query.ProcessorOptions{QueryType: "influxql"})
+	recordContainers = g.Generate(chunks[0], false, nil)
+	assert.Nil(t, recordContainers)
+
+	recordContainers = g.Generate(chunks[1], true, nil)
+	chunks[0].Append(chunks[1], 0, chunks[1].Len())
+	chunks[0].AppendTagsAndIndexes(chunks[1].Tags(), []int{1})
+	err = MatchContent(chunks[0], recordContainers)
+	assert.NoError(t, err)
+
+	g.Release()
+}
+
+func TestRecordsGenerator_Generate_SQL(t *testing.T) {
+	fields := mockFieldsAndTags()
+	refs := varRefsFromFields(fields)
+	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
+	chunk := genChunk(inRowDataType)
+
+	// Test with QueryTypeSQL
+	g := executor.NewRecordsGenerator(1000, &query.ProcessorOptions{QueryType: query.QueryTypeSQL})
+	recordContainers := g.Generate(chunk, false, nil)
+	recordContainers = g.Generate(chunk, true, recordContainers)
+
+	// Verify that records are generated without error
+	assert.NotNil(t, recordContainers)
+	assert.Greater(t, len(recordContainers), 0)
+
+	// Verify that the schema doesn't include time column
+	for _, container := range recordContainers {
+		record := container.Data
+		schema := record.Schema()
+		// In SQL mode, time column should not be present
+		assert.NotContains(t, schema.Fields(), "time")
+		// Only the data fields should be present
+		assert.Equal(t, len(fields), len(schema.Fields()))
+	}
+
+	g = executor.NewRecordsGenerator(1000, &query.ProcessorOptions{QueryType: query.QueryTypeSQL})
+	recordContainers = g.Generate(chunk, true, nil)
+	assert.NoError(t, MatchContentWithoutTime(chunk, recordContainers))
+
+	chunk = genChunk2(inRowDataType)
+	recordContainers = g.Generate(chunk, true, nil)
+	assert.NoError(t, MatchContentWithoutTime(chunk, recordContainers))
+
+	iFields := mockIllegalFieldsAndTags()
+	iRefs := varRefsFromFields(iFields)
+	iInRowDataType := hybridqp.NewRowDataTypeImpl(iRefs...)
+	iChunk := genIllegalChunk(iInRowDataType)
+	recordContainers = g.Generate(iChunk, true, nil)
+	assert.Nil(t, recordContainers)
+	g.Release()
+
+	g = executor.NewRecordsGenerator(0, &query.ProcessorOptions{QueryType: query.QueryTypeSQL})
+	recordContainers = g.Generate(iChunk, true, nil)
+	assert.Nil(t, recordContainers)
+	g.Release()
+
+	g = executor.NewRecordsGenerator(0, &query.ProcessorOptions{QueryType: query.QueryTypeSQL})
+	recordContainers = g.Generate(&mockChunk{}, true, nil)
+	assert.Nil(t, recordContainers)
+	g.Release()
+
+	chunks := genChunksWithDifferentTags(inRowDataType)
+	g = executor.NewRecordsGenerator(100, &query.ProcessorOptions{QueryType: query.QueryTypeSQL})
+	recordContainers = g.Generate(chunks[0], false, nil)
+	assert.Nil(t, recordContainers)
+
+	recordContainers = g.Generate(chunks[1], true, nil)
+	chunks[0].Append(chunks[1], 0, chunks[1].Len())
+	chunks[0].AppendTagsAndIndexes(chunks[1].Tags(), []int{1})
+	assert.NoError(t, MatchContentWithoutTime(chunks[0], recordContainers))
+
+	g.Release()
+}
+
+func MatchContentWithoutTime(chunk executor.Chunk, recordsContainers []*models.RecordContainer) error {
+	refs := chunk.RowDataType().MakeRefs()
+	fields := chunk.RowDataType().Fields()
+	tagIdx := chunk.TagIndex()
+	tags := chunk.Tags()
+	if len(tagIdx) != len(recordsContainers) {
+		return fmt.Errorf("tag index length mismatch")
+	}
+	for i := range tagIdx {
+		recordContainer := recordsContainers[i]
+		record := recordContainer.Data
+		schema := record.Schema()
+		tag := tags[i]
+		if !hybridqp.EqualMap(tag.KeyValues(), recordContainer.Tags) {
+			return fmt.Errorf("tags mismatch, %v", tag.KeyValues())
+		}
+		start := tagIdx[i]
+		var end int
+		if i == len(tagIdx)-1 {
+			end = chunk.NumberOfRows()
+		} else {
+			end = tagIdx[i+1]
+		}
+
+		// In SQL mode, there's no time column, so we start from field 0
+		for j, ref := range refs {
+			if fields[j].Name() != schema.Field(j).Name {
+				return fmt.Errorf("field name mismatch %s", fields[j].Name())
+			}
+			col := chunk.Column(j)
+			var rIdx int
+			for idx := start; idx < end; idx++ {
+				valueStr := record.Column(j).ValueStr(rIdx)
+				colType := record.Column(j).DataType()
+				rIdx++
+				if col.IsNilV2(idx) {
+					if valueStr != "(null)" {
+						return fmt.Errorf("value mismatch %s", fields[j].Name())
+					}
+					continue
+				}
+				switch ref.Type {
+				case influxql.Float:
+					if colType != arrow.PrimitiveTypes.Float64 {
+						return fmt.Errorf("value type mismatch %s", fields[j].Name())
+					}
+					val := cast.ToFloat64(valueStr)
+					if val != col.FloatValue(col.GetValueIndexV2(idx)) {
+						return fmt.Errorf("value mismatch %s", fields[j].Name())
+					}
+				case influxql.Integer:
+					if colType != arrow.PrimitiveTypes.Int64 {
+						return fmt.Errorf("value type mismatch %s", fields[j].Name())
+					}
+					val := cast.ToInt64(valueStr)
+					if val != col.IntegerValue(col.GetValueIndexV2(idx)) {
+						return fmt.Errorf("value mismatch %s", fields[j].Name())
+					}
+				case influxql.String, influxql.Tag:
+					if colType != arrow.BinaryTypes.String {
+						return fmt.Errorf("value type mismatch %s", fields[j].Name())
+					}
+					if valueStr != col.StringValue(col.GetValueIndexV2(idx)) {
+						return fmt.Errorf("value mismatch %s", fields[j].Name())
+					}
+				case influxql.Boolean:
+					if colType != arrow.FixedWidthTypes.Boolean {
+						return fmt.Errorf("value type mismatch %s", fields[j].Name())
+					}
+					val := cast.ToBool(valueStr)
+					if val != col.BooleanValue(col.GetValueIndexV2(idx)) {
+						return fmt.Errorf("value mismatch %s", fields[j].Name())
+					}
+				default:
+					return errors.New("type not support")
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func TestArrowChunkSender_Write(t *testing.T) {
@@ -838,16 +1001,16 @@ func MatchContent(chunk executor.Chunk, recordsContainers []*models.RecordContai
 					if colType != arrow.PrimitiveTypes.Float64 {
 						return fmt.Errorf("value type mismatch %s", fields[j].Name())
 					}
-					val, err := strconv.ParseFloat(valueStr, 64)
-					if err != nil || val != col.FloatValue(col.GetValueIndexV2(idx)) {
+					val := cast.ToFloat64(valueStr)
+					if val != col.FloatValue(col.GetValueIndexV2(idx)) {
 						return fmt.Errorf("value mismatch %s", fields[j].Name())
 					}
 				case influxql.Integer:
 					if colType != arrow.PrimitiveTypes.Int64 {
 						return fmt.Errorf("value type mismatch %s", fields[j].Name())
 					}
-					val, err := strconv.ParseInt(valueStr, 10, 64)
-					if err != nil || val != col.IntegerValue(col.GetValueIndexV2(idx)) {
+					val := cast.ToInt64(valueStr)
+					if val != col.IntegerValue(col.GetValueIndexV2(idx)) {
 						return fmt.Errorf("value mismatch %s", fields[j].Name())
 					}
 				case influxql.String, influxql.Tag:
@@ -861,8 +1024,8 @@ func MatchContent(chunk executor.Chunk, recordsContainers []*models.RecordContai
 					if colType != arrow.FixedWidthTypes.Boolean {
 						return fmt.Errorf("value type mismatch %s", fields[j].Name())
 					}
-					val, err := strconv.ParseBool(valueStr)
-					if err != nil || val != col.BooleanValue(col.GetValueIndexV2(idx)) {
+					val := cast.ToBool(valueStr)
+					if val != col.BooleanValue(col.GetValueIndexV2(idx)) {
 						return fmt.Errorf("value mismatch %s", fields[j].Name())
 					}
 				default:
@@ -949,6 +1112,45 @@ func genChunk2(outRowDataType hybridqp.RowDataType) executor.Chunk {
 	}
 
 	return ck
+}
+
+func genChunksWithDifferentTags(outRowDataType hybridqp.RowDataType) []executor.Chunk {
+	cb := executor.NewChunkBuilder(outRowDataType)
+	ck := cb.NewChunk("cpu")
+	chunkTags := ParseChunkTags("a=1")
+	ck.AppendTagsAndIndex(*chunkTags, 0)
+	ck.AppendIntervalIndex(0)
+	ck.AppendTime(int64(1))
+	ck.Column(1).AppendIntegerValue(int64(1))
+	ck.Column(1).AppendNotNil()
+	ck.Column(0).AppendFloatValue(float64(1))
+	ck.Column(0).AppendNotNil()
+	ck.Column(2).AppendBooleanValue(true)
+	ck.Column(2).AppendNotNil()
+	ck.Column(3).AppendNil()
+	ck.Column(4).AppendStringValue("tv1")
+	ck.Column(4).AppendNotNil()
+	ck.Column(5).AppendStringValue("tv2")
+	ck.Column(5).AppendNotNil()
+
+	chunkTags = ParseChunkTags("a=2")
+	ck2 := cb.NewChunk("cpu")
+	ck2.AppendTagsAndIndex(*chunkTags, 0)
+	ck2.AppendIntervalIndex(0)
+	ck2.AppendTime(int64(1))
+	ck2.Column(1).AppendIntegerValue(int64(1))
+	ck2.Column(1).AppendNotNil()
+	ck2.Column(0).AppendFloatValue(float64(1))
+	ck2.Column(0).AppendNotNil()
+	ck2.Column(2).AppendBooleanValue(true)
+	ck2.Column(2).AppendNotNil()
+	ck2.Column(3).AppendNil()
+	ck2.Column(4).AppendStringValue("tv1")
+	ck2.Column(4).AppendNotNil()
+	ck2.Column(5).AppendStringValue("tv2")
+	ck2.Column(5).AppendNotNil()
+
+	return []executor.Chunk{ck, ck2}
 }
 
 func buildRows() models.Rows {
@@ -1212,4 +1414,61 @@ func TestRemoveCommonValues(t *testing.T) {
 			assert.Equalf(t, tt.want, executor.RemoveCommonValues(tt.args.prev, tt.args.curr), "RemoveCommonValues(%v, %v)", tt.args.prev, tt.args.curr)
 		})
 	}
+}
+
+func TestSetTimeZero(t *testing.T) {
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "last_row",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "val1",
+						Type: influxql.Float,
+					},
+				},
+			},
+		},
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "last_row",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "val2",
+						Type: influxql.Float,
+					},
+				},
+			},
+		},
+	}
+	opt := query.ProcessorOptions{
+		HintType:       hybridqp.FullSeriesQuery,
+		GroupByAllDims: true,
+	}
+	schema := executor.NewQuerySchema(fields, []string{"val1", "val2"}, &opt, nil)
+	assert.False(t, executor.SetTimeZero(schema))
+}
+
+func TestGetRowsFromRec(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "f1"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "f2"},
+		record.Field{Type: influx.Field_Type_Float, Name: "f3"},
+		record.Field{Type: influx.Field_Type_String, Name: "f4"},
+		record.Field{Type: influx.Field_Type_Tag, Name: "f5"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	rec := record.NewRecord(schema, false)
+	rec.ColVals[0].AppendInteger(1)
+	rec.ColVals[1].AppendBoolean(true)
+	rec.ColVals[2].AppendFloat(22.2)
+	rec.ColVals[3].AppendString("abc")
+	rec.ColVals[4].AppendStringNull()
+	rec.ColVals[5].AppendInteger(3)
+
+	g := &executor.RowsGenerator{}
+	rows := g.GenerateFromRecord(rec, time.UTC, "mst", schema)
+	require.Equal(t, rows.Len(), 1)
+	rows = g.GenerateFromRecord(rec, time.UTC, "mst", schema)
+	require.Equal(t, rows.Len(), 1)
 }

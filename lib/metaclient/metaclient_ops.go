@@ -62,9 +62,8 @@ func (c *Client) sendSysCtrlToMeta(currentServer int, mod string, param map[stri
 	return c.SendRPCMsg(currentServer, msg, callback)
 }
 
-func (c *Client) SendBackupToMeta(mod string, param map[string]string) (map[string]string, error) {
+func (c *Client) SendBackupToMeta(currentServer int, mod string, param map[string]string) string {
 	startTime := time.Now()
-	result := make(map[string]string)
 	var err error
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -72,23 +71,23 @@ func (c *Client) SendBackupToMeta(mod string, param map[string]string) (map[stri
 	select {
 	case <-c.closing:
 		c.mu.RUnlock()
-		return nil, nil
+		return ""
 	default:
 	}
-	data, err := c.sendBackupMsgToMeta(0, mod, param)
+
+	data, err := c.sendBackupMsgToMeta(currentServer, mod, param)
 	c.logger.Info("send backup command to meta", zap.String("current", metaServers[0]), zap.Error(err), zap.Duration("duration", time.Since(startTime)))
 	if err != nil {
-		result[metaServers[0]] = fmt.Sprintf("failed,%s", err.Error())
-		return result, nil
+		return fmt.Sprintf("failed,%s", err.Error())
 	}
-	err = writeBackupMetaData(param, data)
-	if err != nil {
-		result[metaServers[0]] = fmt.Sprintf("failed,%s", err.Error())
-		return result, nil
+	if data != nil {
+		err = writeBackupMetaData(param, data)
+		if err != nil {
+			return fmt.Sprintf("failed,%s", err.Error())
+		}
 	}
-	result[metaServers[0]] = "success"
 
-	return result, nil
+	return "success"
 }
 
 func (c *Client) sendBackupMsgToMeta(currentServer int, mod string, param map[string]string) ([]byte, error) {

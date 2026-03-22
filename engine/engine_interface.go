@@ -20,11 +20,14 @@ import (
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/scheduler"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -108,13 +111,15 @@ type Engine interface {
 	TagValues(db string, ptId []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (influxql.TablesTagSets, error)
 	TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (map[string]uint64, error)
 	DropSeries() error
+	MarkDropSeries(db string, ptID uint32, mstName []byte, expr influxql.Expr, t tsi.TimeRange) error
 
-	DbPTRef(db string, ptId uint32) error
-	DbPTUnref(db string, ptId uint32)
+	DbPTRef(db string, ptId uint32, read bool) error
+	DbPTUnref(db string, ptId uint32, read bool)
 	CreateLogicalPlan(ctx context.Context, db string, ptId uint32, shardID []uint64, sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error)
-	ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDs []uint64, schema *executor.QuerySchema) (executor.ShardsFragments, error)
+	ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDs []uint64, schema hybridqp.Catalog) (executor.ShardsFragments, error)
 	GetIndexInfo(db string, ptId uint32, shardIDs uint64, schema *executor.QuerySchema) (*executor.AttachedIndexInfo, error)
-	RowCount(db string, ptId uint32, shardIDs []uint64, schema *executor.QuerySchema) (int64, error)
+	RowCount(db string, ptId uint32, shardIDs []uint64, schema hybridqp.Catalog, isOnlyPKFilter bool) (int64, error)
+	GetPreAgg(db string, ptId uint32, shardIDs []uint64, schema hybridqp.Catalog, queryAggExprs []string) (*record.Record, error)
 
 	LogicalPlanCost(db string, ptId uint32, sources influxql.Sources, opt query.ProcessorOptions) (hybridqp.LogicalPlanCost, error)
 
@@ -131,13 +136,9 @@ type Engine interface {
 	Statistics(buffer []byte) ([]byte, error)
 	StatisticsOps() []opsStat.OpsStatistic
 
-	GetShardDownSamplePolicyInfos(meta interface {
-		UpdateShardDownSampleInfo(Ident *meta.ShardIdentifier) error
-	}) ([]*meta.ShardDownSamplePolicyInfo, error)
+	GetShardDownSamplePolicyInfos(meta MetaDownSample) ([]*meta.ShardDownSamplePolicyInfo, error)
 	GetDownSamplePolicy(key string) *meta.StoreDownSamplePolicy
-	StartDownSampleTask(info *meta.ShardDownSamplePolicyInfo, schema []hybridqp.Catalog, log *zap.Logger, meta interface {
-		UpdateShardDownSampleInfo(Ident *meta.ShardIdentifier) error
-	}) error
+	StartDownSampleTask(info *meta.ShardDownSamplePolicyInfo, schema []hybridqp.Catalog, log *zap.Logger, meta MetaDownSample) error
 	UpdateDownSampleInfo(policies *meta.DownSamplePoliciesInfoWithDbRp)
 	UpdateShardDownSampleInfo(infos *meta.ShardDownSampleUpdateInfos)
 	CheckPtsRemovedDone() bool
@@ -147,16 +148,27 @@ type Engine interface {
 
 	RaftMessage
 	CreateDDLBasePlans(planType hybridqp.DDLType, db string, ptIDs []uint32, tr *influxql.TimeRange) DDLBasePlans
-	CreateConsumeIterator(database, mst string, opt *query.ProcessorOptions) []record.Iterator
+	CreateConsumeIterator(ident util.MeasurementIdent, pts []uint32, opt *query.ProcessorOptions) ([]record.Iterator, func())
 	SetMetaClient(m metaclient.MetaClient)
 
-	RegisterOnPTOffload(id uint64, f func(ptID uint32))
-	UninstallOnPTOffload(id uint64)
+	RegisterOnPTLoaded(id CallbackKey, f PtLoadFunc)
+	UninstallOnPTLoaded(id CallbackKey)
+	RegisterOnPTOffload(id CallbackKey, f PtOffLoadFunc)
+	UninstallOnPTOffload(id CallbackKey)
 
 	MergeShards(meta.MergeShards) error
 	ClearRepCold(req *msgservice.SendClearEventsRequest) error
 	GetDatabase(database string) map[uint32]*DBPTInfo
 	OpenShardLazy(sh Shard) error
+
+	GetLastIndex(db string, ptId uint32) (uint64, error)
+	GetRPPTWriteStat(db, rp string) (meta.PTMstWriteStatus, error)
+	GetTask(typ scheduler.TaskType, id uint64) (scheduler.Task, error)
+	CompactFiles(typ scheduler.TaskType, id uint64, info *immutable.CompactedFileInfo) error
+	GetShardIDs(db string, ptId uint32, tr *influxql.TimeRange) ([]uint64, error)
+	IsColStore(db, rp, mst string) bool
+	GetDBPtIds(db string) []uint32
+	GetColStorePK(db, rp, mst string) (record.Schemas, bool)
 }
 
 type RaftMessage interface {

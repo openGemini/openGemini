@@ -16,10 +16,13 @@ package executor_test
 
 import (
 	"errors"
+	"sort"
 	"testing"
 
 	gomonkey "github.com/agiledragon/gomonkey/v2"
 	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -74,7 +77,7 @@ func TestRcaRun(t *testing.T) {
 	gomonkey.ApplyFunc(executor.FaultDemarcation, func(chunks []executor.Chunk, subTopo *executor.Graph, algoParams executor.AlgoParam, colMap map[string]int) (graph *executor.Graph, err error) {
 		return nil, nil
 	})
-	_, err := executor.GetTableFunctionOperator("rca").Run(tableFunctionParams1)
+	_, err := executor.GetTableFunctionOperator(executor.RcaFuncName).Run(tableFunctionParams1)
 	assert.ErrorContains(t, err, "rca chunk length is not 2")
 
 	chunkPortsWithMetaArray1 = []*executor.ChunkPortsWithMeta{
@@ -84,7 +87,7 @@ func TestRcaRun(t *testing.T) {
 		ChunkPortsWithMetas: chunkPortsWithMetaArray1,
 		Param:               "{}",
 	}
-	_, err = executor.GetTableFunctionOperator("rca").Run(tableFunctionParams1)
+	_, err = executor.GetTableFunctionOperator(executor.RcaFuncName).Run(tableFunctionParams1)
 	assert.ErrorContains(t, err, "rca param error")
 
 	chunkPortsWithMeta2 := &executor.ChunkPortsWithMeta{
@@ -100,13 +103,74 @@ func TestRcaRun(t *testing.T) {
 		ChunkPortsWithMetas: chunkPortsWithMetaArray2,
 		Param:               "{}",
 	}
-	_, err = executor.GetTableFunctionOperator("rca").Run(tableFunctionParams2)
+	_, err = executor.GetTableFunctionOperator(executor.RcaFuncName).Run(tableFunctionParams2)
 	assert.NoError(t, err)
 
 	gomonkey.ApplyFunc(executor.FaultDemarcation, func(chunks []executor.Chunk, subTopo *executor.Graph, algoParams executor.AlgoParam, colMap map[string]int) (graph *executor.Graph, err error) {
 		return nil, errors.New("error")
 	})
-	_, err = executor.GetTableFunctionOperator("rca").Run(tableFunctionParams2)
+	_, err = executor.GetTableFunctionOperator(executor.RcaFuncName).Run(tableFunctionParams2)
 	assert.ErrorContains(t, err, "error")
 
+}
+
+func TestGetNodeIdRun(t *testing.T) {
+	chunkPortsWithMeta := &executor.ChunkPortsWithMeta{
+		IGraph: nil,
+	}
+	chunkPortsWithMetaArray := []*executor.ChunkPortsWithMeta{
+		chunkPortsWithMeta,
+		chunkPortsWithMeta,
+	}
+	tableFunctionParams := &executor.TableFunctionParams{
+		ChunkPortsWithMetas: chunkPortsWithMetaArray,
+	}
+	_, err := executor.GetTableFunctionOperator(executor.GetTopoUidFuncName).Run(tableFunctionParams)
+	assert.ErrorContains(t, err, executor.GetTopoUidFuncName+" chunk length is not 1")
+
+	chunkPortsWithMetaArray = []*executor.ChunkPortsWithMeta{
+		chunkPortsWithMeta,
+	}
+	tableFunctionParams = &executor.TableFunctionParams{
+		ChunkPortsWithMetas: chunkPortsWithMetaArray,
+	}
+	_, err = executor.GetTableFunctionOperator(executor.GetTopoUidFuncName).Run(tableFunctionParams)
+	assert.ErrorContains(t, err, executor.GetTopoUidFuncName+" chunk has no graph")
+
+	chunkPortsWithMeta = &executor.ChunkPortsWithMeta{
+		IGraph: BuildGraphChunk1().GetGraph(),
+	}
+	chunkPortsWithMetaArray = []*executor.ChunkPortsWithMeta{
+		chunkPortsWithMeta,
+	}
+	tableFunctionParams = &executor.TableFunctionParams{
+		ChunkPortsWithMetas: chunkPortsWithMetaArray,
+	}
+	chunks, err := executor.GetTableFunctionOperator(executor.GetTopoUidFuncName).Run(tableFunctionParams)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(chunks))
+
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "uid", Type: influxql.String},
+	)
+	dstChunk := executor.NewChunkBuilder(rowDataType).NewChunk("topo_uids")
+	dstUids := []string{"ELB", "Nginx-ingress1", "Nginx-ingress2", "Service1", "Service2", "Service3", "Service4", "VM1", "VM2", "VM3", "VM4", "VM5", "rds1", "rds2"}
+	chunkLength := len(dstUids)
+	dstTimes := make([]int64, chunkLength)
+	dstChunk.AppendTimes(dstTimes)
+	dstChunk.AppendTagsAndIndex(executor.ChunkTags{}, 0)
+	dstChunk.AppendIntervalIndexes([]int{0})
+	dstChunk.Column(0).AppendStringValues(dstUids)
+	dstChunk.Column(0).AppendManyNotNil(chunkLength)
+
+	assert.Equal(t, dstChunk.Name(), chunks[0].Name())
+	assert.Equal(t, dstChunk.Time(), chunks[0].Time())
+	assert.Equal(t, dstChunk.TagIndex(), chunks[0].TagIndex())
+	for k := range chunks[0].Tags() {
+		assert.Equal(t, dstChunk.Tags()[k].PointTags(), chunks[0].Tags()[k].PointTags())
+	}
+	assert.Equal(t, dstChunk.IntervalIndex(), chunks[0].IntervalIndex())
+	uids := chunks[0].Column(0).StringValuesV2(nil)
+	sort.Strings(uids)
+	assert.Equal(t, dstUids, uids)
 }

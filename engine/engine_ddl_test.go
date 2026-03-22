@@ -15,16 +15,26 @@
 package engine
 
 import (
+	"io"
 	"sort"
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
+	"github.com/openGemini/openGemini/engine/immutable/tsreader"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
+	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
 
@@ -87,7 +97,9 @@ func createShardWithTimeRange(eng *EngineImpl, db string, rp string, ptId uint32
 }
 
 func TestShard_CreateRecordIterator(t *testing.T) {
-	sh := &shard{}
+	sh := &shard{
+		ident: &meta.ShardIdentifier{},
+	}
 
 	opt := &query.ProcessorOptions{StartTime: 100, EndTime: time.Now().Add(time.Hour).UnixNano()}
 	itr := sh.CreateConsumeIterator("mst", opt)
@@ -95,6 +107,43 @@ func TestShard_CreateRecordIterator(t *testing.T) {
 
 	plan := sh.CreateDDLBasePlan(nil, 1)
 	require.Empty(t, plan)
+}
+
+func TestShard_CreateCSRecordIterator(t *testing.T) {
+	ident := util.MeasurementIdent{DB: defaultDb, RP: defaultRp, Name: "mst"}
+	mi := &meta.MeasurementInfo{Name: "mst", EngineType: config.COLUMNSTORE}
+	schema := make(meta.CleanSchema)
+	schema["pk"] = meta.SchemaVal{Typ: influx.Field_Type_Tag}
+	schema["sk"] = meta.SchemaVal{Typ: influx.Field_Type_Tag}
+	mi.Schema = &schema
+	mi.ColStoreInfo = &meta.ColStoreInfo{
+		PropertyKey: []string{"pk"},
+		SortKey:     []string{"sk"},
+	}
+
+	colstore.MstManagerIns().Add(ident, mi)
+	defer func() {
+		colstore.MstManagerIns().Clear()
+	}()
+
+	opt := &query.ProcessorOptions{StartTime: 100, EndTime: time.Now().Add(time.Hour).UnixNano()}
+
+	dir := t.TempDir()
+	eng, err := initEngine(dir)
+	require.NoError(t, err)
+	defer func(eng *EngineImpl) {
+		err = eng.Close()
+		if err != nil {
+			t.Errorf("failed to close engine: %v", err)
+		}
+	}(eng)
+
+	err = createShardWithTimeRange(eng, defaultDb, defaultRp, customPtId, customShardId)
+	require.NoError(t, err)
+
+	itr, release := eng.CreateConsumeIterator(ident, eng.GetDBPtIds(defaultDb), opt)
+	defer release()
+	require.Empty(t, itr)
 }
 
 func TestConsumeIterator(t *testing.T) {
@@ -400,13 +449,17 @@ func TestEngineImpl_CreateConsumeIterator(t *testing.T) {
 			expr, _ := influxql.ParseExpr(tt.condition)
 			tt.args.opt.Condition = expr
 
-			itrs := eng.CreateConsumeIterator(msi.Database, msi.Name, tt.args.opt)
+			ident := util.MeasurementIdent{
+				DB:   msi.Database,
+				RP:   msi.RetentionPolicy,
+				Name: msi.Name,
+			}
+			itrs, release := eng.CreateConsumeIterator(ident, eng.GetDBPtIds(msi.Database), tt.args.opt)
 			require.Equal(t, 1, len(itrs))
+			defer release()
 
 			for _, itr := range itrs {
-				rowCount, sidCount := processIterator(itr, t)
-				require.Equal(t, tt.expectedRowCount, rowCount)
-				require.Equal(t, tt.expectedSidCount, len(sidCount))
+				processIterator(t, itr, tt.expectedRowCount)
 			}
 			for _, itr := range itrs {
 				itr.Release()
@@ -415,16 +468,114 @@ func TestEngineImpl_CreateConsumeIterator(t *testing.T) {
 	}
 }
 
-func processIterator(itr record.Iterator, t *testing.T) (int, map[uint64]struct{}) {
+func processIterator(t *testing.T, itr record.Iterator, expectedRowNums int) {
 	rowCount := 0
-	sidCount := make(map[uint64]struct{})
-	sid, rec, err := itr.Next()
-	require.NoError(t, err)
-
-	for sid != 0 {
-		rowCount += rec.Rec.RowNums()
-		sidCount[sid] = struct{}{}
-		sid, rec, err = itr.Next()
+	rec, err := itr.Next()
+	if expectedRowNums == 0 {
+		require.Error(t, io.EOF, err)
+		return
 	}
-	return rowCount, sidCount
+	require.NoError(t, err)
+	for err != io.EOF {
+		rowCount += rec.Rec.RowNums()
+		rec, err = itr.Next()
+	}
+	require.Equal(t, expectedRowNums, rowCount)
+}
+
+func TestEngineImplGetRPPTWriteStat(t *testing.T) {
+	e := EngineImpl{
+		DBPartitions: make(map[string]map[uint32]*DBPTInfo),
+	}
+	e.DBPartitions["db1"] = make(map[uint32]*DBPTInfo)
+	e.DBPartitions["db1"][0] = &DBPTInfo{id: 0}
+	status, err := e.GetRPPTWriteStat("db1", "autogen")
+	require.ErrorContains(t, err, "PTWriteStatistics not enabled")
+
+	stat.InitPtWriteStatistics(map[string]string{"hots": "localhost"}, true, 0)
+	s := stat.NewPtWriteStats("db1", "autogen", 0)
+	s.AddMstBytesCount("mst1", 100)
+	status, err = e.GetRPPTWriteStat("db1", "autogen")
+	require.NoError(t, err)
+	require.Equal(t, int64(100), status[0]["mst1"])
+
+	status, err = e.GetRPPTWriteStat("db0", "autogen")
+	require.NoError(t, err)
+	require.Equal(t, 0, len(status))
+}
+
+func TestEngineGetShardIDs(t *testing.T) {
+	convey.Convey("with dbptinfo", t, func() {
+		engine := &EngineImpl{}
+		patches := gomonkey.ApplyPrivateMethod(engine, "getDBPTInfo", func(engine *Engine, db string, ptId uint32) *DBPTInfo {
+			return &DBPTInfo{shards: map[uint64]Shard{1: nil}}
+		})
+		defer patches.Reset()
+		shardIds, err := engine.GetShardIDs("db0", uint32(1), nil)
+		require.NoError(t, err)
+		require.Equal(t, shardIds, []uint64{1})
+	})
+
+	convey.Convey("without dbptinfo", t, func() {
+		engine := &EngineImpl{}
+		patches := gomonkey.ApplyPrivateMethod(engine, "getDBPTInfo", func(engine *Engine, db string, ptId uint32) *DBPTInfo {
+			return nil
+		})
+		defer patches.Reset()
+		_, err := engine.GetShardIDs("db0", uint32(1), nil)
+		require.Error(t, err, "dbpt is not found.")
+	})
+}
+
+func TestEngineIsColStore(t *testing.T) {
+	engine := &EngineImpl{}
+	require.False(t, engine.IsColStore("db0", "autogen", "mst0"))
+}
+
+func TestEngineGetColStorePK(t *testing.T) {
+	engine := &EngineImpl{}
+	_, ok := engine.GetColStorePK("db0", "autogen", "mst0")
+	require.False(t, ok)
+}
+
+func handlerFunc(group *DBPTGroup) {
+	panic("error")
+}
+
+func TestEngineExecuteInPt(t *testing.T) {
+	convey.Convey("recover", t, func() {
+		engine := &EngineImpl{log: logger.NewLogger(errno.ModuleStorageEngine)}
+		patches := gomonkey.ApplyPrivateMethod(engine, "getDBPTInfo", func(engine *Engine, db string, ptId uint32) *DBPTInfo {
+			return nil
+		})
+		defer patches.Reset()
+		engine.ExecuteInPt("db0", []uint32{1}, handlerFunc)
+	})
+}
+
+type MockConsumeIterator struct {
+	record.Iterator
+}
+
+func (m *MockConsumeIterator) SidCnt() int {
+	return 1
+}
+
+func TestShard_CreateLimitAndAggIterator(t *testing.T) {
+	sh := &shard{
+		ident: &meta.ShardIdentifier{},
+	}
+
+	// create the limit cursor
+	opt := &query.ProcessorOptions{StartTime: 100, EndTime: time.Now().Add(time.Hour).UnixNano(), Limit: 1}
+	itr := &MockConsumeIterator{}
+	iterator1 := sh.createTSLimitIterator(itr, opt)
+	require.NotEmpty(t, iterator1)
+
+	opt.Exprs = []influxql.Expr{&influxql.Call{Name: "count", Args: []influxql.Expr{&influxql.VarRef{Val: "field", Type: influxql.Float}}}}
+	opt.FieldAux = []influxql.VarRef{{Val: "field", Type: influxql.Float}}
+	cOpt, err := tsreader.NewConsumeOptions(opt, nil)
+	require.NoError(t, err)
+	iterator2 := sh.createTSAggIterator(itr, opt, cOpt)
+	require.NotEmpty(t, iterator2)
 }

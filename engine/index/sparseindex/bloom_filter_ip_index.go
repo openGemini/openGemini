@@ -40,18 +40,14 @@ type BloomFilterIpIndexWriter struct {
 	*skipIndexWriter
 }
 
+func (b *BloomFilterIpIndexWriter) Flush() error {
+	return nil
+}
+
 func NewBloomFilterIpWriter(dir, msName, dataFilePath, lockPath string, tokens string) *BloomFilterIpIndexWriter {
 	return &BloomFilterIpIndexWriter{
 		newSkipIndexWriter(dir, msName, dataFilePath, lockPath, tokens),
 	}
-}
-
-func (b *BloomFilterIpIndexWriter) Open() error {
-	return nil
-}
-
-func (b *BloomFilterIpIndexWriter) Close() error {
-	return nil
 }
 
 func (b *BloomFilterIpIndexWriter) getSkipIndexFilePath(fieldName string, detached bool) string {
@@ -62,14 +58,17 @@ func (b *BloomFilterIpIndexWriter) getSkipIndexFilePath(fieldName string, detach
 }
 
 func (b *BloomFilterIpIndexWriter) CreateAttachIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int) error {
-	var err error
 	var data []byte
 	var skipIndexFilePath string
 	for _, i := range schemaIdx {
 		skipIndexFilePath = b.getSkipIndexFilePath(writeRec.Schema[i].Name, false)
 		data = b.GenBloomFilterData(&writeRec.ColVals[i], rowsPerSegment, writeRec.Schema[i].Type)
+		writer, err := b.GetWriter(skipIndexFilePath)
+		if err != nil {
+			return err
+		}
 
-		err = writeSkipIndexToDisk(data, b.lockPath, skipIndexFilePath)
+		err = writer.WriteData(data)
 		if err != nil {
 			return err
 		}
@@ -90,8 +89,7 @@ func (b *BloomFilterIpIndexWriter) GenBloomFilterData(src *record.ColVal, rowsPe
 	segCnt := len(rowsPerSegment)
 	segBfSize := int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize)
 	res := make([]byte, segCnt*segBfSize)
-	var segCol []record.ColVal
-	segCol = src.SplitColBySize(segCol, rowsPerSegment, refType)
+	segCol := splitCol(src, rowsPerSegment, refType)
 
 	start := 0
 	end := 0

@@ -526,7 +526,7 @@ func (csm *ClusterShardMapping) MapTypeBatch(m *influxql.Measurement, fields map
 
 		for k := range fields {
 			hasMstInfo := false
-			var preField string
+			preField := k
 			if strings.HasPrefix(k, measurements[i].OriginName()+".") {
 				_, ftOk := metaFields[k]
 				_, dtOK := metaDimensions[k]
@@ -534,7 +534,6 @@ func (csm *ClusterShardMapping) MapTypeBatch(m *influxql.Measurement, fields map
 					hasMstInfo = false
 				} else {
 					hasMstInfo = true
-					preField = k
 					k = k[len(measurements[i].OriginName())+1:]
 				}
 			}
@@ -542,7 +541,7 @@ func (csm *ClusterShardMapping) MapTypeBatch(m *influxql.Measurement, fields map
 			_, dtOK := metaDimensions[k]
 
 			if !(ftOk || dtOK) {
-				fields[k].DataType = influxql.Unknown
+				fields[preField].DataType = influxql.Unknown
 				continue
 			}
 
@@ -909,6 +908,14 @@ func (csm *ClusterShardMapping) GetSources(sources influxql.Sources) influxql.So
 	return srcs
 }
 
+func (csm *ClusterShardMapping) GetResource(resource string) map[string]string {
+	resourceInfo, ok := csm.MetaClient.GetResource(resource)
+	if !ok || len(resourceInfo) == 0 {
+		return nil
+	}
+	return resourceInfo
+}
+
 // Source contains the database and retention policy source for data.
 type Source struct {
 	Database        string
@@ -924,6 +931,11 @@ func shardMapperExprRewriter(ftOk, hasMstInfo bool, fields map[string]*influxql.
 		} else {
 			fields[k].DataType = record.ToInfluxqlTypes(int(ft))
 		}
+		return
+	}
+	if hasMstInfo {
+		fields[preField].DataType = influxql.Tag
+		fields[preField].RealName = k
 	} else {
 		fields[k].DataType = influxql.Tag
 	}

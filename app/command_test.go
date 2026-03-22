@@ -26,6 +26,7 @@ import (
 	"github.com/agiledragon/gomonkey/v2"
 	"github.com/openGemini/openGemini/app"
 	meta "github.com/openGemini/openGemini/app/ts-meta/run"
+	"github.com/openGemini/openGemini/app/ts-store/run"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/stretchr/testify/require"
@@ -60,6 +61,26 @@ func TestRunCommands(t *testing.T) {
 	app.Run([]string{"version"})
 	app.Run([]string{"version"}, cmd)
 	app.Run([]string{"invalid arg"}, cmd)
+
+	info := app.ServerInfo{
+		App:       config.AppStore,
+		Version:   "unknown",
+		Commit:    "unknown",
+		Branch:    "unknown",
+		BuildTime: "unknown",
+	}
+	cmdStore := run.NewCommand(info, false)
+	cmdStore.NewServerFunc = func(c config.Config, info app.ServerInfo, l *logger.Logger) (app.Server, error) {
+		return &MockServer{
+			OpenFn: func() error {
+				return nil
+			},
+		}, nil
+	}
+	err1 := cmdStore.Run("-config", "../config/openGemini.singlenode.conf")
+	if err1 != nil {
+		t.Fatal(err1)
+	}
 }
 
 type MockServer struct {

@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/services/castor"
+	"github.com/stretchr/testify/require"
 )
 
 type timeValTuple struct {
@@ -483,6 +484,13 @@ func Test_castorADArrowRecordToChunk(t *testing.T) {
 	if !matchContent(chunk, []arrow.Record{rec}) {
 		t.Fatal("content not match")
 	}
+
+	chunk = &executor.ChunkImpl{}
+	rec = castor.BuildEmptyRecord()
+	if err := executor.CopyCastorADArrowRecordToChunk(rec, chunk, nil); err != nil {
+		t.Fatal("convert pure numeric record fail")
+	}
+	require.Equal(t, 0, chunk.Len())
 }
 
 func Test_castorADArrowRecordToChunk_Error(t *testing.T) {

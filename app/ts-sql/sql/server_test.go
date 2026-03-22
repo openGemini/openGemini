@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
@@ -37,6 +38,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var monitorP = ""
+
 func Test_NewServer(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -49,7 +52,7 @@ func Test_NewServer(t *testing.T) {
 	conf.Meta.UseIncSyncData = true
 	conf.RecordWrite.Enabled = true
 
-	server, err := NewServer(conf, app.ServerInfo{}, log)
+	server, err := NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -67,7 +70,7 @@ func Test_NewServer_Open_Close(t *testing.T) {
 	conf.Common.ReportEnable = false
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, app.ServerInfo{}, log)
+	server, err := NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).sherlockService)
 
@@ -92,13 +95,20 @@ func Test_NewServer_Open_Close_Flight(t *testing.T) {
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 	conf.HTTP.FlightEnabled = true
 
-	server, err := NewServer(conf, app.ServerInfo{App: config.AppSingle}, log)
+	server, err := NewServer(conf, app.ServerInfo{App: config.AppSingle, MonitorPass: &monitorP}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).sherlockService)
 
-	server.(*Server).initMetaClientFn = func() error {
+	client := server.(*Server).MetaClient
+	patch1 := gomonkey.ApplyMethod(client, "InitMetaClient", func(c *metaclient.Client, joinPeers []string, tlsEn bool, storageNodeInfo *metaclient.StorageNodeInfo, sqlNodeInfo *metaclient.SqlNodeInfo, role string, t metaclient.Role) (uint64, uint64, uint64, error) {
+		return 0, 0, 0, nil
+	})
+	defer patch1.Reset()
+	patch2 := gomonkey.ApplyMethod(client, "Open", func(c *metaclient.Client) error {
 		return nil
-	}
+	})
+	defer patch2.Reset()
+
 	err = server.Open()
 	require.NoError(t, err)
 
@@ -144,7 +154,7 @@ func Test_NewServer_1U(t *testing.T) {
 	conf.Common.CPUNum = 1
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, app.ServerInfo{}, log)
+	server, err := NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -163,7 +173,7 @@ func Test_NewServer_2U8G(t *testing.T) {
 	conf.Common.MemorySize = 8 * config.GB
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, app.ServerInfo{}, log)
+	server, err := NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -182,7 +192,7 @@ func Test_NewServer_2U16G(t *testing.T) {
 	conf.Common.MemorySize = 16 * config.GB
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, app.ServerInfo{}, log)
+	server, err := NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -200,7 +210,7 @@ func Test_NewServer_4U(t *testing.T) {
 	conf.Common.CPUNum = 4
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, app.ServerInfo{}, log)
+	server, err := NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -236,7 +246,7 @@ func Test_NewServer_16U(t *testing.T) {
 	conf.Common.CPUNum = 16
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, app.ServerInfo{}, log)
+	server, err := NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -254,7 +264,7 @@ func Test_NewServer_32U(t *testing.T) {
 	conf.Common.CPUNum = 32
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, app.ServerInfo{}, log)
+	server, err := NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -272,7 +282,7 @@ func Test_NewServer_64U(t *testing.T) {
 	conf.Common.CPUNum = 64
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, app.ServerInfo{}, log)
+	server, err := NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -290,7 +300,7 @@ func Test_NewServer_Correct_RPLimit(t *testing.T) {
 	conf.Common.ReportEnable = false
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, app.ServerInfo{}, log)
+	server, err := NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -305,13 +315,13 @@ func Test_NewServer_Invalid_BindAddress(t *testing.T) {
 	conf.HTTP.PprofEnabled = true
 	conf.HTTP.BindAddress = "127.0.0.1"
 
-	server, err := NewServer(conf, app.ServerInfo{}, log)
+	server, err := NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 }
 
 func TestNewCommand(t *testing.T) {
-	cmd := NewCommand(app.ServerInfo{App: config.AppSql}, false)
+	cmd := NewCommand(app.ServerInfo{App: config.AppSql, MonitorPass: &monitorP}, false)
 	require.Equal(t, app.SQLLOGO, cmd.Logo)
 	require.Equal(t, config.AppSql, cmd.Info.App)
 }
@@ -326,7 +336,7 @@ func Test_NewServer_Subscription_Enabled(t *testing.T) {
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 	conf.Subscriber.Enabled = true
 
-	server, err := NewServer(conf, app.ServerInfo{}, log)
+	server, err := NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).SubscriberManager)
 	server.(*Server).initMetaClientFn = func() error {
@@ -365,7 +375,7 @@ func Test_NewServer_IncSyncData_Enabled(t *testing.T) {
 	conf.Meta.UseIncSyncData = true
 	conf.Gossip.Enabled = true
 
-	server, err := NewServer(conf, app.ServerInfo{}, log)
+	server, err := NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, log)
 	require.NoError(t, err)
 	require.Equal(t, server.(*Server).MetaClient.UseSnapshotV2, true)
 	server.(*Server).initMetaClientFn = func() error {
@@ -406,7 +416,7 @@ func TestNewServer_FlightService(t *testing.T) {
 	conf.HTTP.FlightEnabled = true
 	log := logger.NewLogger(errno.ModuleUnknown)
 
-	server, err := NewServer(conf, app.ServerInfo{App: config.AppSingle}, log)
+	server, err := NewServer(conf, app.ServerInfo{App: config.AppSingle, MonitorPass: &monitorP}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).arrowFlightService)
 }

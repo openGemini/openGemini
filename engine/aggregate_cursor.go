@@ -342,15 +342,17 @@ func (c *aggregateCursor) inNextWindow(currRecord *record.Record) error {
 
 func (c *aggregateCursor) getIntervalIndex(record *record.Record) {
 	var startTime, endTime int64
-	if !c.schema.Options().HasInterval() {
+	opt := c.schema.Options()
+	if !opt.HasInterval() {
 		c.intervalIndex = append(c.intervalIndex, 0)
 		return
 	}
 	times := record.Times()
+
 	for i, t := range times {
 		if i == 0 || t >= endTime || t < startTime {
 			c.intervalIndex = append(c.intervalIndex, uint16(i))
-			startTime, endTime = c.schema.Options().Window(t)
+			startTime, endTime = opt.Window(t)
 		}
 	}
 }

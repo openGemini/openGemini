@@ -14,12 +14,21 @@
 
 package config
 
-import "path"
+import (
+	"path"
+	"sync"
+)
 
 const (
-	DefaultMaxRowGroupLen    = 64 * 1024
-	DefaultPageSize          = 64 * 1024
-	DefaultWriteBatchSize    = 512
+	DefaultTSSPToParquetLevel = 0
+	DefaultMaxRowGroupLen     = 64 * 1024
+	DefaultPageSize           = 64 * 1024
+	DefaultWriteBatchSize     = 512
+	DefaultItrWriteBatchSize  = 10
+	DefaultDictCompressEnable = 0 // 0 means disable, 1 otherwise
+	DefaultCompressAlg        = 1 // 0 represent snappy, 1 represent zstd, default is zstd
+	DefaultMaxStatsSize       = 64 * 1024
+
 	DefaultReliabilityLogDir = "/data/openGemini/parquet_reliability_log"
 	DefaultOutputDir         = "/data/openGemini/parquet_output"
 )
@@ -40,6 +49,17 @@ type ParquetTaskConfig struct {
 	// parquet writer batch size
 	WriteBatchSize int `toml:"write-batch-size"`
 
+	ItrBatchSize uint64 `toml:"itr-batch-size"`
+
+	DictCompressEnable uint64 `toml:"dict-compress-enable"`
+
+	CompressAlg uint64   `toml:"compress-alg"`
+	EnableMst   []string `toml:"enable-mst"`
+
+	MaxStatsSize int64 `toml:"max-stats-size"`
+
+	lock sync.RWMutex
+
 	OutputDir         string `toml:"output-dir"`
 	ReliabilityLogDir string `toml:"reliability-log-dir"`
 }
@@ -51,6 +71,10 @@ func NewParquetTaskConfig() *ParquetTaskConfig {
 		MaxRowGroupLen:     DefaultMaxRowGroupLen,
 		PageSize:           DefaultPageSize,
 		WriteBatchSize:     DefaultWriteBatchSize,
+		ItrBatchSize:       DefaultItrWriteBatchSize,
+		DictCompressEnable: DefaultDictCompressEnable,
+		CompressAlg:        DefaultCompressAlg,
+		MaxStatsSize:       DefaultMaxStatsSize,
 		OutputDir:          DefaultOutputDir,
 		ReliabilityLogDir:  DefaultReliabilityLogDir,
 	}
@@ -74,4 +98,16 @@ func (c *ParquetTaskConfig) GetReliabilityLogDir() string {
 		return DefaultReliabilityLogDir
 	}
 	return dir
+}
+
+func (c *ParquetTaskConfig) SetEnableMst(mst []string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	c.EnableMst = mst
+}
+
+func (c *ParquetTaskConfig) GetEnableMst() []string {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+	return c.EnableMst
 }

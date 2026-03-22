@@ -1,0 +1,66 @@
+// Copyright 2025 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package encoding
+
+import "fmt"
+
+var deltaSimple8bDecodeFunc [16]func(v uint64, n int64, dst []int64) int
+var zigZagMap [32768]int64
+
+func init() {
+    for i := 0; i < len(zigZagMap); i++ {
+        zigZagMap[i] = ZigZagDecode(uint64(i))
+    }
+
+    {{- range .Items}}
+    deltaSimple8bDecodeFunc[{{.FuncIndex}}] = deltaSimple8bDecode{{.EleCount}}
+    {{- end}}
+    {{- range .ItemsFast}}
+    deltaSimple8bDecodeFunc[{{.FuncIndex}}] = deltaSimple8bDecode{{.EleCount}}
+    {{- end}}
+}
+
+func DeltaSimple8bDecode(v uint64, n int64, dst []int64) (int, error) {
+    sel := v >> 60
+    if sel >= 16 || sel < 2 {
+        return 0, fmt.Errorf("invalid selector value: %b", sel)
+    }
+
+    return deltaSimple8bDecodeFunc[sel](v, n, dst), nil
+}
+
+{{- range $item := .ItemsFast}}
+func deltaSimple8bDecode{{$item.EleCount}}(v uint64, n int64, dst []int64) int {
+    const width = {{$item.Width}}
+    const mask = (1 << width) - 1
+       {{- range $i,$v := $item.Index}}
+       n += zigZagMap[(v>>(width*{{$i}})) & mask]
+    dst[{{$i}}] = n
+    {{- end}}
+    return {{$item.EleCount}}
+}
+{{end}}
+
+{{- range $item := .Items}}
+func deltaSimple8bDecode{{$item.EleCount}}(v uint64, n int64, dst []int64) int {
+    const width = {{$item.Width}}
+       const mask = (1 << width) - 1
+       {{- range $i,$v := $item.Index}}
+    n += ZigZagDecode((v>>(width*{{$i}})) & mask)
+    dst[{{$i}}] = n
+    {{- end}}
+    return {{$item.EleCount}}
+}
+{{end}}

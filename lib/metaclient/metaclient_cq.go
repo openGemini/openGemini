@@ -20,11 +20,11 @@ import (
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
-func (c *Client) SendSql2MetaHeartbeat(host string) error {
+func (c *Client) SendCQ2MetaHeartbeat(host string) error {
 	startTime := time.Now()
 	currentServer := connectedServer
 	var err error
@@ -41,11 +41,11 @@ func (c *Client) SendSql2MetaHeartbeat(host string) error {
 			currentServer = 0
 		}
 		c.mu.RUnlock()
-		err = c.sendSql2MetaHeartbeat(currentServer, host)
+		err = c.sendCQ2MetaHeartbeat(currentServer, host)
 		if err == nil {
 			break
 		}
-		c.logger.Debug("sql send heartbeat to meta failed", zap.String("sql host", host), zap.Error(err), zap.Duration("duration", time.Since(startTime)))
+		c.logger.Debug("cq node send heartbeat to meta failed", zap.String("cq node host", host), zap.Error(err), zap.Duration("duration", time.Since(startTime)))
 		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
 			break
 		}
@@ -56,9 +56,9 @@ func (c *Client) SendSql2MetaHeartbeat(host string) error {
 	return err
 }
 
-func (c *Client) sendSql2MetaHeartbeat(currentServer int, host string) error {
-	callback := &Sql2MetaHeartbeatCallback{}
-	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatRequest{Host: host})
+func (c *Client) sendCQ2MetaHeartbeat(currentServer int, host string) error {
+	callback := &CQ2MetaHeartbeatCallback{}
+	msg := message.NewMetaMessage(message.CQ2MetaHeartbeatRequestMessage, &message.CQ2MetaHeartbeatRequest{Host: host})
 	return c.SendRPCMsg(currentServer, msg, callback)
 }
 

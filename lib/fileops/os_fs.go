@@ -349,5 +349,13 @@ func (f vfs) DecodeRemotePathToLocal(path string) (string, error) {
 	return "", nil
 }
 
+func (f vfs) UpdateObsAkSk(ak, sk string) error {
+	return nil
+}
+
+func (f vfs) StreamConfUpdate(propertyName, propertyValue string) error {
+	return nil
+}
+
 func SetLogger() {
 }

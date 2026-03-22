@@ -19,6 +19,7 @@ package immutable
 import (
 	"errors"
 	"io/fs"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -42,6 +43,7 @@ func (supplier *MockSupplierError) GetNoClearShard() (uint64, error) {
 }
 
 func TestDoLoad(t *testing.T) {
+	backupBase := filepath.Join(t.TempDir(), "openGemini")
 	lock := ""
 	ctx := &fileLoadContext{}
 	m := &MmsTables{
@@ -67,7 +69,7 @@ func TestDoLoad(t *testing.T) {
 	_, err := ctx.getError()
 	require.Error(t, err, "ERROR_FILE_NOT_FOUND")
 
-	m.path = "/tmp/openGemini/data/data/prom1/0/autogen/1_1744588800000000000_1745193600000000000_1"
+	m.path = filepath.Join(backupBase, "data", "data", "prom1", "0", "autogen", "1_1744588800000000000_1745193600000000000_1")
 
 	doLoad(&MockSupplier{}, []fs.FileInfo{
 		&FakeInfo{
@@ -108,7 +110,7 @@ func TestDoLoad(t *testing.T) {
 	_, err = ctx.getError()
 	require.Error(t, err, "ERROR_FILE_NOT_FOUND")
 
-	m.path = "/tmp/openGemini/data/data/prom1/0/autogen/1_test_1745193600000000000_1"
+	m.path = filepath.Join(backupBase, "data", "data", "prom1", "0", "autogen", "1_test_1745193600000000000_1")
 	doLoad(nil, []fs.FileInfo{
 		&FakeInfo{
 			NameFn: func() string {
@@ -287,4 +289,20 @@ func TestReplaceAndClear(t *testing.T) {
 		},
 	}, time.Now())
 	require.NoError(t, err)
+}
+
+func TestGetCSFilesRef(t *testing.T) {
+	testDir := t.TempDir()
+	mockPath := filepath.Join(t.TempDir(), "openGemini")
+	conf := NewColumnStoreConfig()
+	conf.FragmentsNumPerFlush = 1
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testDir, &lockPath, &tier, true, conf)
+	store.CSFiles = map[string]*TSSPFiles{"table1": &TSSPFiles{files: []TSSPFile{MocTsspFile{
+		path: mockPath,
+	}}}}
+	csFiles, _ := store.GetCSFilesRef("table1")
+	require.Equal(t, csFiles[0].Path(), mockPath)
+	UnrefFiles(csFiles...)
 }

@@ -7,6 +7,12 @@ import (
 	"github.com/bytedance/sonic"
 )
 
+var json2 = sonic.Config{
+	SortMapKeys:             true,
+	NoValidateJSONMarshaler: true,
+	NoValidateJSONSkip:      true,
+}.Froze()
+
 // Row represents a single row returned from the execution of a statement.
 type Row struct {
 	Name    string            `json:"name,omitempty"`
@@ -60,7 +66,7 @@ func (r *Row) marshalJSON() ([]byte, error) {
 		}
 	}
 	o.Partial = r.Partial
-	return sonic.ConfigStd.Marshal(&o)
+	return json2.Marshal(&o)
 }
 
 // SameSeries returns true if r contains values for the same series as o.

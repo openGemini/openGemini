@@ -20,6 +20,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/pool"
 )
 
 var symbols = map[string]string{
@@ -210,6 +213,7 @@ type IndexType struct {
 	types               []string
 	lists               [][]string
 	timeClusterDuration time.Duration
+	indexParams         [][]Expr
 }
 
 type cqSamplePolicyInfo struct {
@@ -221,4 +225,24 @@ type fieldList struct {
 	fieldName  string
 	fieldType  string
 	tagOrField string
+}
+
+type Property struct {
+	Key   string
+	Value string
+}
+
+var yyParserPool = pool.NewUnionPool(cpu.GetCpuNum(), 0, 0, func() *yyParserImpl {
+	return &yyParserImpl{}
+})
+
+func (p *yyParserImpl) Reset() {
+	p.lval = yySymType{}
+	p.stack = [yyInitialStackSize]yySymType{}
+	p.char = 0
+}
+
+func (p *yyParserImpl) Release() {
+	p.Reset()
+	yyParserPool.PutWithMemSize(p, 0)
 }

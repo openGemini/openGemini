@@ -54,8 +54,8 @@ type MultiFieldFilterReader struct {
 	verticalFilterCount  int64
 	splitMap             map[string][]byte
 	missSplitIndex       map[string]uint8
-	lineFilterReader     *MultiFiledLineFilterReader
-	verticalFilterReader *MultilFieldVerticalFilterReader
+	lineFilterReader     *MultiFieldLineFilterReader
+	verticalFilterReader *MultiFieldVerticalFilterReader
 	expr                 []*SKRPNElement
 	hashes               map[string][]uint64
 	span                 *tracing.Span
@@ -70,7 +70,7 @@ func NewMultiFieldFilterReader(option *obs.ObsOptions, expr []*SKRPNElement, spl
 	}
 	filterReader.isFilter = true
 	var err error
-	filterReader.lineFilterReader, err = NewMultiFiledLineFilterReader(linePath, nil, expr, version, splitMap, linFilterName)
+	filterReader.lineFilterReader, err = NewMultiFieldLineFilterReader(linePath, nil, expr, version, splitMap, linFilterName)
 	if err != nil {
 		return nil, err
 	}
@@ -95,6 +95,10 @@ func (s *MultiFieldFilterReader) IsExist(blockId int64, elem *rpn.SKRPNElement) 
 		return s.verticalFilterReader.isExist(blockId, elem)
 	}
 	return s.lineFilterReader.isExist(blockId, elem)
+}
+
+func (s *MultiFieldFilterReader) GetRowCount(blockId int64, elem *rpn.SKRPNElement) (int64, error) {
+	return 0, nil
 }
 
 func (s *MultiFieldFilterReader) getAllHashes(expr []*SKRPNElement) {
@@ -138,7 +142,7 @@ func (s *MultiFieldFilterReader) Close() {
 	}
 }
 
-type MultilFieldVerticalFilterReader struct {
+type MultiFieldVerticalFilterReader struct {
 	MultiFieldFilterReader
 	r                  logstore.BloomFilterReader
 	bloomFilter        bloomfilter.Bloomfilter
@@ -149,12 +153,12 @@ type MultilFieldVerticalFilterReader struct {
 	groupNewPreCache   map[int64]map[int64][]uint64
 }
 
-func NewMultiFieldVerticalFilterReader(path string, obsOpts *obs.ObsOptions, expr []*SKRPNElement, version uint32, splitMap map[string][]byte, fileName string) (*MultilFieldVerticalFilterReader, error) {
+func NewMultiFieldVerticalFilterReader(path string, obsOpts *obs.ObsOptions, expr []*SKRPNElement, version uint32, splitMap map[string][]byte, fileName string) (*MultiFieldVerticalFilterReader, error) {
 	dr, err := logstore.NewBloomfilterReader(obsOpts, path, fileName, version)
 	if err != nil {
 		return nil, err
 	}
-	v := &MultilFieldVerticalFilterReader{
+	v := &MultiFieldVerticalFilterReader{
 		r:           dr,
 		groupIndex:  -1,
 		bloomFilter: bloomfilter.DefaultOneHitBloomFilter(version, logstore.GetConstant(version).FilterDataMemSize),
@@ -175,11 +179,11 @@ func NewMultiFieldVerticalFilterReader(path string, obsOpts *obs.ObsOptions, exp
 	return v, nil
 }
 
-func (s *MultilFieldVerticalFilterReader) IsExist(blockId int64, elem *rpn.SKRPNElement) (bool, error) {
+func (s *MultiFieldVerticalFilterReader) IsExist(blockId int64, elem *rpn.SKRPNElement) (bool, error) {
 	return s.isExist(blockId, elem)
 }
 
-func (s *MultilFieldVerticalFilterReader) isExist(blockId int64, elem *rpn.SKRPNElement) (bool, error) {
+func (s *MultiFieldVerticalFilterReader) isExist(blockId int64, elem *rpn.SKRPNElement) (bool, error) {
 	var t time.Time
 	if s.span != nil {
 		t = time.Now()
@@ -252,7 +256,11 @@ func (s *MultilFieldVerticalFilterReader) isExist(blockId int64, elem *rpn.SKRPN
 	return isHit, nil
 }
 
-func (s *MultilFieldVerticalFilterReader) hitExpr(val string) bool {
+func (s *MultiFieldVerticalFilterReader) GetRowCount(blockId int64, elem *rpn.SKRPNElement) (int64, error) {
+	return 0, nil
+}
+
+func (s *MultiFieldVerticalFilterReader) hitExpr(val string) bool {
 	hashValues := s.hashes[val]
 	if len(hashValues) == 0 {
 		return true
@@ -269,7 +277,7 @@ func (s *MultilFieldVerticalFilterReader) hitExpr(val string) bool {
 	return isExist
 }
 
-func (s *MultilFieldVerticalFilterReader) loadHash(pieceOffset int64, offsetInLong int64, blockId int64) uint64 {
+func (s *MultiFieldVerticalFilterReader) loadHash(pieceOffset int64, offsetInLong int64, blockId int64) uint64 {
 	var piece []uint64
 	if _, ok := s.groupNewCache[s.groupIndex]; ok {
 		piece = s.groupNewCache[s.groupIndex][pieceOffset]
@@ -291,7 +299,7 @@ func (s *MultilFieldVerticalFilterReader) loadHash(pieceOffset int64, offsetInLo
 	return hash
 }
 
-func (s *MultilFieldVerticalFilterReader) getPieceOffset(hash uint64, groupIndex int64) (int64, int64) {
+func (s *MultiFieldVerticalFilterReader) getPieceOffset(hash uint64, groupIndex int64) (int64, int64) {
 	bytesOffset := s.bloomFilter.GetBytesOffset(hash)
 	offsetInLong := bytesOffset % 8
 	pieceIndex := bytesOffset >> 3
@@ -300,7 +308,7 @@ func (s *MultilFieldVerticalFilterReader) getPieceOffset(hash uint64, groupIndex
 	return pieceOffset, offsetInLong
 }
 
-func (s *MultilFieldVerticalFilterReader) getPieceLongs(bytes []byte) ([]uint64, error) {
+func (s *MultiFieldVerticalFilterReader) getPieceLongs(bytes []byte) ([]uint64, error) {
 	verticalPieceMemSize := logstore.GetConstant(s.version).VerticalPieceMemSize
 	verticalPieceDiskSize := logstore.GetConstant(s.version).VerticalPieceDiskSize
 	pieceLongs := make([]uint64, verticalPieceDiskSize>>3)
@@ -315,7 +323,7 @@ func (s *MultilFieldVerticalFilterReader) getPieceLongs(bytes []byte) ([]uint64,
 	return pieceLongs, nil
 }
 
-func (s *MultilFieldVerticalFilterReader) StartSpan(span *tracing.Span) {
+func (s *MultiFieldVerticalFilterReader) StartSpan(span *tracing.Span) {
 	if span == nil {
 		return
 	}
@@ -328,10 +336,10 @@ func (s *MultilFieldVerticalFilterReader) StartSpan(span *tracing.Span) {
 	s.span.CreateCounter(VerticalFilterReaderDuration, "ns")
 }
 
-func (s *MultilFieldVerticalFilterReader) close() {
+func (s *MultiFieldVerticalFilterReader) close() {
 }
 
-type MultiFiledLineFilterReader struct {
+type MultiFieldLineFilterReader struct {
 	MultiFieldFilterReader
 	r              fileops.BasicFileReader
 	currentBlockId int64
@@ -339,13 +347,13 @@ type MultiFiledLineFilterReader struct {
 	isCached       bool
 }
 
-func NewMultiFiledLineFilterReader(path string, obsOpts *obs.ObsOptions, expr []*SKRPNElement, version uint32, splitMap map[string][]byte, fileName string) (*MultiFiledLineFilterReader, error) {
+func NewMultiFieldLineFilterReader(path string, obsOpts *obs.ObsOptions, expr []*SKRPNElement, version uint32, splitMap map[string][]byte, fileName string) (*MultiFieldLineFilterReader, error) {
 	fd, err := fileops.OpenObsFile(path, fileName, obsOpts, true)
 	if err != nil {
 		return nil, err
 	}
 	dr := fileops.NewFileReader(fd, nil)
-	l := &MultiFiledLineFilterReader{
+	l := &MultiFieldLineFilterReader{
 		r:          dr,
 		bloomCache: make(map[int64]bloomfilter.Bloomfilter),
 		isCached:   false,
@@ -363,11 +371,11 @@ func NewMultiFiledLineFilterReader(path string, obsOpts *obs.ObsOptions, expr []
 	return l, nil
 }
 
-func (s *MultiFiledLineFilterReader) IsExist(blockId int64, elem *rpn.SKRPNElement) (bool, error) {
+func (s *MultiFieldLineFilterReader) IsExist(blockId int64, elem *rpn.SKRPNElement) (bool, error) {
 	return s.isExist(blockId, elem)
 }
 
-func (s *MultiFiledLineFilterReader) isExist(blockId int64, elem *rpn.SKRPNElement) (bool, error) {
+func (s *MultiFieldLineFilterReader) isExist(blockId int64, elem *rpn.SKRPNElement) (bool, error) {
 	s.currentBlockId = blockId
 	filterDataDiskSize := logstore.GetConstant(s.version).FilterDataDiskSize
 	if !s.isCached {
@@ -396,7 +404,11 @@ func (s *MultiFiledLineFilterReader) isExist(blockId int64, elem *rpn.SKRPNEleme
 	return s.hitExpr(elem.Value.(string)), nil
 }
 
-func (s *MultiFiledLineFilterReader) hitExpr(val string) bool {
+func (s *MultiFieldLineFilterReader) GetRowCount(blockId int64, elem *rpn.SKRPNElement) (int64, error) {
+	return 0, nil
+}
+
+func (s *MultiFieldLineFilterReader) hitExpr(val string) bool {
 	hashValues := s.hashes[val]
 	if len(hashValues) == 0 {
 		return true
@@ -414,7 +426,7 @@ func (s *MultiFiledLineFilterReader) hitExpr(val string) bool {
 	return isExist
 }
 
-func (s *MultiFiledLineFilterReader) close() {
+func (s *MultiFieldLineFilterReader) close() {
 	if s.r != nil {
 		_ = s.r.Close()
 	}

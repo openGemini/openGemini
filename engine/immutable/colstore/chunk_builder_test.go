@@ -16,7 +16,7 @@ package colstore
 
 import (
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"path/filepath"
 	"testing"
 	"time"
@@ -49,7 +49,7 @@ func genData(rows int) *record.Record {
 		f5Builder := b.Column(4) // tag
 		tmBuilder := b.Column(5) // timestamp
 		for i := 1; i <= rows; i++ {
-			f1 := rand.Int63n(11)
+			f1 := rand.Int64N(11)
 			f2 := 1.1 * float64(f1)
 			if i%7 == 0 {
 				f1Builder.AppendInteger(f1 / 11)

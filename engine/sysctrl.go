@@ -16,13 +16,17 @@ package engine
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
+	log2 "log"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/influxdata/influxdb/toml"
+	"github.com/openGemini/openGemini/engine/lastrowcache"
 	"github.com/openGemini/openGemini/lib/backup"
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/failpoint"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/memory"
 	"github.com/openGemini/openGemini/lib/metaclient"
@@ -30,7 +34,6 @@ import (
 	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/services/stream"
-	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
 
@@ -48,15 +51,17 @@ import (
 const (
 	queryShardStatus = "queryShardStatus"
 
-	dataFlush             = "flush"
-	compactionEn          = "compen"
-	compmerge             = "merge"
-	snapshot              = "snapshot"
-	downSampleInOrder     = "downsample_in_order"
-	Failpoint             = "failpoint"
-	verifyNode            = "verifynode"
-	memUsageLimit         = "memusagelimit"
-	BackgroundReadLimiter = "backgroundReadLimiter"
+	dataFlush               = "flush"
+	compactionEn            = "compen"
+	compmerge               = "merge"
+	snapshot                = "snapshot"
+	downSampleInOrder       = "downsample_in_order"
+	Failpoint               = "failpoint"
+	verifyNode              = "verifynode"
+	memUsageLimit           = "memusagelimit"
+	BackgroundReadLimiter   = "backgroundReadLimiter"
+	MaxMergeSelfLevel       = "max_merge_self_level"
+	MaxNumOfFileToMergeSelf = "max_num_of_file_to_merge_self"
 )
 
 var (
@@ -225,9 +230,149 @@ func (e *EngineImpl) processReq(req *msgservice.SysCtrlRequest) (map[string]stri
 		}
 		stream.SetWriteStreamPointsEnabled(switchOn)
 		return nil, nil
+	case syscontrol.ShardGroupTimeZone:
+		timezone, ok := req.Param()["timezone"]
+		if !ok {
+			return nil, syscontrol.ErrNoSuchParam
+		}
+		err := config.UpdateTimeZoneLoc(timezone)
+		if err != nil {
+			log.Error("update shard group timezone config fail", zap.Error(err))
+		}
+		return nil, err
+	case syscontrol.ObsAkSk:
+		if err := syscontrol.CheckUpdateAsSkParamValid(req.Param()); err != nil {
+			return nil, err
+		}
+		ak, sk := req.Param()["ak"], req.Param()["sk"]
+		if err := fileops.UpdateObsAkSk(ak, sk); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	case syscontrol.ObsHostName:
+		if err := syscontrol.CheckUpdateObsHostNameParamValid(req.Param()); err != nil {
+			return nil, err
+		}
+		if err := fileops.StreamConfUpdate("obs.host.name", req.Param()["hostname"]); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	case syscontrol.UpdateStreamConf:
+		if err := syscontrol.CheckUpdateStreamConfParamValid(req.Param()); err != nil {
+			return nil, err
+		}
+		key, val := req.Param()["key"], req.Param()["val"]
+		if err := fileops.StreamConfUpdate(key, val); err != nil {
+			return nil, err
+		}
+		log.Info("update stream conf success", zap.String("key", key), zap.String("val", val))
+		return nil, nil
+	case syscontrol.LastRowCache:
+		if err := setLastRowCacheConfig(req.Param()); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	case syscontrol.ParquetTask:
+		if err := SetParquetTaskConfig(req.Param()); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	case syscontrol.CompactMemUsageLimit:
+		limit, err := syscontrol.GetIntValue(req.Param(), "limit")
+		if err != nil {
+			return nil, err
+		}
+		SetCompactMemUsageLimit(limit)
+		return nil, nil
+	case syscontrol.ForceFlushDuration:
+		d, err := syscontrol.GetDurationValue(req.Param(), "duration")
+		if err != nil {
+			log.Error("get shard snapshot force flush duration from param fail", zap.Error(err))
+			return nil, err
+		}
+		config.GetStoreConfig().ForceFlushDuration = toml.Duration(d)
+		log.Info("set shard snapshot force flush duration", zap.Duration("duration", d))
+		return nil, nil
+	case syscontrol.MergeSelfConf:
+		if err := setMergeSelfConf(req.Param()); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	case syscontrol.WalEnabled:
+		switchOn, err := syscontrol.GetBoolValue(req.Param(), "switchon")
+		if err != nil {
+			return nil, err
+		}
+		config.GetStoreConfig().Wal.WalEnabled = switchOn
+		return nil, nil
+	case syscontrol.DataCacheEnable:
+		enabled, err := syscontrol.GetIntValue(req.Param(), "enabled")
+		if err != nil {
+			return nil, err
+		}
+		err = setDataCacheEnable(enabled)
+		return nil, err
+	case syscontrol.TsspUnrefTimeout:
+		d, err := syscontrol.GetDurationValue(req.Param(), "duration")
+		if err != nil || d < 0 {
+			return nil, fmt.Errorf("invalid tssp unref timeout duration: %s, err: %v", d.String(), err)
+		}
+		config.GetStoreConfig().TsspUnrefTimeout = toml.Duration(d)
+		log.Info("set TsspUnrefTimeout", zap.Duration("duration", d))
+		return nil, nil
+	case syscontrol.DbptUnrefTimeout:
+		d, err := syscontrol.GetDurationValue(req.Param(), "duration")
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("invalid dbpt unref timeout duration: %s, err: %v", d.String(), err)
+		}
+		config.GetStoreConfig().DbptUnrefTimeout = toml.Duration(d)
+		log.Info("set DbptUnrefTimeout", zap.Duration("duration", d))
+		return nil, nil
+	case syscontrol.OffloadWaitQuery:
+		wait, err := syscontrol.GetBoolValue(req.Param(), "switchon")
+		if err != nil {
+			return nil, err
+		}
+		config.GetStoreConfig().OffloadWait = wait
+		log.Info("set OffloadWait", zap.Bool("wait", wait))
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("unknown sys cmd %v", req.Mod())
 	}
+}
+
+func setLastRowCacheConfig(paras map[string]string) error {
+	for k, v := range paras {
+		switch k {
+		case syscontrol.LastRowCacheEnable:
+			isEnable, err := strconv.ParseBool(v)
+			if err != nil {
+				return err
+			}
+			if err := lastrowcache.DisableEnableCache(isEnable); err != nil {
+				return err
+			}
+		case syscontrol.LastRowCacheMetricsEnable:
+			isEnable, err := strconv.ParseBool(v)
+			if err != nil {
+				return err
+			}
+			if err := lastrowcache.DisableEnableMetrics(isEnable); err != nil {
+				return err
+			}
+		case syscontrol.LastRowCacheMaxCost:
+			v, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return err
+			}
+			lastrowcache.UpdateCacheMaxCost(v)
+		default:
+		}
+	}
+	conf := config.GetLastRowCacheConfig()
+	fmt.Println(time.Now().Format(time.RFC3339), "set last row cache success", "LastRowCacheEnable:", conf.CacheEnabled,
+		"LastRowCacheMetricsEnable:", conf.Metrics, "LastRowCacheMaxCost:", conf.MaxCost)
+	return nil
 }
 
 func (e *EngineImpl) processBackup(req *msgservice.SysCtrlRequest) {
@@ -235,9 +380,6 @@ func (e *EngineImpl) processBackup(req *msgservice.SysCtrlRequest) {
 	backupPath := params[backup.BackupPath]
 	if backupPath == "" {
 		log.Error("backup: invalid parameter", zap.String("backupPath", backupPath))
-	}
-	if _, err := os.Stat(filepath.Join(backupPath, backup.DataBackupDir)); err == nil {
-		return
 	}
 	DB := make([]string, 0)
 	isRemote := params[backup.IsRemote] == "true"
@@ -275,11 +417,7 @@ func handleFailpoint(req *msgservice.SysCtrlRequest) error {
 		return err
 	}
 	if !switchon {
-		err = failpoint.Disable(point)
-		if err != nil {
-			log.Error("disable failpoint fail", zap.Error(err))
-			return err
-		}
+		failpoint.Disable(point)
 		return nil
 	}
 	term, ok := req.Param()["term"]
@@ -287,11 +425,7 @@ func handleFailpoint(req *msgservice.SysCtrlRequest) error {
 		log.Error("get term from param fail", zap.Error(err))
 		return err
 	}
-	err = failpoint.Enable(point, term)
-	if err != nil {
-		log.Error("enable failpoint fail", zap.Error(err))
-		return err
-	}
+	failpoint.Enable(point, term)
 	return nil
 }
 
@@ -313,4 +447,109 @@ func IsMemUsageExceeded() bool {
 	exceeded := memUsedPct > float64(memLimitPct)
 	log.Info("system mem usage", zap.Float64("memUsedPct", memUsedPct), zap.Float64("memLimitPct", float64(memLimitPct)), zap.Bool("exceeded", exceeded))
 	return exceeded
+}
+
+func SetParquetTaskConfig(paras map[string]string) error {
+	conf := config.GetStoreConfig().ParquetTask
+	for k, v := range paras {
+		switch k {
+		case syscontrol.ParquetLevel:
+			v, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return err
+			}
+			conf.TSSPToParquetLevel = uint16(v)
+
+		case syscontrol.ParquetGroupLen:
+			v, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return err
+			}
+			conf.MaxRowGroupLen = int(v)
+		case syscontrol.ParquetPageSize:
+			v, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return err
+			}
+			conf.PageSize = int(v)
+		case syscontrol.ParquetBatchSize:
+			v, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return err
+			}
+			conf.WriteBatchSize = int(v)
+		case syscontrol.ParquetItrSize:
+			v, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				return err
+			}
+			conf.ItrBatchSize = v
+		case syscontrol.ParquetCompressAlg:
+			v, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				return err
+			}
+			conf.CompressAlg = v
+		case syscontrol.ParquetDictCompressEnable:
+			v, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				return err
+			}
+			conf.DictCompressEnable = v
+		case syscontrol.ParquetEnableMst:
+			msts := make([]string, 0)
+			if v != "" {
+				msts = strings.Split(v, ",")
+			}
+			conf.SetEnableMst(msts)
+		case syscontrol.ParquetMaxStatsSize:
+			v, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return err
+			}
+			conf.MaxStatsSize = v
+		default:
+		}
+	}
+	log2.Println("set parquet conf param success, parquet-level:", conf.TSSPToParquetLevel,
+		"MaxRowGroupLen:", conf.MaxRowGroupLen, "PageSize:", conf.PageSize, "WriteBatchSize:", conf.WriteBatchSize, "ItrBatchSize:", conf.ItrBatchSize,
+		"CompressAlg:", conf.CompressAlg, "DictCompressEnable:", conf.DictCompressEnable, "enable-mst:", conf.EnableMst, " max-stats-size:", conf.MaxStatsSize)
+	return nil
+}
+
+func setMergeSelfConf(paras map[string]string) error {
+	for k, v := range paras {
+		switch k {
+		case MaxMergeSelfLevel:
+			value, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return err
+			}
+			if err := config.GetStoreConfig().Merge.SetMaxMergeSelfLevel(uint16(value)); err != nil {
+				return err
+			}
+		case MaxNumOfFileToMergeSelf:
+			strLevels := strings.Split(v, ",")
+			levels := make([]int, len(strLevels))
+			for i, strLevel := range strLevels {
+				value, err := strconv.ParseInt(strLevel, 10, 64)
+				if err != nil {
+					return err
+				}
+				levels[i] = int(value)
+			}
+			if err := config.GetStoreConfig().Merge.SetMaxNumOfFileToMergeSelf(levels); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("invalid param for setMergeSelfConf:%s", k)
+		}
+	}
+	return nil
+}
+
+func setDataCacheEnable(en int64) error {
+	fileops.ResetReadDataCache(uint64(en))
+	log.Info("SetDataCacheEnable", zap.Int64("enabled", en))
+	return nil
 }

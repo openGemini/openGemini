@@ -25,8 +25,11 @@ import (
 )
 
 const (
-	DefaultPoolSize    int = 30
-	DefaultWaitTimeout int = 30
+	DefaultPoolSize         int = 30
+	DefaultWaitTimeout      int = 30
+	DefaultTracingEndpoint      = "127.0.0.1:8086"
+	DefaultTracingRatio         = 0.1
+	DefaultTracingStorePath     = "_internal"
 )
 
 type algorithmType string
@@ -39,14 +42,19 @@ const (
 )
 
 type Castor struct {
-	Enabled           bool       `toml:"enabled"`
-	PyWorkerAddr      []string   `toml:"pyworker-addr"`
-	ConnPoolSize      int        `toml:"connect-pool-size"`
-	ResultWaitTimeout int        `toml:"result-wait-timeout"`
-	FitDetect         algoConfig `toml:"fit_detect"`
-	Detect            algoConfig `toml:"detect"`
-	Predict           algoConfig `toml:"predict"`
-	Fit               algoConfig `toml:"fit"`
+	Enabled             bool       `toml:"enabled"`
+	PyWorkerAddr        []string   `toml:"pyworker-addr"`
+	ConnPoolSize        int        `toml:"connect-pool-size"`
+	ResultWaitTimeout   int        `toml:"result-wait-timeout"`
+	FitDetect           algoConfig `toml:"fit_detect"`
+	Detect              algoConfig `toml:"detect"`
+	Predict             algoConfig `toml:"predict"`
+	Fit                 algoConfig `toml:"fit"`
+	TracingEnabled      bool       `toml:"tracing-enabled"`
+	TracingEndpoint     string     `toml:"tracing-endpoint"`
+	TracingHttpsEnabled bool       `toml:"tracing-https-enabled"`
+	TracingRatio        float64    `toml:"tracing-ratio"`
+	TracingStorePath    string     `toml:"tracing-store-path"`
 }
 
 type algoConfig struct {
@@ -58,6 +66,9 @@ func NewCastor() Castor {
 	return Castor{
 		ConnPoolSize:      DefaultPoolSize,
 		ResultWaitTimeout: DefaultWaitTimeout,
+		TracingEndpoint:   DefaultTracingEndpoint,
+		TracingRatio:      DefaultTracingRatio,
+		TracingStorePath:  DefaultTracingStorePath,
 	}
 }
 

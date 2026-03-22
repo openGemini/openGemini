@@ -36,10 +36,10 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	assert2 "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	_ "modernc.org/sqlite"
 )
 
@@ -158,7 +158,7 @@ func Test_Data_AlterShardKey(t *testing.T) {
 		t.Fatalf("got shardKey %v, expected %v", got, exp)
 	}
 
-	err = data.CreateShardGroup(dbName, rpName, time.Unix(0, 0), util.Hot, 0, 0)
+	err = data.CreateShardGroup(dbName, rpName, time.Unix(0, 0), util.Hot, 0, 0, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,6 +186,202 @@ func Test_Data_AlterShardKey(t *testing.T) {
 	}
 }
 
+func Test_Data_AlterShardsNum(t *testing.T) {
+	data := initData()
+	data.NumOfShards = 1
+
+	dbName := "foo"
+	rpName := "bar"
+	err := data.CreateDatabase(dbName, &RetentionPolicyInfo{
+		Name:     rpName,
+		ReplicaN: 1,
+		Duration: 24 * time.Hour,
+	}, nil, false, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rp, err := data.RetentionPolicy(dbName, rpName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rp == nil {
+		t.Fatal("creation of retention policy failed")
+	}
+
+	mstName := "cpu"
+	var shardsNum int32 = 1
+	err = data.CreateMeasurement(dbName, rpName, mstName,
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.HASH)}, 0, nil, 0, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = data.AlterShardsNum(dbName, rpName, mstName, shardsNum)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mst, err := data.Measurement(dbName, rpName, mstName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assert2.Equal(t, shardsNum, mst.InitNumOfShards)
+	err = data.CreateShardGroup(dbName, rpName, time.Unix(0, 0), util.Hot, 0, 0, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sg0, err := data.ShardGroupByTimestampAndEngineType(dbName, rpName, time.Unix(0, 0), config.TSSTORE)
+	if err != nil {
+		t.Fatal("Failed to find shard group:", err)
+	}
+
+	if sg0.ID != 1 {
+		t.Fatalf("got shard group id %d, expected %d", sg0.ID, 1)
+	}
+
+	assert2.Equal(t, shardsNum, int32(len(mst.ShardIdexes[sg0.ID])))
+
+	err = data.AlterShardsNum(dbName, rpName, mstName, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mst, err = data.Measurement(dbName, rpName, mstName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assert2.Equal(t, int32(1), mst.InitNumOfShards)
+	err = data.CreateShardGroup(dbName, rpName, time.Unix(0, 0).AddDate(0, 0, 2), util.Hot, 0, 0, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sg1, err := data.ShardGroupByTimestampAndEngineType(dbName, rpName, time.Unix(0, 0).AddDate(0, 0, 2), config.TSSTORE)
+	if err != nil {
+		t.Fatal("Failed to find shard group:", err)
+	}
+
+	if sg1.ID != 2 {
+		t.Fatalf("got shard group id %d, expected %d", sg1.ID, 2)
+	}
+
+	assert2.Equal(t, 1, len(GetShardIdxes(mst.ShardIdexes, sg1.ID)))
+
+	err = data.AlterShardsNum(dbName, rpName, mstName, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mst, err = data.Measurement(dbName, rpName, mstName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assert2.Equal(t, int32(0), mst.InitNumOfShards)
+	err = data.CreateShardGroup(dbName, rpName, time.Unix(0, 0).AddDate(0, 0, 4), util.Hot, 0, 0, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sg2, err := data.ShardGroupByTimestampAndEngineType(dbName, rpName, time.Unix(0, 0).AddDate(0, 0, 4), config.TSSTORE)
+	if err != nil {
+		t.Fatal("Failed to find shard group:", err)
+	}
+
+	if sg2.ID != 3 {
+		t.Fatalf("got shard group id %d, expected %d", sg2.ID, 3)
+	}
+
+	assert2.Equal(t, 0, len(mst.ShardIdexes[sg2.ID]))
+
+	err = data.AlterShardsNum(dbName, rpName, mstName, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = data.AlterShardsNum(dbName, rpName, mstName, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mst, err = data.Measurement(dbName, rpName, mstName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assert2.Equal(t, int32(0), mst.InitNumOfShards)
+	err = data.CreateShardGroup(dbName, rpName, time.Unix(0, 0).AddDate(0, 0, 6), util.Hot, 0, 0, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sg3, err := data.ShardGroupByTimestampAndEngineType(dbName, rpName, time.Unix(0, 0).AddDate(0, 0, 6), config.TSSTORE)
+	if err != nil {
+		t.Fatal("Failed to find shard group:", err)
+	}
+
+	if sg3.ID != 4 {
+		t.Fatalf("got shard group id %d, expected %d", sg3.ID, 4)
+	}
+
+	assert2.Equal(t, 0, len(mst.ShardIdexes[sg3.ID]))
+}
+
+func Test_Data_AlterShardsNum_Err(t *testing.T) {
+	data := initData()
+
+	dbName := "foo"
+	rpName := "bar"
+	err := data.CreateDatabase(dbName, &RetentionPolicyInfo{
+		Name:     rpName,
+		ReplicaN: 1,
+		Duration: 24 * time.Hour,
+	}, nil, false, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rp, err := data.RetentionPolicy(dbName, rpName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rp == nil {
+		t.Fatal("creation of retention policy failed")
+	}
+
+	mstName := "cpu1"
+	err = data.CreateMeasurement(dbName, rpName, mstName,
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, 0, nil, 0, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var shardsNum int32 = 1
+	err = data.AlterShardsNum(dbName, rpName, mstName, shardsNum)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mst, err := data.Measurement(dbName, rpName, mstName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assert2.Equal(t, int32(0), mst.InitNumOfShards)
+
+	err = data.AlterShardsNum(dbName, "errRP", mstName, shardsNum)
+	assert2.Error(t, err)
+
+	err = data.AlterShardsNum(dbName, rpName, "errMST", shardsNum)
+	assert2.Error(t, err)
+}
+
 func Test_Data_ReSharding(t *testing.T) {
 	data := initData()
 	DataLogger = logger.New(os.Stderr)
@@ -201,8 +397,8 @@ func Test_Data_ReSharding(t *testing.T) {
 	rp.ShardGroupDuration = 24 * time.Hour
 	must(data.CreateRetentionPolicy("foo", rp, false))
 	must(data.CreateMeasurement("foo", "bar", "cpu",
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.RANGE)}, 0, nil, 0, nil, nil, nil))
-	must(data.CreateShardGroup("foo", "bar", time.Unix(0, 0), util.Hot, config.TSSTORE, 0))
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.RANGE)}, 0, nil, config.TSSTORE, nil, nil, nil))
+	must(data.CreateShardGroup("foo", "bar", time.Unix(0, 0), util.Hot, config.TSSTORE, 0, "", nil))
 
 	sg0, err := data.ShardGroupByTimestampAndEngineType("foo", "bar", time.Unix(0, 0), config.TSSTORE)
 	if err != nil {
@@ -226,11 +422,11 @@ func Test_Data_ReSharding(t *testing.T) {
 	shardgroups, err := data.ShardGroups("foo", "bar")
 	shards1 := []ShardInfo{{1, []uint32{0}, "", "", util.Hot, 1, 0, 0, false, false, 0}}
 	sg1 := ShardGroupInfo{1, sg0.StartTime, sg0.EndTime,
-		sg0.DeletedAt, shards1, sg0.TruncatedAt, config.TSSTORE, 0}
+		sg0.DeletedAt, shards1, sg0.TruncatedAt, config.TSSTORE, 0, ""}
 	shards2 := []ShardInfo{{2, []uint32{0}, "", "cpu,hostname=host_5", util.Hot, 3, 0, 0, false, false, 0},
 		{3, []uint32{1}, "cpu,hostname=host_5", "", util.Hot, 4, 0, 0, false, false, 0}}
 	sg2 := ShardGroupInfo{2, time.Unix(0, splitTime.UnixNano()+1).UTC(), sg0.EndTime,
-		sg0.DeletedAt, shards2, sg0.TruncatedAt, config.TSSTORE, 0}
+		sg0.DeletedAt, shards2, sg0.TruncatedAt, config.TSSTORE, 0, ""}
 	expSgs := []ShardGroupInfo{sg1, sg2}
 	if got, exp := shardgroups, expSgs; !reflect.DeepEqual(got, exp) {
 		t.Fatalf("got %v, expected %v", got, exp)
@@ -392,7 +588,7 @@ func Test_Data_DeleteCmd(t *testing.T) {
 	rpName := "bar"
 	mstName := "cpu"
 	must(generateMeasurement(data, dbName, rpName, mstName))
-	must(data.CreateShardGroup(dbName, rpName, time.Unix(0, 0), util.Hot, config.TSSTORE, 0))
+	must(data.CreateShardGroup(dbName, rpName, time.Unix(0, 0), util.Hot, config.TSSTORE, 0, "", nil))
 
 	must(data.MarkDatabaseDelete(dbName))
 
@@ -604,7 +800,7 @@ func TestData_CreateRetentionPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	insertTime := mustParseTime(time.RFC3339Nano, "2022-06-14T10:20:00Z")
-	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE, 0)
+	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE, 0, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -652,7 +848,7 @@ func TestShardGroupOutOfOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	insertTime := mustParseTime(time.RFC3339Nano, "2021-11-26T13:00:00Z")
-	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE, 0)
+	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE, 0, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,7 +866,7 @@ func TestShardGroupOutOfOrder(t *testing.T) {
 	sg, err = data.ShardGroupByTimestampAndEngineType(dbName, rpName, insertTime, config.TSSTORE)
 	require.NoError(t, err)
 	assert(sg == nil, "shard group contain time %v should not exist", insertTime)
-	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE, 0)
+	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE, 0, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -714,7 +910,7 @@ func TestData_CreateShardGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	insertTime := mustParseTime(time.RFC3339Nano, "2022-06-08T09:00:00Z")
-	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE, 0)
+	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE, 0, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -734,7 +930,7 @@ func TestData_CreateShardGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	insertTime = mustParseTime(time.RFC3339Nano, "2022-06-08T08:30:00Z")
-	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE, 0)
+	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE, 0, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -815,28 +1011,28 @@ func TestData_createIndexGroupIfNeeded(t *testing.T) {
 			},
 		}}
 	ptNum := data.GetClusterPtNum()
-	ig := data.createIndexGroupIfNeeded(rpi, now.Add(-time.Hour), config.TSSTORE, ptNum)
+	ig := data.createIndexGroupIfNeeded(rpi, now.Add(-time.Hour), config.TSSTORE, ptNum, "")
 	require.Equal(t, 4, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[0], ig)
 
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(time.Hour), config.TSSTORE, ptNum)
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(time.Hour), config.TSSTORE, ptNum, "")
 	require.Equal(t, 4, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[1], ig)
 
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(duration+time.Hour), config.TSSTORE, ptNum)
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(duration+time.Hour), config.TSSTORE, ptNum, "")
 	require.Equal(t, 4, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[2], ig)
 
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration+time.Hour), config.TSSTORE, ptNum)
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration+time.Hour), config.TSSTORE, ptNum, "")
 	require.Equal(t, 4, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[3], ig)
 
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(3*duration+time.Hour), config.TSSTORE, ptNum)
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(3*duration+time.Hour), config.TSSTORE, ptNum, "")
 	require.Equal(t, 5, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[4], ig)
 
 	rpi.IndexGroups = nil
-	ig = data.createIndexGroupIfNeeded(rpi, now, config.TSSTORE, ptNum)
+	ig = data.createIndexGroupIfNeeded(rpi, now, config.TSSTORE, ptNum, "")
 	require.Equal(t, 1, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[0], ig)
 }
@@ -964,7 +1160,7 @@ func BenchmarkData_CreateShardGroup(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = data.CreateShardGroup(databases[i%n], rpName, times[i%n], util.Hot, config.TSSTORE, 0)
+		_ = data.CreateShardGroup(databases[i%n], rpName, times[i%n], util.Hot, config.TSSTORE, 0, "", nil)
 	}
 	b.StopTimer()
 }
@@ -996,7 +1192,7 @@ func BenchmarkData_DeleteShardGroup(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		if err = data.CreateShardGroup(dbName, rpName, currentTime, util.Hot, config.TSSTORE, 0); err != nil {
+		if err = data.CreateShardGroup(dbName, rpName, currentTime, util.Hot, config.TSSTORE, 0, "", nil); err != nil {
 			b.Fatal(err)
 		}
 		var sg *ShardGroupInfo
@@ -1129,7 +1325,7 @@ func BenchmarkData_ShardGroupsByTimeRange(b *testing.B) {
 		startTimes[i-1] = currentTime
 		endTimes[i-1] = currentTime.Add(3 * 24 * time.Hour)
 		for j := 0; j < retainSgNum; j++ {
-			err = data.CreateShardGroup(dbName, rpName, currentTime, util.Hot, config.TSSTORE, 0)
+			err = data.CreateShardGroup(dbName, rpName, currentTime, util.Hot, config.TSSTORE, 0, "", nil)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -1180,7 +1376,7 @@ func TestBigMetaDataWith_400thousandMeasurements(t *testing.T) {
 
 		currentTime = time.Now()
 		for j := 0; j < retainSgNum; j++ {
-			err = data.CreateShardGroup(dbName, rpName, currentTime, util.Hot, config.TSSTORE, 0)
+			err = data.CreateShardGroup(dbName, rpName, currentTime, util.Hot, config.TSSTORE, 0, "", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1245,7 +1441,7 @@ func TestData_CreateMigrateEvent(t *testing.T) {
 	pb := &proto2.MigrateEventInfo{EventId: proto.String(dbPt1.String()),
 		Dest:      proto.Uint64(1),
 		Pti:       dbPt1.Marshal(),
-		EventType: proto.Int(1)}
+		EventType: proto.Int32(1)}
 	err := data.CreateMigrateEvent(pb)
 	assert2.NoError(t, err)
 	assert2.Equal(t, uint64(1), data.MigrateEvents[dbPt1.String()].opId)
@@ -1475,12 +1671,14 @@ func TestExpandGroups(t *testing.T) {
 							{Shards: []ShardInfo{{ID: 1}}},
 							{Shards: []ShardInfo{{ID: 2}}},
 						},
+						IndexGroupDuration: time.Hour * 24,
 					},
 					"rp0": {
 						ShardGroups: []ShardGroupInfo{
 							{Shards: []ShardInfo{{ID: 3}}},
 							{Shards: []ShardInfo{{ID: 4}}},
 						},
+						IndexGroupDuration: time.Hour * 24,
 					},
 				},
 			},
@@ -1492,12 +1690,14 @@ func TestExpandGroups(t *testing.T) {
 							{Shards: []ShardInfo{{ID: 5}}},
 							{Shards: []ShardInfo{{ID: 6}}},
 						},
+						IndexGroupDuration: time.Hour * 24,
 					},
 					"rp3": {
 						ShardGroups: []ShardGroupInfo{
 							{Shards: []ShardInfo{{ID: 7}}},
 							{Shards: []ShardInfo{{ID: 8}}},
 						},
+						IndexGroupDuration: time.Hour * 24,
 					},
 				},
 			},
@@ -1595,9 +1795,15 @@ func TestData_mapShardsToMstWithNilShardIdx(t *testing.T) {
 	data1.Databases["db0"] = &DatabaseInfo{RetentionPolicies: make(map[string]*RetentionPolicyInfo)}
 	data1.Databases["db0"].RetentionPolicies["rp0"] = &RetentionPolicyInfo{Measurements: make(map[string]*MeasurementInfo)}
 	data1.Databases["db0"].RetentionPolicies["rp0"].Measurements["mst0"] = &MeasurementInfo{InitNumOfShards: 1}
-	sg := &ShardGroupInfo{}
-	data1.mapShardsToMst("db0", data1.Databases["db0"].RetentionPolicies["rp0"], sg)
-	assert2.NotEqual(t, data1.Databases["db0"].RetentionPolicies["rp0"].Measurements["mst0"].ShardIdexes, nil)
+	sg := &ShardGroupInfo{
+		Shards: []ShardInfo{
+			{ID: 1},
+			{ID: 2},
+		},
+	}
+	data1.mapShardsToMst("db0", data1.Databases["db0"].RetentionPolicies["rp0"], sg, nil)
+
+	assert2.NotNil(t, data1.Databases["db0"].RetentionPolicies["rp0"].Measurements["mst0"].ShardIdexes)
 }
 
 func TestData_MstCopy(t *testing.T) {
@@ -1740,19 +1946,110 @@ func TestData_mapShardsToMst(t *testing.T) {
 				MaxIndexGroupID:    tt.fields.MaxIndexGroupID,
 				MaxIndexID:         tt.fields.MaxIndexID,
 				MaxEventOpId:       tt.fields.MaxEventOpId,
-				MaxDownSampleID:    tt.fields.MaxDownSampleID,
+				MaxTaskID:          tt.fields.MaxTaskID,
 				MaxStreamID:        tt.fields.MaxStreamID,
 				MaxConnID:          tt.fields.MaxConnID,
 				MaxSubscriptionID:  tt.fields.MaxSubscriptionID,
 				MaxCQChangeID:      tt.fields.MaxCQChangeID,
 			}
-			data.mapShardsToMst(tt.args.database, tt.args.rpi, tt.args.sgi)
+			data.mapShardsToMst(tt.args.database, tt.args.rpi, tt.args.sgi, nil)
 			got := data.Databases["foo"].RetentionPolicies["bar"].Measurements["cpu_0000"].ShardIdexes
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("mapShards got: %v, want %v", got, tt.want)
 			}
 		})
 	}
+}
+
+func TestData_mapShardsToMstWithShardingPlans(t *testing.T) {
+	DataLogger = logger1.GetLogger()
+	data1 := &Data{Databases: make(map[string]*DatabaseInfo)}
+	data1.ClusterPtNum = 2
+	data1.Databases["db0"] = &DatabaseInfo{RetentionPolicies: make(map[string]*RetentionPolicyInfo)}
+	rpInfo := &RetentionPolicyInfo{Measurements: make(map[string]*MeasurementInfo)}
+	data1.Databases["db0"].RetentionPolicies["rp0"] = rpInfo
+	data1.Databases["db0"].RetentionPolicies["rp0"].Measurements["mst0"] = &MeasurementInfo{InitNumOfShards: 1}
+	mstInfo := data1.Databases["db0"].RetentionPolicies["rp0"].Measurements["mst0"]
+	sg := &ShardGroupInfo{
+		Shards: []ShardInfo{
+			{ID: 1},
+			{ID: 2},
+		},
+	}
+	rpInfo.ShardGroups = append(rpInfo.ShardGroups, *sg)
+	shardingPlans := map[string][]int{
+		"mst0": {0, 1},
+	}
+	data1.mapShardsToMst("db0", data1.Databases["db0"].RetentionPolicies["rp0"], sg, shardingPlans)
+	assert2.Equal(t, map[uint64][]int{0: {0}}, mstInfo.ShardIdexes)
+
+	sg = &ShardGroupInfo{
+		ID: 1,
+		Shards: []ShardInfo{
+			{ID: 1},
+			{ID: 2},
+		},
+	}
+	rpInfo.ShardGroups = append(rpInfo.ShardGroups, *sg)
+	shardingPlans = map[string][]int{
+		"mst0": {1},
+	}
+	data1.mapShardsToMst("db0", data1.Databases["db0"].RetentionPolicies["rp0"], sg, shardingPlans)
+	assert2.Equal(t, map[uint64][]int{0: {0}, 1: {1}}, mstInfo.ShardIdexes)
+
+	mstInfo.InitNumOfShards = 0
+	sg = &ShardGroupInfo{
+		ID: 2,
+		Shards: []ShardInfo{
+			{ID: 1},
+			{ID: 2},
+		},
+	}
+	rpInfo.ShardGroups = append(rpInfo.ShardGroups, *sg)
+	data1.mapShardsToMst("db0", data1.Databases["db0"].RetentionPolicies["rp0"], sg, shardingPlans)
+	assert2.Equal(t, map[uint64][]int{0: {0}, 1: {1}, 2: nil}, mstInfo.ShardIdexes)
+
+	sg = &ShardGroupInfo{
+		ID: 3,
+		Shards: []ShardInfo{
+			{ID: 1},
+			{ID: 2},
+		},
+	}
+	shardingPlans = map[string][]int{
+		"mst0": {1, 0},
+	}
+	rpInfo.ShardGroups = append(rpInfo.ShardGroups, *sg)
+	data1.mapShardsToMst("db0", data1.Databases["db0"].RetentionPolicies["rp0"], sg, shardingPlans)
+	assert2.Equal(t, map[uint64][]int{0: {0}, 1: {1}, 2: nil, 3: {1, 0}}, mstInfo.ShardIdexes)
+
+	sg = &ShardGroupInfo{
+		ID: 4,
+		Shards: []ShardInfo{
+			{ID: 1},
+			{ID: 2},
+		},
+	}
+	shardingPlans = map[string][]int{
+		"mst0": {1, 0},
+	}
+	rpInfo.ShardGroups = append(rpInfo.ShardGroups, *sg)
+	data1.mapShardsToMst("db0", data1.Databases["db0"].RetentionPolicies["rp0"], sg, shardingPlans)
+	assert2.Equal(t, map[uint64][]int{0: {0}, 1: {1}, 2: nil, 3: {1, 0}}, mstInfo.ShardIdexes)
+
+	sg = &ShardGroupInfo{
+		ID: 5,
+		Shards: []ShardInfo{
+			{ID: 1},
+			{ID: 2},
+		},
+	}
+	shardingPlans = map[string][]int{
+		"mst0": {1, 0},
+	}
+	rpInfo.ShardGroups = append(rpInfo.ShardGroups, *sg)
+	data1.mapShardsToMst("db0", data1.Databases["db0"].RetentionPolicies["rp0"], sg, shardingPlans)
+	assert2.Equal(t, map[uint64][]int{0: {0}, 1: {1}, 2: nil, 3: {1, 0}}, mstInfo.ShardIdexes)
 }
 
 func Test_mapShards(t *testing.T) {
@@ -2704,14 +3001,8 @@ func TestData_ShowShardsFromMst(t *testing.T) {
 	must(data.CreateMeasurement("foo", "bar", "mem",
 		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.HASH)}, 0, nil, 0, nil, nil, nil))
 	data.Databases["foo"].RetentionPolicies["bar"].ShardGroups = shardGroups
-	data.mapShardsToMst("db0", data.Databases["foo"].RetentionPolicies["bar"], &shardGroups[0])
-	data.mapShardsToMst("db0", data.Databases["foo"].RetentionPolicies["bar"], &shardGroups[1])
-
-	type args struct {
-		db  string
-		rp  string
-		mst string
-	}
+	data.mapShardsToMst("db0", data.Databases["foo"].RetentionPolicies["bar"], &shardGroups[0], nil)
+	data.mapShardsToMst("db0", data.Databases["foo"].RetentionPolicies["bar"], &shardGroups[1], nil)
 	tests := []struct {
 		name   string
 		fields Data
@@ -2816,6 +3107,30 @@ func TestData_ShowShardsFromMst(t *testing.T) {
 			},
 		},
 	}
+	testShowShardsFunc(t, tests)
+
+	// nil shardIdxes will be unmarshalled into empty, here test if empty shardIdxes can be handled same as nil
+	binary, err := data.MarshalBinary()
+	assert2.NoError(t, err)
+	err = data.UnmarshalBinary(binary)
+	assert2.NoError(t, err)
+
+	testShowShardsFunc(t, tests)
+
+}
+
+type args struct {
+	db  string
+	rp  string
+	mst string
+}
+
+func testShowShardsFunc(t *testing.T, tests []struct {
+	name   string
+	fields Data
+	args   args
+	want   models.Rows
+}) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data := &Data{
@@ -2846,7 +3161,7 @@ func TestData_ShowShardsFromMst(t *testing.T) {
 				MaxIndexGroupID:    tt.fields.MaxIndexGroupID,
 				MaxIndexID:         tt.fields.MaxIndexID,
 				MaxEventOpId:       tt.fields.MaxEventOpId,
-				MaxDownSampleID:    tt.fields.MaxDownSampleID,
+				MaxTaskID:          tt.fields.MaxTaskID,
 				MaxStreamID:        tt.fields.MaxStreamID,
 				MaxConnID:          tt.fields.MaxConnID,
 				MaxSubscriptionID:  tt.fields.MaxSubscriptionID,
@@ -2869,6 +3184,101 @@ func TestData_ShowShardsFromMst(t *testing.T) {
 			}
 
 		})
+	}
+}
+
+func TestData_ShowShardsFromMst_Disorder(t *testing.T) {
+	data := &Data{
+		PtNumPerNode: 3,
+		ClusterPtNum: 3,
+		Databases: map[string]*DatabaseInfo{
+			"database2": {
+				Name: "database2",
+				RetentionPolicies: map[string]*RetentionPolicyInfo{
+					"rp0": {
+						ShardGroups: []ShardGroupInfo{
+							{Shards: []ShardInfo{{ID: 1}, {ID: 2}}, ID: 3},
+							{Shards: []ShardInfo{{ID: 3}, {ID: 4}}, ID: 1},
+							{Shards: []ShardInfo{{ID: 5}, {ID: 6}}, ID: 2},
+						},
+						IndexGroupDuration: time.Hour * 24,
+						Measurements: map[string]*MeasurementInfo{
+							"mst0": {
+								Name: "mst0",
+								ShardIdexes: map[uint64][]int{
+									1: {0, 1},
+									2: {1, 0},
+								},
+							},
+						},
+						MstVersions: map[string]MeasurementVer{
+							"mst0": {NameWithVersion: "mst0"},
+						},
+					},
+				},
+			},
+		},
+		MaxShardID:         8,
+		ExpandShardsEnable: true,
+	}
+	got := data.ShowShardsFromMst("database2", "rp0", "mst0")
+	want := []*models.Row{
+		{
+			Name:    "database2.rp0.mst0",
+			Columns: []string{"id", "database", "retention_policy", "measurement", "shard_group"},
+			Values: [][]interface{}{
+				{
+					uint64(2),
+					"database2",
+					"rp0",
+					"mst0",
+					uint64(3),
+				},
+				{
+					uint64(1),
+					"database2",
+					"rp0",
+					"mst0",
+					uint64(3),
+				},
+				{
+					uint64(3),
+					"database2",
+					"rp0",
+					"mst0",
+					uint64(1),
+				},
+				{
+					uint64(4),
+					"database2",
+					"rp0",
+					"mst0",
+					uint64(1),
+				},
+				{
+					uint64(6),
+					"database2",
+					"rp0",
+					"mst0",
+					uint64(2),
+				},
+				{
+					uint64(5),
+					"database2",
+					"rp0",
+					"mst0",
+					uint64(2),
+				},
+			},
+		},
+	}
+	if len(got) != len(want) {
+		t.Fatal("got wrong num of shards")
+	}
+	for i := range got {
+		if !reflect.DeepEqual(got[i], want[i]) {
+			t.Errorf("Data.ShowShardsFromMst() = %v, want %v", got[i], want[i])
+		}
 	}
 }
 
@@ -3223,33 +3633,33 @@ func TestData_indexGroupExpand(t *testing.T) {
 		IndexGroupDuration: duration,
 	}
 	ptNum := data.GetClusterPtNum()
-	ig := data.createIndexGroupIfNeeded(rpi, now.Add(duration), config.TSSTORE, ptNum)
+	ig := data.createIndexGroupIfNeeded(rpi, now.Add(duration), config.TSSTORE, ptNum, "")
 	require.Equal(t, 1, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[0], ig)
 
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum)
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum, "")
 	require.Equal(t, 2, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[1], ig)
 
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum)
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum, "")
 	require.Equal(t, 2, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[1], ig)
 
 	ptNum = ptNum + 2
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum)
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum, "")
 	require.Equal(t, 3, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[2], ig)
 
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum)
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum, "")
 	require.Equal(t, 3, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[2], ig)
 
 	ptNum = ptNum + 2
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum)
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum, "")
 	require.Equal(t, 4, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[3], ig)
 
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum)
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum, "")
 	require.Equal(t, 4, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[3], ig)
 }
@@ -3419,6 +3829,73 @@ func TestBuildDirTree(t *testing.T) {
 						Name: "child2",
 						Path: func() string {
 							d, _ := filepath.Abs(filepath.Join(tempDir, t.Name(), "child2"))
+							return d
+						}(),
+					},
+				},
+			},
+			wantErr: assert2.NoError,
+		},
+		{
+			name: "Complex nested structure",
+			args: args{rootPath: func() string {
+				root := filepath.Join(tempDir, t.Name()+"-nested")
+				dirs := []string{
+					filepath.Join(root, "a"),
+					filepath.Join(root, "a", "b"),
+					filepath.Join(root, "a", "b", "c"),
+					filepath.Join(root, "a", "d"),
+					filepath.Join(root, "e"),
+				}
+
+				for _, dir := range dirs {
+					require.NoError(t, os.MkdirAll(dir, 0755))
+				}
+				return root
+			}()},
+			want: &DirNode{
+				Name: t.Name() + "-nested",
+				Path: func() string {
+					d, _ := filepath.Abs(filepath.Join(tempDir, t.Name()+"-nested"))
+					return d
+				}(),
+				Children: []*DirNode{
+					{
+						Name: "a",
+						Path: func() string {
+							d, _ := filepath.Abs(filepath.Join(tempDir, t.Name()+"-nested", "a"))
+							return d
+						}(),
+						Children: []*DirNode{
+							{
+								Name: "b",
+								Path: func() string {
+									d, _ := filepath.Abs(filepath.Join(tempDir, t.Name()+"-nested", "a", "b"))
+									return d
+								}(),
+								Children: []*DirNode{
+									{
+										Name: "c",
+										Path: func() string {
+											d, _ := filepath.Abs(filepath.Join(tempDir, t.Name()+"-nested", "a", "b", "c"))
+											return d
+										}(),
+									},
+								},
+							},
+							{
+								Name: "d",
+								Path: func() string {
+									d, _ := filepath.Abs(filepath.Join(tempDir, t.Name()+"-nested", "a", "d"))
+									return d
+								}(),
+							},
+						},
+					},
+					{
+						Name: "e",
+						Path: func() string {
+							d, _ := filepath.Abs(filepath.Join(tempDir, t.Name()+"-nested", "e"))
 							return d
 						}(),
 					},
@@ -3707,4 +4184,396 @@ func TestReplaceMergeShards(t *testing.T) {
 	data.ReplaceMergeShards("db0", "rp0", 1, []uint64{1, 3, 5})
 	data.ReplaceMergeShards("db0", "rp0", 2, []uint64{2, 4, 6})
 	assert2.Equal(t, len(data.Databases["db0"].RetentionPolicies["rp0"].ShardGroups), 1)
+}
+
+func TestData_CreateShardGroupZone(t *testing.T) {
+	data := initData()
+	dbName := "foo"
+	rpName := "bar"
+	err := data.CreateDatabase(dbName, &RetentionPolicyInfo{
+		Name:               rpName,
+		ReplicaN:           1,
+		Duration:           24 * time.Hour,
+		ShardGroupDuration: 24 * time.Hour,
+		IndexGroupDuration: 24 * time.Hour,
+	}, nil, false, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rp, err := data.RetentionPolicy(dbName, rpName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rp == nil {
+		t.Fatal("creation of retention policy failed")
+	}
+	testTime := time.Date(2025, 2, 14, 0, 0, 0, 0, time.UTC)
+	igi := data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "UTC")
+	sgi := data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	startTime := testTime.Truncate(rp.ShardGroupDuration)
+	endTime := testTime.Truncate(rp.ShardGroupDuration).Add(24 * time.Hour)
+	require.Equal(t, igi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, igi.EndTime.UTC(), endTime.UTC())
+	require.Equal(t, sgi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, sgi.EndTime.UTC(), endTime.UTC())
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+
+	testTime = testTime.Add(time.Hour * 24)
+	igi = data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "Asia/Shanghai")
+	sgi = data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+	startTime = testTime.Truncate(rp.ShardGroupDuration)
+	endTime = testTime.Truncate(rp.ShardGroupDuration).Add(16 * time.Hour)
+	require.Equal(t, igi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, igi.EndTime.UTC(), endTime.UTC())
+	require.Equal(t, sgi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, sgi.EndTime.UTC(), endTime.UTC())
+
+	testTime = testTime.Add(time.Hour * 16)
+	igi = data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "Asia/Shanghai")
+	sgi = data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	startTime = time.Date(2025, 2, 15, 16, 0, 0, 0, time.UTC)
+	endTime = startTime.Add(24 * time.Hour)
+	require.Equal(t, igi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, igi.EndTime.UTC(), endTime.UTC())
+	require.Equal(t, sgi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, sgi.EndTime.UTC(), endTime.UTC())
+
+	rp.ShardGroups = nil
+	rp.IndexGroups = nil
+	february := time.Date(2025, 2, 14, 0, 0, 0, 0, time.UTC)
+	testTime = february.Add(time.Hour * 24)
+	igi = data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "UTC")
+	sgi = data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+
+	testTime = february.Add(5 * time.Hour)
+	igi = data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "America/New_York")
+	sgi = data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+	startTime = testTime.Truncate(rp.ShardGroupDuration).Add(5 * time.Hour)
+	endTime = testTime.Truncate(rp.ShardGroupDuration).Add(24 * time.Hour)
+	require.Equal(t, igi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, igi.EndTime.UTC(), endTime.UTC())
+	require.Equal(t, sgi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, sgi.EndTime.UTC(), endTime.UTC())
+
+	testTime = testTime.Add(-time.Hour * 24)
+	igi = data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "America/New_York")
+	sgi = data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+	startTime = testTime.Truncate(rp.ShardGroupDuration).Add(5 * time.Hour)
+	endTime = testTime.Truncate(rp.ShardGroupDuration).Add(29 * time.Hour)
+	require.Equal(t, igi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, igi.EndTime.UTC(), endTime.UTC())
+	require.Equal(t, sgi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, sgi.EndTime.UTC(), endTime.UTC())
+}
+
+func TestData_CreateShardGroupZone2(t *testing.T) {
+	data := initData()
+	dbName := "foo"
+	rpName := "bar"
+	err := data.CreateDatabase(dbName, &RetentionPolicyInfo{
+		Name:               rpName,
+		ReplicaN:           1,
+		Duration:           24 * time.Hour,
+		ShardGroupDuration: 24 * time.Hour,
+		IndexGroupDuration: 48 * time.Hour,
+	}, nil, false, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rp, err := data.RetentionPolicy(dbName, rpName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rp == nil {
+		t.Fatal("creation of retention policy failed")
+	}
+
+	testTime := time.Now()
+	endTime := testTime.Truncate(rp.IndexGroupDuration).Add(48 * time.Hour)
+	if endTime.Sub(testTime) < time.Hour*24 {
+		testTime = testTime.Add(-24 * time.Hour)
+	}
+	igi := data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "UTC")
+	sgi := data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+	require.Equal(t, igi.EndTime.UTC(), endTime.UTC())
+
+	testTime = testTime.Add(24 * time.Hour)
+	startTime := testTime.Truncate(rp.ShardGroupDuration)
+	igi = data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "Asia/Shanghai")
+	sgi = data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+	require.Equal(t, igi.EndTime.UTC(), endTime.UTC())
+	require.Equal(t, sgi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, sgi.EndTime.UTC(), endTime.UTC())
+
+	testTime = testTime.Add(24 * time.Hour)
+	startTime = testTime.Truncate(rp.ShardGroupDuration)
+	endTime = testTime.Truncate(rp.ShardGroupDuration).Add(16 * time.Hour)
+	igi = data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "Asia/Shanghai")
+	sgi = data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+	require.Equal(t, igi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, sgi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, sgi.EndTime.UTC(), endTime.UTC())
+
+	testTime = testTime.Add(24 * time.Hour)
+	startTime = testTime.Truncate(rp.ShardGroupDuration).Add(-8 * time.Hour)
+	endTime = testTime.Truncate(rp.ShardGroupDuration).Add(16 * time.Hour)
+	igi = data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "Asia/Shanghai")
+	sgi = data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+	require.Equal(t, igi.EndTime.UTC(), endTime.UTC())
+	require.Equal(t, sgi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, sgi.EndTime.UTC(), endTime.UTC())
+}
+
+func TestData_CreateShardGroupZone3(t *testing.T) {
+	data := initData()
+	dbName := "foo"
+	rpName := "bar"
+	err := data.CreateDatabase(dbName, &RetentionPolicyInfo{
+		Name:               rpName,
+		ReplicaN:           1,
+		Duration:           24 * time.Hour,
+		ShardGroupDuration: 24 * time.Hour,
+		IndexGroupDuration: 48 * time.Hour,
+	}, nil, false, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rp, err := data.RetentionPolicy(dbName, rpName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rp == nil {
+		t.Fatal("creation of retention policy failed")
+	}
+
+	testTime := time.Date(2025, 2, 14, 0, 0, 0, 0, time.Local)
+	endTime := testTime.Truncate(rp.IndexGroupDuration).Add(48 * time.Hour)
+	if endTime.Sub(testTime) > time.Hour*24 {
+		testTime = testTime.Add(24 * time.Hour)
+	}
+	igi := data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "UTC")
+	sgi := data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+	require.Equal(t, igi.EndTime.UTC(), endTime.UTC())
+
+	testTime = testTime.Add(-24 * time.Hour)
+	startTime := testTime.Truncate(rp.ShardGroupDuration)
+	endTime = testTime.Truncate(rp.ShardGroupDuration).Add(24 * time.Hour)
+	igi = data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "America/New_York")
+	sgi = data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+	require.Equal(t, igi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, sgi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, sgi.EndTime.UTC(), endTime.UTC())
+
+	testTime = testTime.Add(-24 * time.Hour)
+	startTime = testTime.Truncate(rp.ShardGroupDuration).Add(5 * time.Hour)
+	indexStartTime := testTime.Truncate(rp.IndexGroupDuration).Add(5 * time.Hour)
+	endTime = testTime.Truncate(rp.ShardGroupDuration).Add(24 * time.Hour)
+	igi = data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "America/New_York")
+	sgi = data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+	require.Equal(t, igi.StartTime.UTC(), indexStartTime.UTC())
+	require.Equal(t, sgi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, igi.EndTime.UTC(), endTime.UTC())
+	require.Equal(t, sgi.EndTime.UTC(), endTime.UTC())
+
+	testTime = testTime.Add(-24 * time.Hour)
+	startTime = testTime.Truncate(rp.ShardGroupDuration).Add(5 * time.Hour)
+	endTime = testTime.Truncate(rp.ShardGroupDuration).Add(29 * time.Hour)
+	igi = data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "America/New_York")
+	sgi = data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+	require.Equal(t, igi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, sgi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, sgi.EndTime.UTC(), endTime.UTC())
+}
+
+// Test tsstore shard group can be created after columnstore shard group has been created in same time range.
+func TestData_CreateShardGroupZone4(t *testing.T) {
+	data := initData()
+	dbName := "foo"
+	rpName := "bar"
+	err := data.CreateDatabase(dbName, &RetentionPolicyInfo{
+		Name:               rpName,
+		ReplicaN:           1,
+		Duration:           24 * time.Hour,
+		ShardGroupDuration: 24 * time.Hour,
+		IndexGroupDuration: 24 * time.Hour,
+	}, nil, false, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rp, err := data.RetentionPolicy(dbName, rpName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rp == nil {
+		t.Fatal("creation of retention policy failed")
+	}
+
+	testTime := time.Date(2025, 2, 14, 0, 0, 0, 0, time.Local)
+	igi := data.createIndexGroupIfNeeded(rp, testTime, config.COLUMNSTORE, 1, "UTC")
+	sgi := data.newShardGroup(rp, testTime, config.COLUMNSTORE, 0, igi)
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+
+	igi2 := data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "UTC")
+	sgi2 := data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi2)
+	require.NotEmpty(t, sgi2)
+}
+
+// create short range duration and then create long range duration to test whether the later created group has been truncated
+func TestData_CreateShardGroupZone5(t *testing.T) {
+	data := initData()
+	dbName := "foo"
+	rpName := "bar"
+	err := data.CreateDatabase(dbName, &RetentionPolicyInfo{
+		Name:               rpName,
+		ReplicaN:           1,
+		Duration:           24 * time.Hour,
+		ShardGroupDuration: 1 * time.Hour,
+		IndexGroupDuration: 1 * time.Hour,
+	}, nil, false, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rp, err := data.RetentionPolicy(dbName, rpName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rp == nil {
+		t.Fatal("creation of retention policy failed")
+	}
+
+	testTime := time.Date(2025, 2, 14, 5, 0, 0, 0, time.UTC)
+	igi := data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "UTC")
+	sgi := data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+	testTime = time.Date(2025, 2, 14, 6, 0, 0, 0, time.UTC)
+	igi = data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "UTC")
+	sgi = data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+
+	rp.ShardGroupDuration = 24 * time.Hour
+	rp.IndexGroupDuration = 24 * time.Hour
+
+	testTime = time.Date(2025, 2, 14, 8, 0, 0, 0, time.UTC)
+	igi = data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "UTC")
+	sgi = data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+	rp.ShardGroups = append(rp.ShardGroups, *sgi)
+
+	startTime := time.Date(2025, 2, 14, 7, 0, 0, 0, time.UTC)
+	endTime := time.Date(2025, 2, 15, 0, 0, 0, 0, time.UTC)
+	require.Equal(t, igi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, igi.EndTime.UTC(), endTime.UTC())
+	require.Equal(t, sgi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, sgi.EndTime.UTC(), endTime.UTC())
+
+	testTime = time.Date(2025, 2, 14, 3, 0, 0, 0, time.UTC)
+	igi = data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "UTC")
+	sgi = data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
+
+	startTime = time.Date(2025, 2, 14, 0, 0, 0, 0, time.UTC)
+	endTime = time.Date(2025, 2, 14, 5, 0, 0, 0, time.UTC)
+	require.Equal(t, igi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, igi.EndTime.UTC(), endTime.UTC())
+	require.Equal(t, sgi.StartTime.UTC(), startTime.UTC())
+	require.Equal(t, sgi.EndTime.UTC(), endTime.UTC())
+
+}
+
+// TestRewriteIndexList tests the RewriteIndexList function with various scenarios.
+func TestRewriteIndexList(t *testing.T) {
+	// Test case: Empty input
+	t.Run("EmptyInput", func(t *testing.T) {
+		stmt := &influxql.CreateMeasurementStatement{}
+		RewriteIndexList(stmt)
+		if len(stmt.IndexType) != 0 || len(stmt.IndexList) != 0 || len(stmt.IndexParams) != 0 {
+			t.Errorf("Expected empty stmt, but got non-empty")
+		}
+	})
+
+	// Test case: Single index type
+	t.Run("SingleIndexType", func(t *testing.T) {
+		stmt := &influxql.CreateMeasurementStatement{
+			IndexType:   []string{"type1"},
+			IndexList:   [][]string{{"col1", "col2"}},
+			IndexParams: [][]influxql.Expr{{}},
+		}
+		RewriteIndexList(stmt)
+		if len(stmt.IndexType) != 1 || len(stmt.IndexList) != 1 || len(stmt.IndexParams) != 1 {
+			t.Errorf("Expected single index type, but got multiple")
+		}
+	})
+
+	// Test case: Multiple index types
+	t.Run("MultipleIndexTypes", func(t *testing.T) {
+		stmt := &influxql.CreateMeasurementStatement{
+			IndexType:   []string{"type1", "type2"},
+			IndexList:   [][]string{{"col1", "col2"}, {"col3", "col4"}},
+			IndexParams: [][]influxql.Expr{{}, {}},
+		}
+		RewriteIndexList(stmt)
+		if len(stmt.IndexType) != 2 || len(stmt.IndexList) != 2 || len(stmt.IndexParams) != 2 {
+			t.Errorf("Expected two index types, but got different count")
+		}
+	})
+
+	// Test case: Duplicate index
+	t.Run("DuplicateIndex", func(t *testing.T) {
+		stmt := &influxql.CreateMeasurementStatement{
+			IndexType:   []string{"type1", "type1"},
+			IndexList:   [][]string{{"col1", "col2"}, {"col2", "col3"}},
+			IndexParams: [][]influxql.Expr{{}, {}},
+		}
+		RewriteIndexList(stmt)
+		if len(stmt.IndexType) != 1 || len(stmt.IndexList) != 1 || len(stmt.IndexParams) != 1 {
+			t.Errorf("Expected single index type after deduplication, but got multiple")
+		}
+	})
+}
+
+// TestDeduplicationOfIndexList tests the DeduplicationOfIndexList function with various scenarios.
+func TestDeduplicationOfIndexList(t *testing.T) {
+	// Test case: Empty input
+	t.Run("EmptyInput", func(t *testing.T) {
+		result := DeduplicationOfIndexList([][]string{})
+		if len(result) != 0 {
+			t.Errorf("Expected empty result, but got non-empty")
+		}
+	})
+
+	// Test case: Single index list
+	t.Run("SingleIndexList", func(t *testing.T) {
+		result := DeduplicationOfIndexList([][]string{{"col1", "col2", "col1"}})
+		if len(result) != 1 || len(result[0]) != 2 {
+			t.Errorf("Expected deduplicated single index list, but got different count")
+		}
+	})
+
+	// Test case: Multiple index lists
+	t.Run("MultipleIndexLists", func(t *testing.T) {
+		result := DeduplicationOfIndexList([][]string{{"col1", "col2", "col1"}, {"col3", "col4", "col3"}})
+		if len(result) != 2 || len(result[0]) != 2 || len(result[1]) != 2 {
+			t.Errorf("Expected deduplicated multiple index lists, but got different count")
+		}
+	})
 }

@@ -15,6 +15,7 @@
 package immutable
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -22,6 +23,7 @@ import (
 )
 
 func TestChunkMetaCache(t *testing.T) {
+	baseDir := t.TempDir()
 	// Test the PutChunkMeta
 	meta11 := &ChunkMeta{sid: 0, offset: 0, size: 100, columnCount: 1, segCount: 1,
 		timeRange: []SegmentRange{[2]int64{0, 10}, [2]int64{10, 20}},
@@ -31,8 +33,8 @@ func TestChunkMetaCache(t *testing.T) {
 		timeRange: []SegmentRange{[2]int64{0, 10}, [2]int64{10, 20}},
 		colMeta:   []ColumnMeta{{name: "cpu", ty: influx.Field_Type_Float, preAgg: []byte{1, 2}, entries: []Segment{{offset: 0, size: 100}}}},
 	}
-	filePath11 := "/tmp/openGemini/db0/ptId/shardId/columnstore/dataFile1.tssp"
-	filePath12 := "/tmp/openGemini/db0/ptId/shardId/columnstore/dataFile2.tssp"
+	filePath11 := filepath.Join(baseDir, "db0", "ptId", "shardId", "columnstore", "dataFile1.tssp")
+	filePath12 := filepath.Join(baseDir, "db0", "ptId", "shardId", "columnstore", "dataFile2.tssp")
 	PutChunkMeta(filePath11, meta11)
 	PutChunkMeta(filePath12, meta12)
 
@@ -43,7 +45,7 @@ func TestChunkMetaCache(t *testing.T) {
 	meta22, _ := GetChunkMeta(filePath12)
 	assert.Equal(t, meta12, meta22)
 
-	filePath3 := "/tmp/openGemini/db0/ptId/shardId/columnstore/dataFile3.tssp"
+	filePath3 := filepath.Join(baseDir, "db0", "ptId", "shardId", "columnstore", "dataFile3.tssp")
 	_, ok := GetChunkMeta(filePath3)
 	assert.Equal(t, ok, false)
 }

@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/op"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -30,6 +31,8 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
+
+const LLMFuncPrefix = "llm_"
 
 var NotAggOnSeries = make(map[string]bool)
 
@@ -103,6 +106,7 @@ func NewPreAggregateCallMapping() *PreAggregateCallMapping {
 	mapping.mapCalls["first"] = struct{}{}
 	mapping.mapCalls["last"] = struct{}{}
 	mapping.mapCalls["mean"] = struct{}{}
+	mapping.mapCalls["last_row"] = struct{}{}
 	return mapping
 }
 
@@ -182,6 +186,7 @@ type QuerySchema struct {
 	promTimeCalls map[string]*influxql.Call
 	slidingWindow map[string]*influxql.Call
 	holtWinters   []*influxql.Field
+	llmFunc       []*influxql.Field
 	compositeCall map[string]*hybridqp.OGSketchCompositeOperator
 	// promNestedCall is used to optimize the nested push down of function and aggregate operator
 	promNestedCall map[string]*hybridqp.PromNestedCall
@@ -201,6 +206,8 @@ type QuerySchema struct {
 	InConditons        []*influxql.InCondition
 	isInSubquerySchema bool
 	isDistinct         bool
+	resource           map[string]map[string]string
+	isSelectDistinct   bool
 }
 
 func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.Options, sortFields influxql.SortFields) *QuerySchema {
@@ -250,6 +257,13 @@ func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.O
 	return schema
 }
 
+func NewQuerySchemaWithOpt(opt hybridqp.Options) *QuerySchema {
+	return &QuerySchema{
+		opt:            opt,
+		promNestedCall: make(map[string]*hybridqp.PromNestedCall),
+	}
+}
+
 func NewQuerySchemaWithJoinCase(fields influxql.Fields, sources influxql.Sources, columnNames []string, opt hybridqp.Options,
 	joinCases []*influxql.Join, unionCases []*influxql.Union, unnest []*influxql.Unnest, sortFields influxql.SortFields) *QuerySchema {
 	q := NewQuerySchemaWithSources(fields, sources, columnNames, opt, sortFields)
@@ -291,6 +305,7 @@ func (qs *QuerySchema) reset(fields influxql.Fields, column []string) {
 	qs.slidingWindow = make(map[string]*influxql.Call)
 	qs.promNestedCall = make(map[string]*hybridqp.PromNestedCall)
 	qs.holtWinters = qs.holtWinters[0:0]
+	qs.llmFunc = qs.llmFunc[:0]
 	qs.unnestCases = qs.unnestCases[:0]
 	qs.i = 0
 	qs.init()
@@ -305,6 +320,9 @@ func (qs *QuerySchema) init() {
 				clone.Expr = call.Args[0]
 			} else if call.Name == "holt_winters" || call.Name == "holt_winters_with_fit" {
 				qs.AddHoltWinters(call, f.Alias)
+				clone.Expr = call.Args[0]
+			} else if strings.HasPrefix(call.Name, LLMFuncPrefix) {
+				qs.AddLLMFunc(call, f.Alias)
 				clone.Expr = call.Args[0]
 			}
 		}
@@ -448,17 +466,11 @@ func (qs *QuerySchema) HasRowCount() bool {
 		return false
 	}
 
-	if len(qs.origCalls) != 1 {
+	if qs.Options().GetCondition() != nil {
 		return false
 	}
 
-	for _, c := range qs.origCalls {
-		if c.Name != "count" {
-			return false
-		}
-	}
-
-	if qs.Options().GetCondition() != nil {
+	if qs.Options().HasTimeCondition() {
 		return false
 	}
 
@@ -469,6 +481,35 @@ func (qs *QuerySchema) HasRowCount() bool {
 	if len(qs.Options().GetOptDimension()) > 0 {
 		return false
 	}
+
+	// Check if engine type is column store
+	msts := qs.opt.GetMeasurements()
+	if len(msts) != 1 || msts[0].EngineType != config.COLUMNSTORE {
+		return false
+	}
+	colmst, exists := colstore.MstManagerIns().Get(msts[0].Database, msts[0].RetentionPolicy, msts[0].Name)
+	if !exists {
+		return false
+	}
+	pkMap := colmst.BuildPKMap()
+
+	if len(qs.origCalls) != 1 {
+		return false
+	}
+
+	for _, c := range qs.origCalls {
+		if c.Name != "count" || len(c.Args) != 1 {
+			return false
+		}
+		v, ok := c.Args[0].(*influxql.VarRef)
+		if !ok {
+			return false
+		}
+		if _, isPK := pkMap[v.Val]; !isPK && v.Val != "time" {
+			return false
+		}
+	}
+
 	return true
 }
 
@@ -561,6 +602,26 @@ func (qs *QuerySchema) SetSources(sources influxql.Sources) {
 
 func (qs *QuerySchema) Sources() influxql.Sources {
 	return qs.sources
+}
+
+func (qs *QuerySchema) SetResource(name string, resource map[string]string) {
+	if len(qs.resource) == 0 {
+		qs.resource = make(map[string]map[string]string)
+	}
+
+	m := make(map[string]string, len(resource))
+	for k, v := range resource {
+		m[k] = v
+	}
+	qs.resource[name] = m
+}
+
+func (qs *QuerySchema) GetResource(name string) map[string]string {
+	if len(qs.resource) == 0 {
+		return nil
+	}
+	resource := qs.resource[name]
+	return resource
 }
 
 func (qs *QuerySchema) HasNonPreCall() bool {
@@ -927,6 +988,10 @@ func (qs *QuerySchema) HoltWinters() []*influxql.Field {
 	return qs.holtWinters
 }
 
+func (qs *QuerySchema) LLMFunc() []*influxql.Field {
+	return qs.llmFunc
+}
+
 func (qs *QuerySchema) SetHoltWinters(calls []*influxql.Call) {
 	for _, call := range calls {
 		f := &influxql.Field{
@@ -976,7 +1041,7 @@ func (qs *QuerySchema) CountDistinct() *influxql.Call {
 
 func (qs *QuerySchema) HasCastorCall() bool {
 	for _, v := range qs.calls {
-		if strings.HasPrefix(v.Name, "castor") {
+		if strings.HasPrefix(v.Name, query.CASTOR) || strings.HasPrefix(v.Name, query.ML_FORECAST) {
 			return true
 		}
 	}
@@ -1041,6 +1106,14 @@ func (qs *QuerySchema) AddHoltWinters(call *influxql.Call, alias string) {
 		Alias: alias,
 	}
 	qs.holtWinters = append(qs.holtWinters, f)
+}
+
+func (qs *QuerySchema) AddLLMFunc(call *influxql.Call, alias string) {
+	f := &influxql.Field{
+		Expr:  call,
+		Alias: alias,
+	}
+	qs.llmFunc = append(qs.llmFunc, f)
 }
 
 type QuerySchemaExpressionVisitor struct {
@@ -1445,6 +1518,10 @@ func (qs *QuerySchema) HasHoltWintersCall() bool {
 	return len(qs.holtWinters) > 0
 }
 
+func (qs *QuerySchema) HasLLMFunc() bool {
+	return len(qs.llmFunc) > 0
+}
+
 func (qs *QuerySchema) BuildDownSampleSchema(addPrefix bool) record.Schemas {
 	var outSchema record.Schemas
 	for _, f := range qs.origCalls {
@@ -1550,6 +1627,17 @@ func (qs *QuerySchema) GetTimeRangeByTC() util.TimeRange {
 	if indexR := qs.Options().GetMeasurements()[0].IndexRelation; indexR != nil {
 		interval = indexR.GetTimeClusterDuration()
 	}
+
+	// default interval is 1h
+	if interval == 0 {
+		interval = int64(colstore.DefaultTCDuration)
+	}
+
+	// min interval is 10mins
+	if interval < int64(colstore.MinTCDuration) {
+		interval = int64(colstore.MinTCDuration)
+	}
+
 	return util.TimeRange{Min: window(startTime, interval), Max: window(endTime, interval)}
 }
 
@@ -1577,10 +1665,226 @@ func (qs *QuerySchema) HasDistinct() bool {
 	return qs.isDistinct
 }
 
+func (qs *QuerySchema) SetSelectDistinct(isSelectDistinct bool) {
+	qs.isSelectDistinct = isSelectDistinct
+}
+
+func (qs *QuerySchema) IsSelectDistinct() bool {
+	return qs.isSelectDistinct
+}
+
+func (qs *QuerySchema) IsColumnStoreCount() bool {
+	if qs.HasRowCount() {
+		return false
+	}
+	condition := qs.opt.GetCondition()
+	if condition == nil {
+		return false
+	}
+
+	msts := qs.opt.GetMeasurements()
+	if expr, ok := condition.(*influxql.BinaryExpr); ok {
+		if expr.Op != influxql.MATCHPHRASE && expr.Op != influxql.MATCH {
+			return false
+		}
+		v, ok := expr.LHS.(*influxql.VarRef)
+		if !ok {
+			return false
+		}
+		indexed := false
+		for _, mst := range msts {
+			for i, index := range mst.IndexRelation.IndexList {
+				if len(index.IList) == 1 && index.IList[0] == v.Val && mst.IndexRelation.IndexNames[i] == "text" {
+					indexed = true
+					break
+				}
+			}
+			if indexed {
+				break
+			}
+		}
+		if !indexed {
+			return false
+		}
+	}
+
+	return true
+}
+
 // window used to calculate the time point that belongs to a specific time window.
 func window(t, window int64) int64 {
 	if t == influxql.MinTime || t == influxql.MaxTime || window == 0 {
 		return t
 	}
 	return t - t%window
+}
+
+func (qs *QuerySchema) isLastBaseQuery() bool {
+	// single time series query
+	if qs.opt.GetHintType() != hybridqp.FullSeriesQuery {
+		return false
+	}
+
+	if len(qs.calls) == 0 {
+		return false
+	}
+
+	// without interval
+	if qs.HasInterval() {
+		return false
+	}
+
+	// without field condition
+	if qs.HasFieldCondition() {
+		return false
+	}
+
+	// group by all tags
+	if !qs.Options().IsGroupByAllDims() {
+		return false
+	}
+	return true
+}
+
+func (qs *QuerySchema) IsLastRowQuery() bool {
+	if !qs.isLastBaseQuery() {
+		return false
+	}
+
+	// last row call
+	for _, c := range qs.calls {
+		if c.Name != "last_row" {
+			return false
+		}
+	}
+	return true
+}
+
+func (qs *QuerySchema) IsLastFieldQuery() bool {
+	if !qs.isLastBaseQuery() {
+		return false
+	}
+
+	// last field call
+	for _, c := range qs.calls {
+		if c.Name != "last" {
+			return false
+		}
+	}
+	return true
+}
+
+// IsOnlyCSPreAgg checks if the query meets the conditions for column store pre-aggregation:
+// 0. No ExactStatisticQuery
+// 1. No grouping information, no in condition,no time condition
+// 2. Engine type is column store
+// 3. Only uses count, sum, mean, max, min system functions
+// 4. WHERE condition only contains primary key filters and pk type is cluster index
+var validFunctions = map[string]struct{}{"count": struct{}{}, "sum": struct{}{}, "mean": struct{}{}, "max": struct{}{}, "min": struct{}{}}
+
+func (qs *QuerySchema) IsOnlyCSPreAgg() bool {
+	// pre-aggregation is not used for exact statistic aggregation.
+	if qs.Options().GetHintType() == hybridqp.ExactStatisticQuery {
+		return false
+	}
+	// Check if there's no grouping information, no in condition,no time condition
+	if len(qs.opt.GetDimensions()) > 0 {
+		return false
+	}
+	if qs.opt.HasInterval() {
+		return false
+	}
+	if qs.Options().HasTimeCondition() {
+		return false
+	}
+	if len(qs.InConditons) > 0 {
+		return false
+	}
+
+	// Check if engine type is column store
+	msts := qs.opt.GetMeasurements()
+	if len(msts) != 1 || msts[0].EngineType != config.COLUMNSTORE {
+		return false
+	}
+
+	// Check if only uses count, sum, mean, max, min functions
+	if len(qs.origCalls) == 0 {
+		return false
+	}
+	for _, call := range qs.origCalls {
+		if _, exist := validFunctions[call.Name]; !exist {
+			return false
+		}
+		if len(call.Args) != 1 {
+			return false
+		}
+	}
+
+	condition := qs.opt.GetCondition()
+	if condition == nil {
+		return true
+	}
+	// Check if WHERE condition only contains primary key filters and pk type is cluster index
+	return isOnlyPkCondition(msts, condition)
+}
+
+func isOnlyPkCondition(msts []*influxql.Measurement, condition influxql.Expr) bool {
+	colmst, exists := colstore.MstManagerIns().Get(msts[0].Database, msts[0].RetentionPolicy, msts[0].Name)
+	if !exists {
+		return false
+	}
+
+	if !colmst.IsClusterPKIndex() {
+		return false
+	}
+
+	pkMap := colmst.BuildPKMap()
+
+	fieldNames := make(map[string]bool)
+	influxql.GetExprFieldNames(condition, fieldNames)
+	for fieldName := range fieldNames {
+		if _, isPK := pkMap[fieldName]; !isPK {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (qs *QuerySchema) CalculateQueryTagFromSymbol(symbolVal string) (string, error) {
+	symbolToExpr := make(map[string]influxql.Expr)
+	for expr, ref := range qs.Mapping() {
+		symbolToExpr[ref.Val] = expr
+	}
+
+	expr, exist := symbolToExpr[symbolVal]
+	if !exist {
+		return "", fmt.Errorf("symbol '%s' not found in query schema mapping", symbolVal)
+	}
+
+	if call, ok := expr.(*influxql.Call); ok {
+		if len(call.Args) != 1 {
+			return "", fmt.Errorf("call expression for symbol '%s' has %d arguments, expected exactly 1",
+				symbolVal, len(call.Args))
+		}
+		arg, ok := call.Args[0].(*influxql.VarRef)
+		if !ok {
+			return "", fmt.Errorf("the argument of call expression for symbol '%s' is not a variable reference, got %T",
+				symbolVal, call.Args[0])
+		}
+		referencedExpr, exists := symbolToExpr[arg.Val]
+		if !exists {
+			return "", fmt.Errorf("referenced symbol '%s' not found in query schema mapping", arg.Val)
+		}
+		if varRef, ok := referencedExpr.(*influxql.VarRef); ok {
+			return varRef.Val + "_" + call.Name, nil
+		}
+		return "", fmt.Errorf("referenced expression for symbol '%s' is not a variable reference, got %T",
+			arg.Val, referencedExpr)
+	}
+	if varRef, ok := expr.(*influxql.VarRef); ok {
+		return varRef.Val, nil
+	}
+
+	return "", fmt.Errorf("unsupported expression type %T for symbol '%s'", expr, symbolVal)
 }

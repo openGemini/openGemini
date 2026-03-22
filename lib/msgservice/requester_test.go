@@ -20,18 +20,21 @@ import (
 	"testing"
 	"time"
 
-	numenc "github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/generate"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	msgservice_data "github.com/openGemini/openGemini/lib/msgservice/data"
+	"github.com/openGemini/openGemini/lib/scheduler"
 	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
+	numenc "github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 type RPCServer struct {
@@ -255,6 +258,120 @@ func TestRequesterRaftMsg(t *testing.T) {
 	if _, err := requester.RaftMsg(); err != nil {
 		t.Fatal("TestRequesterRaftMsg err")
 	}
+}
+
+func TestGetCompactReqMarshal(t *testing.T) {
+	cq := &GetTaskRequest{}
+
+	content, _ := cq.MarshalBinary()
+
+	cq.UnmarshalBinary(content)
+}
+
+func TestGetCompactResMarshal(t *testing.T) {
+	cg := immutable.NewCompactGroup("mst_0000", "", 2, 0)
+	cg.Add("/file1")
+	cg.Add("/file2")
+	lock := ""
+	tier := uint64(0)
+	ts := immutable.NewTableStore("", &lock, &tier, false, nil)
+	ts.SetDbRp("db0", "rp0")
+	ts.ImmTable = immutable.NewTsImmTable()
+	cq := &GetTaskResponse{
+		result: immutable.NewCompactTask(ts, cg, true),
+	}
+
+	content, _ := cq.MarshalBinary()
+
+	cq2 := &GetTaskResponse{}
+	err := cq2.UnmarshalBinary(content)
+	require.NoError(t, err)
+}
+
+func TestGetCompactResMarshalErr(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		cq := &GetTaskResponse{
+			err: "test error",
+		}
+
+		content, _ := cq.MarshalBinary()
+
+		cq2 := &GetTaskResponse{}
+		err := cq2.UnmarshalBinary(content)
+		require.NoError(t, err)
+
+		require.Error(t, cq.Error())
+		require.Equal(t, cq.err, cq2.err)
+	})
+
+	t.Run("2", func(t *testing.T) {
+		cq := &GetTaskRequest{}
+		err := cq.UnmarshalBinary([]byte{})
+		require.Error(t, err)
+	})
+
+}
+
+func TestSendCompactInfoMarshal(t *testing.T) {
+	lock := "lockPath"
+	comapctInfo := &immutable.CompactedFileInfo{
+		Name:     "mst1",
+		BasePath: "basePath",
+		Lock:     &lock,
+		OldFile:  []string{"file1", "file2"},
+		NewFile:  []string{"file3"},
+		ToLevel:  1,
+	}
+	req := &SendTaskResultRequest{
+		Info: comapctInfo,
+		Uuid: 1,
+		Type: scheduler.CompactTask,
+	}
+	buf, err := req.MarshalBinary()
+	require.NoError(t, err)
+
+	req2 := &SendTaskResultRequest{}
+	err = req2.UnmarshalBinary(buf)
+	require.NoError(t, err)
+
+	require.Equal(t, req, req2)
+}
+
+func TestSendCompactInfoMarshalError(t *testing.T) {
+	lock := "lockPath"
+	comapctInfo := &immutable.CompactedFileInfo{
+		Name:     "mst1",
+		BasePath: "basePath",
+		Lock:     &lock,
+		OldFile:  []string{"file1", "file2"},
+		NewFile:  []string{"file3"},
+		ToLevel:  1,
+	}
+	req := &SendTaskResultRequest{
+		Info: comapctInfo,
+		Uuid: 1,
+		Type: 1,
+	}
+	buf, err := req.MarshalBinary()
+	require.Error(t, err)
+
+	req2 := &SendTaskResultRequest{}
+	err = req2.UnmarshalBinary(buf)
+	require.Error(t, err)
+}
+
+func TestSendCompactInfoResMarshal(t *testing.T) {
+	req := &SendTaskResultResponse{}
+	req.SetError("error message")
+	buf, err := req.MarshalBinary()
+	require.NoError(t, err)
+
+	req2 := &SendTaskResultResponse{}
+	err = req2.UnmarshalBinary(buf)
+	require.NoError(t, err)
+
+	err = req2.UnmarshalBinary([]byte{})
+	require.Error(t, err)
 }
 
 func MarshalRows(buf []byte, rows []influx.Row, db, rp string, pt uint32) ([]byte, error) {

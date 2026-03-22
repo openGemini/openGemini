@@ -33,6 +33,7 @@ type Shelf struct {
 	WALConverting     *ItemInt64 // Number of WAL files being converted
 	WALFileCount      *ItemInt64
 	WALFileSizeSum    *ItemInt64 // KB
+	WALFileOpenDurSum *ItemInt64 // microseconds
 	TSSPConvertCount  *ItemInt64
 	TSSPConvertDurSum *ItemInt64 // milliseconds
 
@@ -50,4 +51,10 @@ type Shelf struct {
 	DiskFlushDurSum *ItemInt64 // microseconds
 	DiskSyncCount   *ItemInt64
 	DiskSyncDurSum  *ItemInt64 // microseconds
+
+	WALConvertRowCount *ItemInt64 // WAL to TSSP data row count
+	WALWriteBytesCount *ItemInt64 // WAL Write Bytes
+
+	ForceUnrefTotal *ItemInt64
+	ConvertParallel *ItemInt64
 }

@@ -39,6 +39,7 @@ type Options interface {
 	ChunkSizeNum() int
 	GetStartTime() int64
 	GetEndTime() int64
+	HasTimeCondition() bool
 	GetMaxParallel() int
 	Window(t int64) (start, end int64)
 	GetGroupBy() map[string]struct{}
@@ -94,4 +95,7 @@ type Options interface {
 	CanQueryPushDown() bool
 	GetValueCondition() influxql.Expr
 	SetValueCondition(vc influxql.Expr)
+	IsSQL() bool
+	HaveCall() bool
+	IsOnlyCountTime() bool
 }

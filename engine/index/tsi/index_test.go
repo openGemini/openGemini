@@ -21,34 +21,35 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/dictmap"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/obs"
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/savsgio/dictpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,7 +88,43 @@ func BenchmarkIndex(b *testing.B) {
 	idx.Close()
 }
 
-func buildIndexRow() *dictpool.Dict {
+func TestLabelsTag(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	rows := make([]influx.Row, 0, 2)
+	row1 := influx.Row{}
+	row1.Name = "mn-1_0000"
+	row1.Tags = make(influx.PointTags, 1)
+	row1.Tags[0].Key = "__labels__"
+	row1.Tags[0].Value = "abc#$#1"
+	sort.Sort(&row1.Tags)
+	row1.Timestamp = time.Now().UnixNano()
+	row1.UnmarshalIndexKeys(nil)
+	row1.ShardKey = row1.IndexKey
+	rows = append(rows, row1)
+
+	row2 := influx.Row{}
+	row2.Name = "mn-1_0000"
+	row2.Tags = make(influx.PointTags, 1)
+	row2.Tags[0].Key = "__labels__"
+	row2.Tags[0].Value = "abc"
+	sort.Sort(&row2.Tags)
+	row2.Timestamp = time.Now().UnixNano()
+	row2.UnmarshalIndexKeys(nil)
+	row2.ShardKey = row2.IndexKey
+	rows = append(rows, row2)
+
+	mmPoints := make(dictmap.DictMap[string, *[]influx.Row])
+	mmPoints.Set("mn-1_0000", &rows)
+	err := buildTestIndex(idx, mmPoints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx.Close()
+}
+
+func buildIndexRow() dictmap.DictMap[string, *[]influx.Row] {
 	num := 100
 	tagNum := 5
 	rows := make([]influx.Row, 0, num)
@@ -106,14 +143,13 @@ func buildIndexRow() *dictpool.Dict {
 		rows = append(rows, row)
 	}
 
-	mmPoints := &dictpool.Dict{}
+	mmPoints := make(dictmap.DictMap[string, *[]influx.Row])
 	mmPoints.Set("mn-1_0000", &rows)
 	return mmPoints
 }
 
-func updateIndexRow(mmPoints *dictpool.Dict, c int) *dictpool.Dict {
-	v := mmPoints.Get("mn-1_0000")
-	rows := v.(*[]influx.Row)
+func updateIndexRow(mmPoints dictmap.DictMap[string, *[]influx.Row], c int) dictmap.DictMap[string, *[]influx.Row] {
+	rows, _ := mmPoints.Get("mn-1_0000")
 	key := "mn-" + strconv.Itoa(c) + "_0000"
 	for i := 0; i < len(*rows); i++ {
 		row := (*rows)[i]
@@ -122,12 +158,12 @@ func updateIndexRow(mmPoints *dictpool.Dict, c int) *dictpool.Dict {
 		row.ShardKey = row.IndexKey
 	}
 
-	newPoints := &dictpool.Dict{}
+	newPoints := make(dictmap.DictMap[string, *[]influx.Row])
 	newPoints.Set(key, rows)
 	return newPoints
 }
 
-func buildTestIndex(idx Index, dict *dictpool.Dict) error {
+func buildTestIndex(idx Index, dict dictmap.DictMap[string, *[]influx.Row]) error {
 	err := idx.Open()
 	if err != nil {
 		return err
@@ -137,10 +173,8 @@ func buildTestIndex(idx Index, dict *dictpool.Dict) error {
 		panic(err)
 	}
 
-	for mmIndex := range dict.D {
+	for _, rows := range dict {
 		// test data, must be row
-		rows, _ := dict.D[mmIndex].Value.(*[]influx.Row)
-
 		for rowIdx := range *rows {
 			if (*rows)[rowIdx].SeriesId == 0 {
 				return errors.New("create index failed")
@@ -1346,15 +1380,10 @@ func generateIndexByPts(csIndexImpl *CsIndexImpl, idx *MergeSetIndex, keys ...st
 		pts = append(pts, pt)
 	}
 
-	mmPoints := &dictpool.Dict{}
+	mmPoints := make(dictmap.DictMap[string, *[]influx.Row])
 	mmPoints.Set("mn-1_0000", &pts)
 
-	for mmIndex := range mmPoints.D {
-		rows, ok := mmPoints.D[mmIndex].Value.(*[]influx.Row)
-		if !ok {
-			panic("create index failed due to map mmPoints")
-		}
-
+	for _, rows := range mmPoints {
 		for rowIdx := range *rows {
 			err := csIndexImpl.CreateIndexIfNotExistsByRow(idx, &(*rows)[rowIdx])
 			if err != nil {
@@ -1463,18 +1492,13 @@ func CreateIndexByPts(idx Index, keys ...string) {
 		pts = append(pts, pt)
 	}
 
-	mmPoints := &dictpool.Dict{}
+	mmPoints := make(dictmap.DictMap[string, *[]influx.Row])
 	mmPoints.Set("mn-1_0000", &pts)
 	if err := idx.CreateIndexIfNotExists(mmPoints); err != nil {
 		panic(err)
 	}
 
-	for mmIndex := range mmPoints.D {
-		rows, ok := mmPoints.D[mmIndex].Value.(*[]influx.Row)
-		if !ok {
-			panic("create index failed due to map mmPoints")
-		}
-
+	for _, rows := range mmPoints {
 		for rowIdx := range *rows {
 			if (*rows)[rowIdx].SeriesId == 0 {
 				panic("create index failed")
@@ -1486,7 +1510,7 @@ func CreateIndexByPts(idx Index, keys ...string) {
 	idx.Open()
 }
 
-func CreateIndexIfNotExistsForTest(idx *MergeSetIndex, mmRows *dictpool.Dict) error {
+func CreateIndexIfNotExistsForTest(idx *MergeSetIndex, mmRows dictmap.DictMap[string, *[]influx.Row]) error {
 	vkey := kbPool.Get()
 	defer kbPool.Put(vkey)
 	vname := kbPool.Get()
@@ -1496,13 +1520,8 @@ func CreateIndexIfNotExistsForTest(idx *MergeSetIndex, mmRows *dictpool.Dict) er
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	for mmIdx := range mmRows.D {
-		rows, ok := mmRows.D[mmIdx].Value.(*[]influx.Row)
-		if !ok {
-			return fmt.Errorf("create index failed due to rows are not belong to type row")
-		}
-
-		vname.B = append(vname.B[:0], []byte(mmRows.D[mmIdx].Key)...)
+	for k, rows := range mmRows {
+		vname.B = append(vname.B[:0], []byte(k)...)
 		for rowIdx := range *rows {
 			if (*rows)[rowIdx].SeriesId != 0 {
 				continue
@@ -1580,13 +1599,13 @@ func createIndexesForTest(idx *MergeSetIndex, seriesKey []byte, name []byte, tag
 				} else {
 					tagMap[tags[i].Key][tags[i].Value] = struct{}{}
 				}
-				ii.B = idx.marshalTagToTSIDs(compositeKey.B, ii.B, name, tags[i], tsid)
+				ii.B = idx.marshalTagToTSIDs(compositeKey.B, ii.B, name, tags[i].Key, tags[i].Value, tsid)
 				ii.Next()
 			}
 		}
 	} else {
 		for i := range tags {
-			ii.B = idx.marshalTagToTSIDs(compositeKey.B, ii.B, name, tags[i], tsid)
+			ii.B = idx.marshalTagToTSIDs(compositeKey.B, ii.B, name, tags[i].Key, tags[i].Value, tsid)
 			ii.Next()
 		}
 	}
@@ -1636,18 +1655,13 @@ func CreateIndexByPtsWithoutTsid2Sk(idx Index, keys ...string) {
 		pts = append(pts, pt)
 	}
 
-	mmPoints := &dictpool.Dict{}
+	mmPoints := make(dictmap.DictMap[string, *[]influx.Row])
 	mmPoints.Set("mn-1_0000", &pts)
 	if err := CreateIndexIfNotExistsForTest(idx.(*MergeSetIndex), mmPoints); err != nil {
 		panic(err)
 	}
 
-	for mmIndex := range mmPoints.D {
-		rows, ok := mmPoints.D[mmIndex].Value.(*[]influx.Row)
-		if !ok {
-			panic("create index failed due to map mmPoints")
-		}
-
+	for _, rows := range mmPoints {
 		for rowIdx := range *rows {
 			if (*rows)[rowIdx].SeriesId == 0 {
 				panic("create index failed")
@@ -1673,19 +1687,21 @@ func BenchmarkParallelGenerateUUID(b *testing.B) {
 	})
 }
 
+type IndexItem struct {
+	name      []byte
+	key       []byte
+	shardKey  []byte
+	tags      []influx.Tag
+	shardID   uint64
+	timestamp int64
+	mmPoints  dictmap.DictMap[string, *[]influx.Row]
+}
+
 func BenchmarkCreateIndexIfNotExists(b *testing.B) {
 	path := b.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
-	type IndexItem struct {
-		name      []byte
-		key       []byte
-		shardKey  []byte
-		tags      []influx.Tag
-		shardID   uint64
-		timestamp int64
-		mmPoints  *dictpool.Dict
-	}
+
 	n := 1000000
 	items := make([]*IndexItem, n)
 
@@ -1698,7 +1714,7 @@ func BenchmarkCreateIndexIfNotExists(b *testing.B) {
 		for k := 0; k < 10; k++ {
 			tags[k] = influx.Tag{
 				Key:   "key-" + strconv.Itoa(k),
-				Value: "value-" + strconv.Itoa(k*1000+rand.Intn(1000)),
+				Value: "value-" + strconv.Itoa(k*1000+rand.IntN(1000)),
 			}
 			key += "," + tags[k].Key + "=" + tags[k].Value + ","
 		}
@@ -1718,7 +1734,7 @@ func BenchmarkCreateIndexIfNotExists(b *testing.B) {
 		pt.SeriesId = 0
 		pt.Name = name
 		pt.Tags = tags
-		item.mmPoints = &dictpool.Dict{}
+		item.mmPoints = make(dictmap.DictMap[string, *[]influx.Row])
 		item.mmPoints.Set(name, &[]influx.Row{pt})
 		items[i] = item
 	}
@@ -1812,18 +1828,13 @@ func CreateIndexByPtsOfAllAndExpr(idx Index, keys ...string) {
 		pts = append(pts, pt)
 	}
 
-	mmPoints := &dictpool.Dict{}
+	mmPoints := make(dictmap.DictMap[string, *[]influx.Row])
 	mmPoints.Set("mn-1_0000", &pts)
 	if err := idx.CreateIndexIfNotExists(mmPoints); err != nil {
 		panic(err)
 	}
 
-	for mmIndex := range mmPoints.D {
-		rows, ok := mmPoints.D[mmIndex].Value.(*[]influx.Row)
-		if !ok {
-			panic("create index failed due to map mmPoints")
-		}
-
+	for _, rows := range mmPoints {
 		for rowIdx := range *rows {
 			if (*rows)[rowIdx].SeriesId == 0 {
 				panic("create index failed")
@@ -2045,18 +2056,13 @@ func CreateIndexByPtsOfAllAndExprFilterBreak(idx Index, keys ...string) {
 		pts = append(pts, pt)
 	}
 
-	mmPoints := &dictpool.Dict{}
+	mmPoints := make(dictmap.DictMap[string, *[]influx.Row])
 	mmPoints.Set("mn-1_0000", &pts)
 	if err := idx.CreateIndexIfNotExists(mmPoints); err != nil {
 		panic(err)
 	}
 
-	for mmIndex := range mmPoints.D {
-		rows, ok := mmPoints.D[mmIndex].Value.(*[]influx.Row)
-		if !ok {
-			panic("create index failed due to map mmPoints")
-		}
-
+	for _, rows := range mmPoints {
 		for rowIdx := range *rows {
 			if (*rows)[rowIdx].SeriesId == 0 {
 				panic("create index failed")
@@ -2677,8 +2683,8 @@ func TestExecEmptyIndexMove(t *testing.T) {
 	idxBuilder.Flush()
 }
 
-/*
 func TestRenameIBuilderAndRelationPath(t *testing.T) {
+	t.Skip()
 	path := t.TempDir()
 	_, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	relations := idxBuilder.Relations
@@ -2693,7 +2699,6 @@ func TestRenameIBuilderAndRelationPath(t *testing.T) {
 	idxBuilder.renameIBuilderAndRelationPath()
 	idxBuilder.ObsOpt = nil
 }
-*/
 
 func TestTagSetInfo_AppendWithOpt(t1 *testing.T) {
 	type args struct {
@@ -2856,12 +2861,63 @@ func TestGroupSeries_Reverse(t *testing.T) {
 }
 
 func TestReplaceByNoClearIndexId(t *testing.T) {
+	testDir := t.TempDir()
 	ib := &IndexBuilder{}
-	ib.SetPath("/tmp/openGemini/backup_dir/data/data/db0/0/rp0/index")
+	ib.SetPath(filepath.Join(testDir, "backup_dir", "data", "data", "db0", "0", "rp0", "index"))
 	_, _, err := ib.ReplaceByNoClearIndexId(1)
 	assert.Error(t, err)
 
-	ib.SetPath("/tmp/openGemini/backup_dir/data/data/db0/0/rp0/index/5_1708905600000000000_1709510400000000000")
+	ib.SetPath(filepath.Join(testDir, "backup_dir", "data", "data", "db0", "0", "rp0", "index", "5_1708905600000000000_1709510400000000000"))
 	_, _, err = ib.ReplaceByNoClearIndexId(1)
 	assert.NoError(t, err)
+}
+
+func TestSearchTagValuesFastWay(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	CreateIndexByPts(idx)
+
+	f := func(name []byte, tagKeys [][]byte, condition influxql.Expr, expectedTagValues [][]string) {
+		name = append(name, []byte("_0000")...)
+		tagValues, err := idx.SearchTagValues(name, tagKeys, condition)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		require.Equal(t, len(expectedTagValues), len(tagValues))
+
+		for i := 0; i < len(tagValues); i++ {
+			require.Equal(t, len(expectedTagValues[i]), len(tagValues[i]))
+			sort.Strings(tagValues[i])
+			sort.Strings(expectedTagValues[i])
+			for j := 0; j < len(tagValues[i]); j++ {
+				assert.Equal(t, tagValues[i][j], expectedTagValues[i][j])
+			}
+		}
+	}
+	regVal, err := regexp.Compile("(?i)value11.*")
+	assert.Equal(t, err, nil)
+	cond1 := &influxql.BinaryExpr{
+		LHS: &influxql.VarRef{Val: "tk1"},
+		RHS: &influxql.RegexLiteral{Val: regVal},
+		Op:  influxql.NEQREGEX,
+	}
+	cond2 := &influxql.BinaryExpr{
+		LHS: &influxql.VarRef{Val: "tk1"},
+		RHS: &influxql.RegexLiteral{Val: regVal},
+		Op:  influxql.EQREGEX,
+	}
+	t.Run("TagValuesFastWay", func(t *testing.T) {
+		f([]byte("mn-1"), [][]byte{[]byte("tk1")}, cond1, [][]string{{
+			"value1",
+		}})
+
+		f([]byte("mn-1"), [][]byte{[]byte("tk1")}, cond2, [][]string{{
+			"value11",
+		}})
+	})
+
+	// test closed index
+	idx.Close()
 }

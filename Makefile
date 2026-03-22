@@ -14,7 +14,9 @@
 
 include Makefile.common
 
-.PHONY: go-build style-check gotest integration-test buildsucc static-check start-subscriber stop-subscriber
+.PHONY: go-build style-check gotest integration-test buildsucc static-check start-subscriber stop-subscriber clean-test-env
+
+GOTEST_TIMEOUT ?= 15m
 
 default: gotest
 
@@ -46,21 +48,7 @@ go-version-check:
 	bash ./scripts/ci/go_version_check.sh
 
 style-check: install-goimports-reviser
-	@echo "run style check for import pkg order"
-	@for file in $(STYLE_CHECK_GOFILE); do goimports-reviser -project-name none-pjn $$file; done
-	@GIT_STATUS=`git status | grep "Changes not staged for commit"`; \
-		if [ "$$GIT_STATUS" = "" ]; \
-		then \
-			echo "code already go formatted"; \
-		else \
-			echo "style check failed, please format your code using goimports-reviser"; \
-			echo "ref: github.com/incu6us/goimports-reviser"; \
-			echo "git diff files:"; \
-			git diff --stat | tee; \
-			echo "git diff details: "; \
-			git diff | tee; \
-			exit 1; \
-		fi
+	bash ./scripts/ci/style_check.sh
 
 go-vet-check:
 	bash ./scripts/ci/go_vet.sh
@@ -74,10 +62,32 @@ go-generate: install-tmpl install-goyacc install-exhaustruct install-protoc inst
 golangci-lint-check: install-golangci-lint
 	bash ./scripts/ci/golangci_lint_check.sh
 
-gotest: install-failpoint failpoint-enable
+gotest:
 	@echo "running gotest begin."
-	@index=0; for s in $(PACKAGES_OPEN_GEMINI_TESTS); do index=$$(($$index+1)); if ! $(GOTEST) -failfast -short -v -count 1 -p 1 -timeout 10m -coverprofile coverage_$$index.txt -coverpkg ./... $$s; then $(FAILPOINT_DISABLE); exit 1; fi; done
+	@index=0; for s in $(PACKAGES_OPEN_GEMINI_TESTS); do \
+		index=$$(($$index+1)); \
+		$(MAKE) clean-test-env >/dev/null; \
+		pkg_tmp_root=$$(mktemp -d /tmp/openGemini-ut-$$index-XXXXXX); \
+		rm -rf /tmp/openGemini; \
+		ln -s "$$pkg_tmp_root" /tmp/openGemini; \
+		if ! TMPDIR="$$pkg_tmp_root" $(GOTEST) -tags "failpoint" -short -v -count 1 -p 1 -parallel 1 -timeout $(GOTEST_TIMEOUT) -coverprofile coverage_$$index.txt -coverpkg ./... $$s; then \
+			rm -rf /tmp/openGemini "$$pkg_tmp_root"; \
+			$(MAKE) clean-test-env >/dev/null; \
+			$(FAILPOINT_DISABLE); \
+			exit 1; \
+		fi; \
+		rm -rf /tmp/openGemini "$$pkg_tmp_root"; \
+	done
+	@$(MAKE) clean-test-env >/dev/null
 	@$(FAILPOINT_DISABLE)
+
+clean-test-env:
+	@rm -rf /tmp/openGemini /backup_test/tmp/openGemini /tmp/gemini
+	@rm -rf app/ts-meta/meta/backupPath app/ts-meta/meta/meta_mux.log app/ts-meta/meta/raft.log
+	@rm -rf engine/executor/.log engine/executor/.error.log engine/wal
+	@if [ "$${CI:-}" = "true" ]; then \
+		pkill -9 -f 'ts-(meta|store|sql)' >/dev/null 2>&1 || true; \
+	fi
 
 build-check:
 	@$(PYTHON) build.py --clean --platform windows --arch amd64
@@ -88,7 +98,15 @@ build-check:
 
 integration-test:
 	@echo "running integration test begin."
-	@URL=http://127.0.0.1:8086 $(GOTEST) -mod=mod -test.parallel 1 -timeout 10m ./tests -v GOCACHE=off -args "normal"
+	@$(MAKE) clean-test-env >/dev/null
+	@it_tmp_root=$$(mktemp -d /tmp/openGemini-it-XXXXXX); \
+		rm -rf /tmp/openGemini; \
+		ln -s "$$it_tmp_root" /tmp/openGemini; \
+		URL=http://127.0.0.1:8086 TMPDIR="$$it_tmp_root" $(GOTEST) -mod=mod -test.parallel 1 -timeout 10m ./tests -v GOCACHE=off -args "normal"; \
+		status=$$?; \
+		rm -rf /tmp/openGemini "$$it_tmp_root"; \
+		$(MAKE) clean-test-env >/dev/null; \
+		exit $$status
 
 start-subscriber:
 	sed -i '/\[subscriber\]/{n;s/.*/enabled = true/;}' config/openGemini.conf

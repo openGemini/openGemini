@@ -32,11 +32,11 @@ import (
 	"sort"
 	"sync/atomic"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/index"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
@@ -1043,7 +1043,7 @@ func (is *indexSearch) seriesByBinaryExpr(name []byte, n *influxql.BinaryExpr, t
 	}
 
 	if len(is.tfs) == 0 {
-		is.tfs = is.tfs[:1]
+		is.tfs = append(is.tfs, tagFilter{})
 	}
 	tf := &is.tfs[0]
 	var err error
@@ -1095,7 +1095,7 @@ func (is *indexSearch) seriesByBinaryExpr(name []byte, n *influxql.BinaryExpr, t
 
 // todo: vals parallel processing
 func (is *indexSearch) seriesByBinaryExprSetLiteral(name, key []byte, vals map[interface{}]bool, equal bool) (index.SeriesIDSetIterator, error) {
-	var result *uint64set.Set
+	result := &uint64set.Set{}
 	tf := new(tagFilter)
 	for val := range vals {
 		if err := tf.Init(name, key, []byte(val.(string)), false, false); err != nil {
@@ -1105,10 +1105,9 @@ func (is *indexSearch) seriesByBinaryExprSetLiteral(name, key []byte, vals map[i
 		if err != nil {
 			return nil, err
 		}
-		if result != nil {
-			set.Union(result)
+		if set != nil {
+			result.UnionMayOwn(set)
 		}
-		result = set
 	}
 
 	if !equal {
@@ -1116,9 +1115,7 @@ func (is *indexSearch) seriesByBinaryExprSetLiteral(name, key []byte, vals map[i
 		if err != nil {
 			return nil, err
 		}
-		if result != nil {
-			tsids.Subtract(result)
-		}
+		tsids.Subtract(result)
 		result = tsids
 	}
 	return index.NewSeriesIDSetIterator(index.NewSeriesIDSetWithSet(result)), nil
@@ -1567,6 +1564,7 @@ func (is *indexSearch) getSeriesCount(prefix []byte) (uint64, error) {
 	mp := &is.mp
 	ts.Seek(prefix)
 	var seriesCount uint64
+	deleted := is.idx.GetDeletedTSIDs()
 	for ts.NextItem() {
 		item := ts.Item
 		if !bytes.HasPrefix(item, prefix) {
@@ -1582,7 +1580,7 @@ func (is *indexSearch) getSeriesCount(prefix []byte) (uint64, error) {
 		if err := mp.InitOnlyTail(item, tail); err != nil {
 			return 0, err
 		}
-		seriesCount += uint64(mp.TSIDsLen())
+		seriesCount += mp.ParseTSIDsAndGetFilteredLen(deleted)
 	}
 	return seriesCount, nil
 }
@@ -1640,9 +1638,27 @@ func (is *indexSearch) searchSeriesKey(dst []byte, tsid uint64) ([]byte, error) 
 	return dst, nil
 }
 
-func (is *indexSearch) searchTagValues(name []byte, tagKeys [][]byte, condition influxql.Expr) ([][]string, error) {
-	result := make([][]string, len(tagKeys))
+func (is *indexSearch) searchTagValuesFastWay(name []byte, tagKey []byte, regexVal *influxql.RegexLiteral, op influxql.Token) ([][]string, error) {
+	result := make([][]string, 1)
+	tvm, err := is.searchTagValuesBySingleKey(name, tagKey, nil, nil, regexVal, op)
+	if err != nil {
+		return nil, err
+	}
+	tagValues := make([]string, 0, len(tvm))
+	for tv := range tvm {
+		tagValues = append(tagValues, tv)
+	}
+	result[0] = tagValues
+	return result, nil
+}
 
+func (is *indexSearch) searchTagValues(name []byte, tagKeys [][]byte, condition influxql.Expr) ([][]string, error) {
+	if binExpr, ok := condition.(*influxql.BinaryExpr); ok {
+		if len(tagKeys) == 1 && binExpr.MatchTagValFastWay(tagKeys[0]) {
+			return is.searchTagValuesFastWay(name, tagKeys[0], binExpr.RHS.(*influxql.RegexLiteral), binExpr.Op)
+		}
+	}
+	result := make([][]string, len(tagKeys))
 	var eligibleTSIDs *uint64set.Set
 	if condition != nil {
 		var err error
@@ -1657,7 +1673,7 @@ func (is *indexSearch) searchTagValues(name []byte, tagKeys [][]byte, condition 
 	}
 
 	for i, tagKey := range tagKeys {
-		tvm, err := is.searchTagValuesBySingleKey(name, tagKey, eligibleTSIDs, condition)
+		tvm, err := is.searchTagValuesBySingleKey(name, tagKey, eligibleTSIDs, condition, nil, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -1687,7 +1703,8 @@ func (is *indexSearch) searchTagValuesForLabelStore(name []byte, tagKeys [][]byt
 	return result, nil
 }
 
-func (is *indexSearch) searchTagValuesBySingleKey(name, tagKey []byte, eligibleTSIDs *uint64set.Set, condition influxql.Expr) (map[string]struct{}, error) {
+func (is *indexSearch) searchTagValuesBySingleKey(name, tagKey []byte, eligibleTSIDs *uint64set.Set, condition influxql.Expr,
+	regexVal *influxql.RegexLiteral, op influxql.Token) (map[string]struct{}, error) {
 	ts := &is.ts
 	kb := &is.kb
 	mp := &is.mp
@@ -1715,7 +1732,7 @@ func (is *indexSearch) searchTagValuesBySingleKey(name, tagKey []byte, eligibleT
 			return nil, err
 		}
 
-		isExpect, tsid := mp.IsExpectedTag(deletedTSIDs, eligibleTSIDs)
+		isExpect, tsid := mp.IsExpectedTag(deletedTSIDs, eligibleTSIDs, regexVal, mp.Tag.Value, op)
 		if !isExpect {
 			continue
 		}

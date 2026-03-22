@@ -64,11 +64,6 @@ class MetaData:
         self.bucket_lock = [Lock() for _ in range(size)]
         self.bucket = [list() for _ in range(size)]
         self.timeout_sec = timeout_sec
-        self.auto_clean_thread = Thread(
-            target=self._ticker, args=(self._clean_timeout_obj,)
-        )
-        self.auto_clean_thread.setDaemon(True)
-        self.auto_clean_thread.start()
 
     def __getstate__(self):
         state = self.__dict__.copy()

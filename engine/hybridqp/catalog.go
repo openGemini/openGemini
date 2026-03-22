@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
@@ -205,6 +206,8 @@ type Catalog interface {
 	CloneField(f *influxql.Field) *influxql.Field
 	HasCall() bool
 	HasRowCount() bool
+	IsOnlyCSPreAgg() bool
+	CalculateQueryTagFromSymbol(s string) (string, error)
 	HasMath() bool
 	HasString() bool
 	HasNonPreCall() bool
@@ -232,6 +235,7 @@ type Catalog interface {
 	Calls() map[string]*influxql.Call
 	SlidingWindow() map[string]*influxql.Call
 	HoltWinters() []*influxql.Field
+	LLMFunc() []*influxql.Field
 	CompositeCall() map[string]*OGSketchCompositeOperator
 	PromNestedCall() map[string]*PromNestedCall
 	Binarys() map[string]*influxql.BinaryExpr
@@ -256,6 +260,7 @@ type Catalog interface {
 	HasStreamCall() bool
 	HasSlidingWindowCall() bool
 	HasHoltWintersCall() bool
+	HasLLMFunc() bool
 	IsMultiMeasurements() bool
 	HasGroupBy() bool
 	SetSources(sources influxql.Sources)
@@ -282,6 +287,13 @@ type Catalog interface {
 	IsInSubquerySchema() bool
 	SetDistinct(bool)
 	HasDistinct() bool
+	SetSelectDistinct(bool)
+	IsSelectDistinct() bool
+	IsColumnStoreCount() bool
+	SetResource(name string, resource map[string]string)
+	GetResource(name string) map[string]string
+	IsLastRowQuery() bool
+	IsLastFieldQuery() bool
 }
 
 type CatalogCreator interface {
@@ -331,6 +343,7 @@ type StoreEngine interface {
 	ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDS []uint64, schema Catalog) (IShardsFragments, error)
 	GetIndexInfo(db string, ptId uint32, shardID uint64, schema Catalog) (interface{}, error)
 	RowCount(db string, ptId uint32, shardIDS []uint64, schema Catalog) (int64, error)
+	GetPreAgg(db string, ptId uint32, shardIDS []uint64, schema Catalog, queryAggExprs []string) (*record.Record, error)
 	UnrefEngineDbPt(db string, ptId uint32)
 	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int
 }

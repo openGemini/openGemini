@@ -37,6 +37,7 @@ import (
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
@@ -48,10 +49,12 @@ var storageDataPath = "/tmp/data/"
 var metaPath = "/tmp/meta"
 var addr = "127.0.0.1:8502"
 var addr1 = "127.0.0.1:8503"
+var monitorP = ""
 
 func mockStorage() *storage.Storage {
 	node := metaclient.NewNode(metaPath)
 	storeConfig := config.NewStore()
+	storeConfig.InitFields()
 	config.SetHaPolicy(config.SSPolicy)
 	monitorConfig := config.Monitor{
 		Pushers:      "http",
@@ -128,6 +131,7 @@ func Test_NewServer_Statistics_Single(t *testing.T) {
 	server := &Server{}
 	server.info.App = config.AppSingle
 	server.config = config.NewTSStore(false)
+	server.config.Data.InitFields()
 	server.config.Data.OpsMonitor.HttpAddress = addr1
 	server.storage = mockStorage()
 	server.OpsService = NewService(&server.config.Data)
@@ -234,33 +238,36 @@ func TestNilService(t *testing.T) {
 
 func TestNewServer(t *testing.T) {
 	conf := config.NewTSStore(true)
+	conf.Data.InitFields()
 	conf.Common.MetaJoin = []string{"127.0.0.1", "127.0.0.2", "127.0.0.3"}
 
 	conf.Index.MemoryAllowedPercent = 20
 	conf.Common.PprofEnabled = true
 
-	NewServer(conf, app.ServerInfo{}, logger.NewLogger(errno.ModuleUnknown))
+	NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, logger.NewLogger(errno.ModuleUnknown))
 	require.Equal(t, 20, config.GetIndexConfig().MemoryAllowedPercent)
 }
 
 func TestNewServerErr(t *testing.T) {
 	conf := config.NewTSStore(true)
+	conf.Data.InitFields()
 	conf.Data.Engine = "xx1"
 	conf.Common.MetaJoin = []string{"127.0.0.1", "127.0.0.2", "127.0.0.3"}
 
 	conf.Index.MemoryAllowedPercent = 20
 	conf.Common.PprofEnabled = true
 
-	_, err := NewServer(conf, app.ServerInfo{}, logger.NewLogger(errno.ModuleUnknown))
+	_, err := NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, logger.NewLogger(errno.ModuleUnknown))
 	require.EqualError(t, err, "unrecognized engine xx1", "err msg not expected")
 }
 
 func TestNewServerErrRole(t *testing.T) {
 	config := config.NewTSStore(true)
+	config.Data.InitFields()
 	config.Common.MetaJoin = []string{"127.0.0.1", "127.0.0.2", "127.0.0.3"}
 	config.Common.NodeRole = "xx"
 
-	_, err := NewServer(config, app.ServerInfo{}, logger.NewLogger(errno.ModuleUnknown))
+	_, err := NewServer(config, app.ServerInfo{MonitorPass: &monitorP}, logger.NewLogger(errno.ModuleUnknown))
 	assert.NoError(t, err)
 }
 
@@ -516,6 +523,11 @@ func (mmc *MockMetaClient) GetAllMst(dbName string) []string {
 
 func (client *MockMetaClient) RetryRegisterQueryIDOffset(host string) (uint64, error) {
 	return 0, nil
+}
+
+func (client *MockMetaClient) StatisticDatabaseShards() []opsStat.OpsStatistic {
+	var statistic []opsStat.OpsStatistic
+	return statistic
 }
 
 func TestNewCommand(t *testing.T) {

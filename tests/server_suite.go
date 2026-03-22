@@ -4,8 +4,7 @@ package tests
 Copyright (c) 2018 InfluxData
 This code is originally from: https://github.com/influxdata/influxdb/blob/1.7/tests/server_suite.go
 
-2022.01.23 changed
-modified some query response exp, like 'hot durition'
+2022.01.23 Modified some query response's exp, like 'hot duration'.
 Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 */
 

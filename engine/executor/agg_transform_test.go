@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/services/castor"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func buildInRowDataTypeIntegral() hybridqp.RowDataType {
@@ -1344,6 +1345,89 @@ func TestStreamAggregateTransformAnomalyDetect(t *testing.T) {
 			t,
 			inChunks, dstChunks,
 			buildSourceRowDataType(), buildDstRowDataTypeAnomalyDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+}
+
+func buildInChunkADDiffAbs() executor.Chunk {
+	rowDataType := buildSourceRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+	inCk := b.NewChunk("mst")
+
+	inCk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+	}, []int{0, 3})
+	inCk.AppendIntervalIndexes([]int{0, 3})
+	inCk.AppendTimes([]int64{1, 2, 3, 4, 5, 6})
+
+	inCk.Column(0).AppendIntegerValues([]int64{9, 6, 3, 1, 2, 3})
+	inCk.Column(0).AppendNilsV2(true, true, true, true, true, true)
+
+	inCk.Column(1).AppendFloatValues([]float64{2.2, 2.2, 2.2, 10.2, 2.3, 3.6})
+	inCk.Column(1).AppendNilsV2(true, true, true, true, true, true)
+
+	return inCk
+}
+
+func buildDstChunkADDiffAbs() executor.Chunk {
+	rowDataType := buildDstRowDataTypeADDiffAbs()
+
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb")}, []int{0, 1})
+	chunk.AppendIntervalIndexes([]int{0, 1})
+	chunk.AppendTimes([]int64{1, 4})
+
+	chunk.Column(0).AppendFloatValues([]float64{6.0, 2.0})
+	chunk.Column(0).AppendManyNotNil(2)
+	chunk.Column(1).AppendFloatValues([]float64{0, 6.6})
+	chunk.Column(1).AppendManyNotNil(2)
+
+	return chunk
+}
+
+func buildDstRowDataTypeADDiffAbs() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "ad_diff_abs(\"value1\")", Type: influxql.Float},
+		influxql.VarRef{Val: "ad_diff_abs(\"value2\")", Type: influxql.Float},
+	)
+
+	return rowDataType
+}
+
+func TestStreamAggregateTransformADDiffAbs(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		inChunk := buildInChunkADDiffAbs()
+		dstChunk := buildDstChunkADDiffAbs()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "ad_diff_abs", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `ad_diff_abs("value1")`, Type: influxql.Float},
+			},
+			{
+				Expr: &influxql.Call{Name: "ad_diff_abs", Args: []influxql.Expr{hybridqp.MustParseExpr("value2")}},
+				Ref:  influxql.VarRef{Val: `ad_diff_abs("value2")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`ad_diff_abs("value1")`), hybridqp.MustParseExpr(`ad_diff_abs("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  inChunk.Len(),
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			[]executor.Chunk{inChunk}, []executor.Chunk{dstChunk},
+			buildSourceRowDataType(), buildDstRowDataTypeADDiffAbs(),
 			exprOpt, &opt, false,
 		)
 	})
@@ -2815,6 +2899,7 @@ type SourceFromMultiChunk struct {
 
 	Output *executor.ChunkPort
 	Chunks []executor.Chunk
+	CallFn func()
 }
 
 func NewSourceFromMultiChunk(rowDataType hybridqp.RowDataType, chunks []executor.Chunk) *SourceFromMultiChunk {
@@ -2843,8 +2928,12 @@ func (source *SourceFromMultiChunk) Work(ctx context.Context) error {
 			return nil
 		default:
 			if source.Chunks == nil {
-				source.Output.Close()
-				return nil
+				if source.CallFn != nil {
+					source.CallFn()
+				} else {
+					source.Output.Close()
+					return nil
+				}
 			}
 			for i := range source.Chunks {
 				source.Output.State <- source.Chunks[i]
@@ -9568,6 +9657,89 @@ func TestStreamAggregateTransformTrendDetect(t *testing.T) {
 	})
 }
 
+func buildInChunkADSlopeScore() executor.Chunk {
+	rowDataType := buildSourceRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+	inCk := b.NewChunk("mst")
+
+	inCk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+	}, []int{0, 3})
+	inCk.AppendIntervalIndexes([]int{0, 3})
+	inCk.AppendTimes([]int64{1, 2, 3, 4, 5})
+
+	inCk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4})
+	inCk.Column(0).AppendNilsV2(false, true, true, true, true)
+
+	inCk.Column(1).AppendFloatValues([]float64{5.1, 4.1, 3.1, 2.1, 1.1})
+	inCk.Column(1).AppendNilsV2(true, true, true, true, true)
+
+	return inCk
+}
+
+func buildDstChunkADSlopeScore() executor.Chunk {
+	rowDataType := buildDstRowDataTypeADSlopeScore()
+
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb")}, []int{0, 1})
+	chunk.AppendIntervalIndexes([]int{0, 1})
+	chunk.AppendTimes([]int64{1, 4})
+
+	chunk.Column(0).AppendFloatValues([]float64{1.1, 1.1})
+	chunk.Column(0).AppendManyNotNil(2)
+	chunk.Column(1).AppendFloatValues([]float64{-1.1, -1.1})
+	chunk.Column(1).AppendManyNotNil(2)
+
+	return chunk
+}
+
+func buildDstRowDataTypeADSlopeScore() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "ad_slope_score(\"value1\")", Type: influxql.Float},
+		influxql.VarRef{Val: "ad_slope_score(\"value2\")", Type: influxql.Float},
+	)
+
+	return rowDataType
+}
+
+func TestStreamAggregateTransformADSlopeScore(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		inChunk := buildInChunkADSlopeScore()
+		dstChunk := buildDstChunkADSlopeScore()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "ad_slope_score", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `ad_slope_score("value1")`, Type: influxql.Float},
+			},
+			{
+				Expr: &influxql.Call{Name: "ad_slope_score", Args: []influxql.Expr{hybridqp.MustParseExpr("value2")}},
+				Ref:  influxql.VarRef{Val: `ad_slope_score("value2")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`ad_slope_score("value1")`), hybridqp.MustParseExpr(`ad_slope_score("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  inChunk.Len(),
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			[]executor.Chunk{inChunk}, []executor.Chunk{dstChunk},
+			buildSourceRowDataType(), buildDstRowDataTypeADSlopeScore(),
+			exprOpt, &opt, false,
+		)
+	})
+}
+
 type MockSchema struct {
 	mapping map[influxql.Expr]influxql.VarRef
 }
@@ -9757,4 +9929,345 @@ func testStreamAggregateTransformGraph(
 	if outChunks[0].GetGraph() == nil {
 		t.Fatal("outChunk graph should not be nil")
 	}
+}
+
+func buildDstRowDataTypeCastorAD() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "f", Type: influxql.String},
+	)
+	return rowDataType
+}
+
+func buildDstChunkCastorAD() executor.Chunk {
+	rowDataType := buildDstRowDataTypeCastorAD()
+	b := executor.NewChunkBuilder(rowDataType)
+
+	c := b.NewChunk("castor")
+	c.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1")}, []int{0})
+	c.AppendIntervalIndex(0)
+	c.AppendTime(0)
+
+	c.Column(0).AppendStringValue("{\"anomalyLevel\":\"0\"}")
+	c.Column(0).AppendManyNotNil(1)
+
+	return c
+}
+
+func TestStreamAggregateTransformCastorAD(t *testing.T) {
+	inChunk := buildInChunkCastor()
+	dstChunk := buildDstChunkCastorAD()
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{
+				Name: "castor_ad",
+				Args: []influxql.Expr{
+					hybridqp.MustParseExpr("f"),
+					&influxql.StringLiteral{Val: "DIFFERENTIATEAD"},
+					&influxql.StringLiteral{Val: "detect_base"},
+					&influxql.StringLiteral{Val: "detect"},
+					&influxql.StringLiteral{Val: `{"k":"v"}`},
+				},
+			},
+			Ref: influxql.VarRef{Val: `f`, Type: influxql.Integer},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"t"},
+		Interval:   hybridqp.Interval{Duration: 20 * time.Nanosecond},
+		ChunkSize:  inChunk.Len(),
+	}
+
+	srv, _, err := castor.MockCastorService(6667)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	if err := castor.MockPyWorker(srv.Config.PyWorkerAddr[0]); err != nil {
+		t.Fatal(err)
+	}
+	wait := 8 * time.Second // wait for service to build connection
+	time.Sleep(wait)
+
+	testStreamAggregateTransformBase(
+		t,
+		[]executor.Chunk{inChunk}, []executor.Chunk{dstChunk},
+		buildInRowDataTypeCastor(), buildDstRowDataTypeCastorAD(),
+		exprOpt, &opt, false,
+	)
+}
+
+func TestStreamAggregateTransformCastorMMAD(t *testing.T) {
+	inChunk := buildInChunkCastor()
+	dstChunk := buildDstChunkCastorAD()
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{
+				Name: "castor_mm_ad",
+				Args: []influxql.Expr{
+					hybridqp.MustParseExpr("f"),
+					&influxql.StringLiteral{Val: "DIFFERENTIATEAD"},
+					&influxql.StringLiteral{Val: "detect_base"},
+					&influxql.StringLiteral{Val: "detect"},
+					&influxql.StringLiteral{Val: `{"k":"v"}`},
+				},
+			},
+			Ref: influxql.VarRef{Val: `f`, Type: influxql.Integer},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"t"},
+		Interval:   hybridqp.Interval{Duration: 20 * time.Nanosecond},
+		ChunkSize:  inChunk.Len(),
+	}
+
+	srv, _, err := castor.MockCastorService(6667)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	if err := castor.MockPyWorker(srv.Config.PyWorkerAddr[0]); err != nil {
+		t.Fatal(err)
+	}
+	wait := 8 * time.Second // wait for service to build connection
+	time.Sleep(wait)
+
+	testStreamAggregateTransformBase(
+		t,
+		[]executor.Chunk{inChunk}, []executor.Chunk{dstChunk},
+		buildInRowDataTypeCastor(), buildDstRowDataTypeCastorAD(),
+		exprOpt, &opt, false,
+	)
+}
+
+func buildDstChunkCastorForecast() executor.Chunk {
+	rowDataType := buildDstRowDataTypeCastorAD()
+	b := executor.NewChunkBuilder(rowDataType)
+
+	c := b.NewChunk("castor")
+	c.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTagsNew([][]string{{"t", "1"}, {"_algoParams", `{"k":"v"}`}, {"_metric", "f"}})}, []int{0})
+	c.AppendIntervalIndex(0)
+	c.AppendTime(0)
+
+	c.Column(0).AppendStringValue("{\"anomalyLevel\":\"0\"}")
+	c.Column(0).AppendManyNotNil(1)
+
+	return c
+}
+
+func TestStreamAggregateTransformCastorForecast(t *testing.T) {
+	inChunk := buildInChunkCastor()
+	dstChunk := buildDstChunkCastorForecast()
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{
+				Name: "forecast",
+				Args: []influxql.Expr{
+					hybridqp.MustParseExpr("f"),
+					&influxql.StringLiteral{Val: "xx_model"},
+					&influxql.StringLiteral{Val: `{"k":"v"}`},
+				},
+			},
+			Ref: influxql.VarRef{Val: `f`, Type: influxql.Integer},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"t"},
+		Interval:   hybridqp.Interval{Duration: 20 * time.Nanosecond},
+		ChunkSize:  inChunk.Len(),
+	}
+
+	srv, _, err := castor.MockCastorService(6667)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	if err := castor.MockPyWorker(srv.Config.PyWorkerAddr[0]); err != nil {
+		t.Fatal(err)
+	}
+	wait := 8 * time.Second // wait for service to build connection
+	time.Sleep(wait)
+
+	testStreamAggregateTransformBase(
+		t,
+		[]executor.Chunk{inChunk}, []executor.Chunk{dstChunk},
+		buildInRowDataTypeCastor(), buildDstRowDataTypeCastorAD(),
+		exprOpt, &opt, false,
+	)
+}
+
+func TestNewStreamAggregateTransformCastorErr(t *testing.T) {
+	rowDataTypeIn := buildInRowDataTypeCastor()
+	rowDataTypeOut := buildDstRowDataTypeCastor()
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{
+				Name: "castor_xxx",
+				Args: []influxql.Expr{
+					hybridqp.MustParseExpr("f"),
+					&influxql.StringLiteral{Val: "DIFFERENTIATEAD"},
+					&influxql.StringLiteral{Val: "detect_base"},
+					&influxql.StringLiteral{Val: "detect"},
+					&influxql.StringLiteral{Val: `{"k":"v"}`},
+				},
+			},
+			Ref: influxql.VarRef{Val: `f`, Type: influxql.Integer},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"t"},
+		Interval:   hybridqp.Interval{Duration: 20 * time.Nanosecond},
+		ChunkSize:  10,
+	}
+	_, err := executor.NewProcessors(rowDataTypeIn, rowDataTypeOut, exprOpt, &opt, false)
+	assert.Error(t, err)
+}
+
+func buildInChunkDiffTime() executor.Chunk {
+	rowDataType := buildSourceRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+	inCk := b.NewChunk("mst")
+
+	inCk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+	}, []int{0, 3})
+	inCk.AppendIntervalIndexes([]int{0, 3})
+	inCk.AppendTimes([]int64{1, 2, 3, 4, 5, 6})
+
+	inCk.Column(0).AppendIntegerValues([]int64{9, 6, 3, 1, 2, 3})
+	inCk.Column(0).AppendNilsV2(true, true, true, true, true, true)
+
+	inCk.Column(1).AppendFloatValues([]float64{2.2, 2.2, 2.2, 10.2, 2.3, 3.6})
+	inCk.Column(1).AppendNilsV2(true, true, true, true, true, true)
+
+	return inCk
+}
+
+func buildDstChunkDiffTime() executor.Chunk {
+	rowDataType := buildDstRowDataTypeDiffTime()
+
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb")}, []int{0, 1})
+	chunk.AppendIntervalIndexes([]int{0, 1})
+	chunk.AppendTimes([]int64{1, 4})
+
+	chunk.Column(0).AppendFloatValues([]float64{2, 2})
+	chunk.Column(0).AppendManyNotNil(2)
+	chunk.Column(1).AppendFloatValues([]float64{0, 2})
+	chunk.Column(1).AppendManyNotNil(2)
+
+	return chunk
+}
+
+func buildDstRowDataTypeDiffTime() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "ad_diff_time(\"value1\")", Type: influxql.Float},
+		influxql.VarRef{Val: "ad_diff_time(\"value2\")", Type: influxql.Float},
+	)
+
+	return rowDataType
+}
+
+func TestStreamAggregateTransformDiffTime(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		inChunk := buildInChunkDiffTime()
+		dstChunk := buildDstChunkDiffTime()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "ad_diff_time", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `ad_diff_time("value1")`, Type: influxql.Float},
+			},
+			{
+				Expr: &influxql.Call{Name: "ad_diff_time", Args: []influxql.Expr{hybridqp.MustParseExpr("value2")}},
+				Ref:  influxql.VarRef{Val: `ad_diff_time("value2")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`ad_diff_time("value1")`), hybridqp.MustParseExpr(`ad_diff_time("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  inChunk.Len(),
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			[]executor.Chunk{inChunk}, []executor.Chunk{dstChunk},
+			buildSourceRowDataType(), buildDstRowDataTypeDiffTime(),
+			exprOpt, &opt, false,
+		)
+	})
+	t.Run("schema not align", func(t *testing.T) {
+		inChunk := buildInChunkDiffTime()
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "ad_diff_time", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `ad_diff_time("value1")`, Type: influxql.Float},
+			},
+			{
+				Expr: &influxql.Call{Name: "ad_diff_time", Args: []influxql.Expr{hybridqp.MustParseExpr("value2")}},
+				Ref:  influxql.VarRef{Val: `ad_diff_time("value2")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`ad_diff_time("value1")`), hybridqp.MustParseExpr(`ad_diff_time("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  inChunk.Len(),
+		}
+		_, err := executor.NewStreamAggregateTransform(
+			[]hybridqp.RowDataType{inChunk.RowDataType()},
+			[]hybridqp.RowDataType{inChunk.RowDataType()},
+			exprOpt,
+			&opt, &executor.QuerySchema{}, false)
+		require.ErrorContains(t, err, "input and output schemas are not aligned")
+	})
+	t.Run("parameter wrong data type", func(t *testing.T) {
+		inRowDataType := hybridqp.NewRowDataTypeImpl(
+			influxql.VarRef{Val: "value1", Type: influxql.String},
+			influxql.VarRef{Val: "value2", Type: influxql.Float},
+		)
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "ad_diff_time", Args: []influxql.Expr{hybridqp.MustParseExpr("value1"), hybridqp.MustParseExpr("1m")}},
+				Ref:  influxql.VarRef{Val: `ad_diff_time("value1")`, Type: influxql.Float},
+			},
+			{
+				Expr: &influxql.Call{Name: "ad_diff_time", Args: []influxql.Expr{hybridqp.MustParseExpr("value2")}},
+				Ref:  influxql.VarRef{Val: `ad_diff_time("value2")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`ad_diff_time("value1")`), hybridqp.MustParseExpr(`ad_diff_time("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+		_, err := executor.NewStreamAggregateTransform(
+			[]hybridqp.RowDataType{inRowDataType},
+			[]hybridqp.RowDataType{buildDstRowDataTypeDiffTime()},
+			exprOpt,
+			&opt, &executor.QuerySchema{}, false)
+		require.ErrorContains(t, err, "unsupported (ad_diff_time) iterator type: (string)")
+	})
 }

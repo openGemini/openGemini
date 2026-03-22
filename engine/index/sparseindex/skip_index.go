@@ -39,7 +39,7 @@ type SKIndexReader interface {
 	// which is used to quickly determine whether a fragment meets the condition.
 	CreateSKFileReaders(option hybridqp.Options, mstInfo *influxql.Measurement, isCache bool) ([]SKFileReader, error)
 	// Scan is used to filter fragment ranges based on the secondary key in the condition.
-	Scan(reader SKFileReader, rgs fragment.FragmentRanges) (fragment.FragmentRanges, error)
+	Scan(reader SKFileReader, rgs fragment.FragmentRanges) (fragment.FragmentRanges, fragment.FragmentRangeDetails, error)
 	// Close is used to close the SKIndexReader
 	Close() error
 }
@@ -53,6 +53,7 @@ type TsspFile interface {
 type SKFileReader interface {
 	// MayBeInFragment determines whether a fragment in a file meets the query condition.
 	MayBeInFragment(fragId uint32) (bool, error)
+	GetFragmentRowCount(fragId uint32) (int64, error)
 	// ReInit is used to that a SKFileReader is reused among multiple files.
 	ReInit(file interface{}) error
 	StartSpan(span *tracing.Span)
@@ -75,11 +76,12 @@ func NewSKIndexReader(rowsNumPerFragment int, coarseIndexFragment int, minRowsFo
 func (r *SKIndexReaderImpl) Scan(
 	reader SKFileReader,
 	rgs fragment.FragmentRanges,
-) (fragment.FragmentRanges, error) {
+) (fragment.FragmentRanges, fragment.FragmentRangeDetails, error) {
 	var (
 		droppedFragment uint32 // Number of filtered fragments by skip index
 		totalFragment   uint32 // Number of filtered fragments by primary index
 		res             fragment.FragmentRanges
+		details         fragment.FragmentRangeDetails
 	)
 	minMarksForSeek := (r.property.MinRowsForSeek + r.property.RowsNumPerFragment - 1) / r.property.RowsNumPerFragment
 	for i := 0; i < len(rgs); i++ {
@@ -88,24 +90,30 @@ func (r *SKIndexReaderImpl) Scan(
 		for j := mr.Start; j < mr.End; j++ {
 			ok, err := reader.MayBeInFragment(j)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if !ok {
 				droppedFragment++
 				continue
 			}
+			count, err := reader.GetFragmentRowCount(j)
+			if err != nil {
+				return nil, nil, err
+			}
 			dataRange := fragment.NewFragmentRange(
 				util.MaxUint32(rgs[i].Start, j),
 				util.MinUint32(rgs[i].End, j+1),
 			)
-			if len(res) == 0 || int(res[len(res)-1].End-dataRange.Start) > minMarksForSeek {
+			if len(res) == 0 || int(dataRange.Start-res[len(res)-1].End) > minMarksForSeek {
 				res = append(res, dataRange)
+				details = append(details, &fragment.FragmentRangeDetail{Count: count})
 			} else {
 				res[len(res)-1].End = dataRange.End
+				details[len(res)-1].Count += count
 			}
 		}
 	}
-	return res, nil
+	return res, details, nil
 }
 
 func (r *SKIndexReaderImpl) CreateSKFileReaders(option hybridqp.Options, mstInfo *influxql.Measurement, isCache bool) ([]SKFileReader, error) {
@@ -248,19 +256,55 @@ func GetSKFileReaderFactoryInstance() *SKFileReaderCreatorFactory {
 	return SKFileReaderInstance
 }
 
-func writeSkipIndexToDisk(data []byte, lockPath, skipIndexFilePath string) error {
-	indexBuilder, err := colstore.NewIndexWriter(&lockPath, skipIndexFilePath)
-	if err != nil {
-		return err
-	}
-	defer indexBuilder.Reset()
-	return indexBuilder.WriteData(data)
-}
-
 type skipIndexWriter struct {
 	dir, msName            string
 	dataFilePath, lockPath string
 	fullTextTokens         string
+
+	opened  bool
+	writers map[string]*colstore.IndexWriter
+}
+
+func (w *skipIndexWriter) GetWriter(file string) (*colstore.IndexWriter, error) {
+	writer, ok := w.writers[file]
+	if ok && writer != nil {
+		return writer, nil
+	}
+
+	writer, err := colstore.NewIndexWriter(&w.lockPath, file)
+	if err != nil {
+		return nil, err
+	}
+	w.writers[file] = writer
+	return writer, nil
+}
+
+func (w *skipIndexWriter) Open() {
+	if w.opened {
+		return
+	}
+
+	w.opened = true
+	w.writers = make(map[string]*colstore.IndexWriter)
+}
+
+func (w *skipIndexWriter) Close() error {
+	for _, writer := range w.writers {
+		writer.Reset()
+	}
+	return nil
+}
+
+func (w *skipIndexWriter) Files() []string {
+	ret := make([]string, 0, len(w.writers))
+	for file := range w.writers {
+		ret = append(ret, file)
+	}
+	return ret
+}
+
+func (w *skipIndexWriter) FlushSegment() error {
+	return nil
 }
 
 func newSkipIndexWriter(dir, msName, dataFilePath, lockPath string, tokens string) *skipIndexWriter {

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/stretchr/testify/require"
 )
@@ -25,6 +26,12 @@ import (
 func newDropSeriesService() *Service {
 	var c config.HierarchicalConfig
 	c.MaxProcessN = 1
+	return NewDropSeriesService()
+}
+
+func newDropSeriesServiceUseConfig() *Service {
+	conf := config.Store{DropSeriesPeriod: toml.Duration(DropSeriesHandleInterval)}
+	config.SetStoreConfig(conf)
 	return NewDropSeriesService()
 }
 
@@ -52,4 +59,12 @@ func TestDropService_Open(t *testing.T) {
 		return errors.New("error")
 	}
 	s.dropSeriesHandle()
+}
+
+func TestDropServiceUseConfig_Open(t *testing.T) {
+	globalStore := config.GetStoreConfig()
+	defer config.SetStoreConfig(*globalStore)
+	s := newDropSeriesServiceUseConfig()
+	err := s.Open()
+	require.NoError(t, err)
 }

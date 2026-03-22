@@ -23,33 +23,43 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine"
+	"github.com/openGemini/openGemini/engine/shelf"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/services/consume"
 	"github.com/openGemini/openGemini/services/consume/kafka/protocol"
+	"github.com/openGemini/openGemini/services/pubsub"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCreateProcessor(t *testing.T) {
 	topic := &consume.Topic{
-		Mode:  0,
+		Mode:  consume.HistoryMode,
 		Uuid:  "",
 		Query: `SELECT usage_idle,usage_name FROM db0."default".mst WHERE time>'2024-01-01 00:00:00' AND time<'2024-01-02 00:00:00'`,
 	}
 
 	mc := NewMockMetaClient()
 	eng := &MockEngine{}
+	eng.itr = &MockRecordIterator{total: 1}
 
 	p := consume.NewProcessor(mc, eng)
 	err := p.Init(topic)
 	require.NoError(t, err)
 
 	ok := false
-	err = p.Process(func(msg protocol.Marshaler) bool {
+	params := consume.FetchParams{
+		MinRows:   1,
+		MaxRows:   10,
+		TimeoutMs: 200,
+	}
+	err = p.Process(params, func(msg protocol.Marshaler) bool {
 		ok = true
 		return ok
 	})
@@ -59,7 +69,7 @@ func TestCreateProcessor(t *testing.T) {
 
 func TestCreateProcessor_Error(t *testing.T) {
 	topic := &consume.Topic{
-		Mode:  0,
+		Mode:  consume.HistoryMode,
 		Uuid:  "",
 		Query: `show databases`,
 	}
@@ -82,18 +92,95 @@ func TestCreateProcessor_Error(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "the first source is not a valid measurement")
 
+	// mock create iterator failed
+	topic.Query = `SELECT usage_idle,usage_name FROM db0."default".mst WHERE hostname='localhost' AND value>10 AND` +
+		` time>'2024-01-01 00:00:00' AND time<'2024-01-02 00:00:00'`
+	err = p.Init(topic)
+	require.Error(t, err)
+
+	// mock iterate data failed
 	eng.itr = &MockRecordIterator{total: 10, err: fmt.Errorf("some error")}
 	topic.Query = `SELECT usage_idle,usage_name FROM db0."default".mst WHERE hostname='localhost' AND value>10 AND` +
 		` time>'2024-01-01 00:00:00' AND time<'2024-01-02 00:00:00'`
 	err = p.Init(topic)
 	require.NoError(t, err)
-
-	// mock iterate data failed
-	require.Error(t, p.Process(func(msg protocol.Marshaler) bool {
+	params := consume.FetchParams{
+		MinRows:   1,
+		TimeoutMs: 200,
+	}
+	require.Error(t, p.Process(params, func(msg protocol.Marshaler) bool {
 		return true
 	}))
-	eng.itr.err = nil
 
+	// mock iterate data empty
+	eng.itr.err = io.EOF
+	topic.Query = `SELECT usage_idle,usage_name FROM db0."default".mst WHERE hostname='localhost' AND value>10 AND` +
+		` time>'2024-01-01 00:00:00' AND time<'2024-01-02 00:00:00'`
+	err = p.Init(topic)
+	require.NoError(t, err)
+	require.NoError(t, p.Process(params, func(msg protocol.Marshaler) bool {
+		return true
+	}))
+
+}
+
+func TestInitProcessorRealTimeMode(t *testing.T) {
+	release := initConfig(2)
+	defer release()
+
+	lock1 := "1"
+	wal := shelf.NewWal(t.TempDir(), &lock1, nil)
+	defer wal.MustClose()
+
+	info := &shelf.ShardInfo{}
+	mockEvent := &MockWalCreatedEvent{Wal: wal, Info: info, WorkId: 0}
+	pubsub.Publish("db0:default", mockEvent)
+
+	topic := &consume.Topic{
+		Mode:  consume.RealTimeMode,
+		Uuid:  "",
+		Query: `SELECT usage_idle,usage_name FROM db0."default".mst WHERE time>'2024-01-01 00:00:00' AND time<'2024-01-02 00:00:00'`,
+	}
+
+	mc := NewMockMetaClient()
+	eng := &MockEngine{}
+
+	p := consume.NewProcessor(mc, eng)
+	defer p.Release()
+	require.NoError(t, p.Init(topic))
+}
+
+type MockWalCreatedEvent struct {
+	Wal    *shelf.Wal
+	Info   *shelf.ShardInfo
+	WorkId int
+}
+
+func (msg *MockWalCreatedEvent) CreateIterator(mst string) record.RecIterator {
+	walItr := &MockRecIterator{}
+	return walItr
+}
+
+func (msg *MockWalCreatedEvent) Ref() {
+
+}
+
+func (msg *MockWalCreatedEvent) UnRef() {
+
+}
+
+func (msg *MockWalCreatedEvent) UniqueId() uint64 {
+	return 0
+}
+
+type MockRecIterator struct {
+}
+
+func (m MockRecIterator) Next() (*record.Record, error) {
+	return &record.Record{}, nil
+}
+
+func (m MockRecIterator) Release() {
 }
 
 type MockMetaClient struct {
@@ -222,11 +309,15 @@ type MockEngine struct {
 	engine.Engine
 }
 
-func (eng *MockEngine) CreateConsumeIterator(db, mst string, opt *query.ProcessorOptions) []record.Iterator {
+func (eng *MockEngine) CreateConsumeIterator(ident util.MeasurementIdent, pts []uint32, opt *query.ProcessorOptions) ([]record.Iterator, func()) {
 	if eng.itr == nil {
-		eng.itr = &MockRecordIterator{total: 1}
+		return nil, func() {}
 	}
-	return []record.Iterator{eng.itr}
+	return []record.Iterator{eng.itr}, func() {}
+}
+
+func (eng *MockEngine) GetDBPtIds(db string) []uint32 {
+	return []uint32{1}
 }
 
 type MockRecordIterator struct {
@@ -234,15 +325,14 @@ type MockRecordIterator struct {
 	total int
 }
 
-func (itr *MockRecordIterator) Next() (uint64, *record.ConsumeRecord, error) {
+func (itr *MockRecordIterator) Next() (*record.ConsumeRecord, error) {
 	if itr.err != nil {
-		return 0, nil, itr.err
+		return nil, itr.err
 	}
 
 	if itr.total == 0 {
-		return 0, nil, io.EOF
+		return nil, io.EOF
 	}
-	sid := itr.total
 	itr.total--
 
 	rec := record.NewRecord(record.Schemas{
@@ -258,11 +348,15 @@ func (itr *MockRecordIterator) Next() (uint64, *record.ConsumeRecord, error) {
 	rec.ColVals[0].AppendInteger(1)
 	rec.ColVals[1].AppendInteger(1)
 	res := &record.ConsumeRecord{Rec: rec}
-	return uint64(sid), res, nil
+	return res, nil
 }
 
 func (itr *MockRecordIterator) Release() {
 
+}
+
+func (itr *MockRecordIterator) SidCnt() int {
+	return 0
 }
 
 type MockWriter struct {
@@ -290,4 +384,19 @@ func (w *MockWriter) Write(p []byte) (int, error) {
 
 func (w *MockWriter) Size() int {
 	return w.w.Len()
+}
+
+func initConfig(n int) func() {
+	conf := config.GetShelfMode()
+	conf.Enabled = true
+	conf.SeriesHashFactor = 2
+	conf.Concurrent = n
+	conf.TSSPConvertConcurrent = max(1, n/4)
+	conf.ReliabilityLevel = config.ReliabilityLevelHigh
+
+	shelf.Open()
+	return func() {
+		conf.ReliabilityLevel = config.ReliabilityLevelMedium
+		conf.Enabled = false
+	}
 }

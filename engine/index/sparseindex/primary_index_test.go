@@ -654,3 +654,319 @@ func TestScanWithAllType(t *testing.T) {
 		)
 	})
 }
+
+func TestScanForGroupPK(t *testing.T) {
+	indexReader := sparseindex.NewGroupPKIndexReader(2, 2, 0)
+	pkFile := "00000001-0001-00000000.idx"
+	pkMark := buildIndexFragmentVariableForGroupPK()
+	pkRec := buildPKRecordForGroupPK()
+
+	f := func(
+		expectFragmentRanges fragment.FragmentRanges,
+		conStr string,
+	) {
+		pkSchema := pkRec.Schema
+		KeyConditionImpl, err := sparseindex.NewKeyCondition(nil, MustParseExpr(conStr), pkSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		outputFragmentRanges, err := indexReader.Scan(pkFile, pkRec, pkMark, KeyConditionImpl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assert.Equal(t, expectFragmentRanges, outputFragmentRanges)
+	}
+
+	t.Run("binary search for first PK EQ", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(2, 5)},
+			"UserID='b'",
+		)
+	})
+
+	t.Run("binary search for first PK NEQ", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(0, 2), fragment.NewFragmentRange(5, 6)},
+			"UserID!='b'",
+		)
+	})
+
+	t.Run("binary search for first PK LT", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(0, 5)},
+			"UserID<'c'",
+		)
+	})
+
+	t.Run("binary search for first PK LTE", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(0, 5)},
+			"UserID<='b'",
+		)
+	})
+
+	t.Run("binary search for first PK GT", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(5, 6)},
+			"UserID>'b'",
+		)
+	})
+
+	t.Run("binary search for first PK GTE", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges(nil),
+			"UserID>='d'",
+		)
+	})
+
+	t.Run("linear search for minor PK EQ", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(1, 2), fragment.NewFragmentRange(3, 4)},
+			"URL='2'",
+		)
+	})
+
+	t.Run("linear search for minor PK NEQ", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(0, 1), fragment.NewFragmentRange(2, 3), fragment.NewFragmentRange(4, 6)},
+			"URL!='2'",
+		)
+	})
+
+	t.Run("linear search for minor PK LT", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges(nil),
+			"URL<'1'",
+		)
+	})
+
+	t.Run("linear search for minor PK LTE", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(0, 4)},
+			"URL<='2'",
+		)
+	})
+
+	t.Run("linear search for minor PK GT", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(1, 2), fragment.NewFragmentRange(3, 6)},
+			"URL>'1'",
+		)
+	})
+
+	t.Run("linear search for minor PK GTE", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(1, 2), fragment.NewFragmentRange(3, 6)},
+			"URL>='2'",
+		)
+	})
+
+	t.Run("complex search for and 1", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(1, 2)},
+			"UserID='a' and URL='2'",
+		)
+	})
+
+	t.Run("complex search for and 2", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(0, 5)},
+			"UserID>='a' and UserID<'c'",
+		)
+	})
+
+	t.Run("complex search for and 3", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges(nil),
+			"UserID<='b' and URL>'3'",
+		)
+	})
+
+	t.Run("complex search for or 1", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(0, 2), fragment.NewFragmentRange(3, 4)},
+			"UserID='a' or URL='2'",
+		)
+	})
+
+	t.Run("complex search for or 2", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(0, 2), fragment.NewFragmentRange(5, 6)},
+			"UserID='a' or UserID='c'",
+		)
+	})
+
+	t.Run("complex search for or 3", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(0, 5)},
+			"UserID<='b' or URL>'4'",
+		)
+	})
+
+	t.Run("complex search for multi condition 1", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges(nil),
+			"UserID>'b' and URL>='1' and URL<='3'",
+		)
+	})
+
+	t.Run("complex search for multi condition 2", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(0, 1), fragment.NewFragmentRange(2, 6)},
+			"UserID='b' or UserID='c' or URL='1'",
+		)
+	})
+
+	t.Run("complex search for multi condition 3", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(0, 1), fragment.NewFragmentRange(2, 5)},
+			"UserID>='b' and UserID<'c' or URL='1'",
+		)
+	})
+
+	t.Run("complex search for multi condition 4", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(1, 2), fragment.NewFragmentRange(3, 4), fragment.NewFragmentRange(5, 6)},
+			"UserID>'b' or URL>'1' and URL<'3'",
+		)
+	})
+}
+
+func buildIndexFragmentVariableForGroupPK() fragment.IndexFragment {
+	return fragment.NewIndexFragmentVariable([]uint64{2, 3, 4, 6, 7, 8})
+}
+
+func buildPKSchemaForGroupPK() record.Schemas {
+	var schema record.Schemas
+	schema = append(schema,
+		record.Field{Name: "UserID", Type: influx.Field_Type_String},
+		record.Field{Name: "URL", Type: influx.Field_Type_String},
+		record.Field{Name: "__fragment__", Type: influx.Field_Type_Int})
+	return schema
+}
+
+func buildPKRecordForGroupPK() *record.Record {
+	schema := buildPKSchemaForGroupPK()
+	rec := record.NewRecord(schema, false)
+	rec.Column(0).AppendStrings("a", "a", "b", "b", "b", "c")
+	rec.Column(1).AppendStrings("1", "2", "1", "2", "3", "4")
+	rec.Column(2).AppendIntegers(2, 3, 4, 6, 7, 8)
+	return rec
+}
+
+func TestScanForGroupPKAllType(t *testing.T) {
+	indexReader := sparseindex.NewGroupPKIndexReader(2, 2, 0)
+	pkFile := "00000001-0001-00000000.idx"
+	pkMark := buildIndexFragmentVariableForGroupPK2()
+	pkRec := buildPKRecordForGroupPK2()
+
+	f := func(
+		expectFragmentRanges fragment.FragmentRanges,
+		conStr string,
+	) {
+		pkSchema := pkRec.Schema
+		KeyConditionImpl, err := sparseindex.NewKeyCondition(nil, MustParseExpr(conStr), pkSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		outputFragmentRanges, err := indexReader.Scan(pkFile, pkRec, pkMark, KeyConditionImpl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assert.Equal(t, expectFragmentRanges, outputFragmentRanges)
+	}
+
+	t.Run("pk_string EQ", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(2, 5)},
+			"pk_string='b'",
+		)
+	})
+
+	t.Run("pk_string LT", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(0, 2)},
+			"pk_string<'b'",
+		)
+	})
+
+	t.Run("pk_bool EQ", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(0, 2), fragment.NewFragmentRange(3, 4)},
+			"pk_bool=true",
+		)
+	})
+
+	t.Run("pk_bool LT", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(2, 3), fragment.NewFragmentRange(4, 6)},
+			"pk_bool<true",
+		)
+	})
+
+	t.Run("pk_bool GTE", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(0, 6)},
+			"pk_bool>=false",
+		)
+	})
+
+	t.Run("pk_int64 EQ", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(2, 4)},
+			"pk_int64=1",
+		)
+	})
+
+	t.Run("pk_int64 NEQ", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(0, 1), fragment.NewFragmentRange(2, 4), fragment.NewFragmentRange(5, 6)},
+			"pk_int64!=2",
+		)
+	})
+
+	t.Run("pk_float64 EQ", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges(nil),
+			"pk_float64=4.0",
+		)
+	})
+
+	t.Run("pk_float64 GT", func(t *testing.T) {
+		f(
+			fragment.FragmentRanges{fragment.NewFragmentRange(2, 6)},
+			"pk_float64>3.0",
+		)
+	})
+}
+
+func buildIndexFragmentVariableForGroupPK2() fragment.IndexFragment {
+	return fragment.NewIndexFragmentVariable([]uint64{2, 3, 4, 6, 7, 8})
+}
+
+func buildPKSchemaForGroupPK2() record.Schemas {
+	var schema record.Schemas
+	schema = append(schema,
+		record.Field{Name: "pk_string", Type: influx.Field_Type_String},
+		record.Field{Name: "pk_bool", Type: influx.Field_Type_Boolean},
+		record.Field{Name: "pk_int64", Type: influx.Field_Type_Int},
+		record.Field{Name: "pk_float64", Type: influx.Field_Type_Float},
+		record.Field{Name: "__fragment__", Type: influx.Field_Type_Int})
+	return schema
+}
+
+func buildPKRecordForGroupPK2() *record.Record {
+	schema := buildPKSchemaForGroupPK2()
+	rec := record.NewRecord(schema, false)
+	rec.Column(0).AppendStrings("a", "a", "b", "b", "b", "c")
+	rec.Column(1).AppendBooleans(true, true, false, true, false, false)
+	rec.Column(2).AppendIntegers(3, 2, 1, 1, 2, 4)
+	rec.Column(3).AppendFloats(1, 3, 5, 7, 5, 8)
+	rec.Column(4).AppendIntegers(2, 3, 4, 6, 7, 8)
+	rec.Column(0).Bitmap = []byte{255}
+	rec.Column(1).Bitmap = []byte{255}
+	rec.Column(2).Bitmap = []byte{255}
+	rec.Column(3).Bitmap = []byte{255}
+	rec.Column(4).Bitmap = []byte{255}
+	return rec
+}

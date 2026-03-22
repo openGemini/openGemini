@@ -3651,9 +3651,11 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 		}
 	}
 	shardGroup := &mockShardGroup{
-		sh:     sh,
-		Fields: fields,
+		sh:         sh,
+		Fields:     fields,
+		Dimensions: []string{"tagkey1", "tagkey2", "tagkey3", "tagkey4"},
 	}
+	r := pts[0]
 	// end ****
 
 	for _, tt := range []struct {
@@ -3665,6 +3667,9 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 		outputRowDataType *hybridqp.RowDataTypeImpl
 		readerOps         []hybridqp.ExprOptions
 		aggOps            []hybridqp.ExprOptions
+		hintType          hybridqp.HintType
+		seriesKey         []byte
+		GroupByAllDims    bool
 		expect            func(chunks []executor.Chunk) bool
 	}{
 		/* min */
@@ -4976,6 +4981,62 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 			},
 			// skip: true,
 		},
+		// select last_row[string] with aux and time range
+		{
+			name:   "select last_row[string] with aux",
+			q:      fmt.Sprintf(`select /*+ full_series */ last_row(field1_string), field2_int, field4_float, field1_string from cpu WHERE time>=%v AND time<=%v`, minTOut, maxTOut),
+			tr:     util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+			fields: fields,
+			outputRowDataType: hybridqp.NewRowDataTypeImpl(
+				influxql.VarRef{Val: "val2", Type: influxql.Integer},
+				influxql.VarRef{Val: "val3", Type: influxql.String},
+				influxql.VarRef{Val: "val4", Type: influxql.Float},
+				influxql.VarRef{Val: "val1", Type: influxql.String},
+			),
+			readerOps: []hybridqp.ExprOptions{
+				{
+					Expr: &influxql.VarRef{Val: "field2_int", Type: influxql.Integer},
+					Ref:  influxql.VarRef{Val: "val2", Type: influxql.Integer},
+				},
+				{
+					Expr: &influxql.VarRef{Val: "field1_string", Type: influxql.String},
+					Ref:  influxql.VarRef{Val: "val3", Type: influxql.String},
+				},
+				{
+					Expr: &influxql.VarRef{Val: "field4_float", Type: influxql.Float},
+					Ref:  influxql.VarRef{Val: "val4", Type: influxql.Float},
+				},
+				{
+					Expr: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "field1_string", Type: influxql.String}}},
+					Ref:  influxql.VarRef{Val: "val1", Type: influxql.String},
+				},
+			},
+			aggOps: []hybridqp.ExprOptions{
+				{
+					Expr: &influxql.VarRef{Val: "val2", Type: influxql.Integer},
+					Ref:  influxql.VarRef{Val: "val2", Type: influxql.Integer},
+				},
+				{
+					Expr: &influxql.VarRef{Val: "val3", Type: influxql.String},
+					Ref:  influxql.VarRef{Val: "val3", Type: influxql.String},
+				},
+				{
+					Expr: &influxql.VarRef{Val: "val4", Type: influxql.Float},
+					Ref:  influxql.VarRef{Val: "val4", Type: influxql.Float},
+				},
+				{
+					Expr: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.String}}},
+					Ref:  influxql.VarRef{Val: "val1", Type: influxql.String},
+				},
+			},
+			hintType:       hybridqp.FullSeriesQuery,
+			seriesKey:      r.IndexKey,
+			GroupByAllDims: true,
+			expect: func(chunks []executor.Chunk) bool {
+				return len(chunks) == 0
+			},
+			// skip: true,
+		},
 	} {
 		enableStates := []bool{true, false}
 		for _, v := range enableStates {
@@ -4997,6 +5058,9 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 				opt.Sources = source
 				opt.StartTime = tt.tr.Min
 				opt.EndTime = tt.tr.Max
+				opt.HintType = tt.hintType
+				opt.SeriesKey = tt.seriesKey
+				opt.GroupByAllDims = tt.GroupByAllDims
 				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
 				indexInfo, err := sh.CreateCursor(ctx, querySchema)
@@ -5051,6 +5115,89 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 			})
 		}
 	}
+}
+
+var outputRowDataType_LastRowCalls = hybridqp.NewRowDataTypeImpl(
+	influxql.VarRef{Val: "val1", Type: influxql.String},
+	influxql.VarRef{Val: "val2", Type: influxql.Integer},
+	influxql.VarRef{Val: "val3", Type: influxql.Boolean},
+	influxql.VarRef{Val: "val4", Type: influxql.Float},
+)
+
+var readerOps_LastRowCalls = []hybridqp.ExprOptions{
+	{
+		Expr: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "field1_string", Type: influxql.String}}},
+		Ref:  influxql.VarRef{Val: "val1", Type: influxql.String},
+	},
+	{
+		Expr: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "field2_int", Type: influxql.String}}},
+		Ref:  influxql.VarRef{Val: "val2", Type: influxql.String},
+	},
+	{
+		Expr: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "field3_bool", Type: influxql.String}}},
+		Ref:  influxql.VarRef{Val: "val3", Type: influxql.String},
+	},
+	{
+		Expr: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "field4_float", Type: influxql.String}}},
+		Ref:  influxql.VarRef{Val: "val4", Type: influxql.String},
+	},
+}
+
+var aggOps_LastRowCalls = []hybridqp.ExprOptions{
+	{
+		Expr: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.String}}},
+		Ref:  influxql.VarRef{Val: "val1", Type: influxql.String},
+	},
+	{
+		Expr: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "val2", Type: influxql.String}}},
+		Ref:  influxql.VarRef{Val: "val2", Type: influxql.String},
+	},
+	{
+		Expr: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "val3", Type: influxql.String}}},
+		Ref:  influxql.VarRef{Val: "val3", Type: influxql.String},
+	},
+	{
+		Expr: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "val4", Type: influxql.String}}},
+		Ref:  influxql.VarRef{Val: "val4", Type: influxql.String},
+	},
+}
+
+var readerOps_LastFieldCalls = []hybridqp.ExprOptions{
+	{
+		Expr: &influxql.Call{Name: "last", Args: []influxql.Expr{&influxql.VarRef{Val: "field1_string", Type: influxql.String}}},
+		Ref:  influxql.VarRef{Val: "val1", Type: influxql.String},
+	},
+	{
+		Expr: &influxql.Call{Name: "last", Args: []influxql.Expr{&influxql.VarRef{Val: "field2_int", Type: influxql.String}}},
+		Ref:  influxql.VarRef{Val: "val2", Type: influxql.String},
+	},
+	{
+		Expr: &influxql.Call{Name: "last", Args: []influxql.Expr{&influxql.VarRef{Val: "field3_bool", Type: influxql.String}}},
+		Ref:  influxql.VarRef{Val: "val3", Type: influxql.String},
+	},
+	{
+		Expr: &influxql.Call{Name: "last", Args: []influxql.Expr{&influxql.VarRef{Val: "field4_float", Type: influxql.String}}},
+		Ref:  influxql.VarRef{Val: "val4", Type: influxql.String},
+	},
+}
+
+var aggOps_LastFieldCalls = []hybridqp.ExprOptions{
+	{
+		Expr: &influxql.Call{Name: "last", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.String}}},
+		Ref:  influxql.VarRef{Val: "val1", Type: influxql.String},
+	},
+	{
+		Expr: &influxql.Call{Name: "last", Args: []influxql.Expr{&influxql.VarRef{Val: "val2", Type: influxql.String}}},
+		Ref:  influxql.VarRef{Val: "val2", Type: influxql.String},
+	},
+	{
+		Expr: &influxql.Call{Name: "last", Args: []influxql.Expr{&influxql.VarRef{Val: "val3", Type: influxql.String}}},
+		Ref:  influxql.VarRef{Val: "val3", Type: influxql.String},
+	},
+	{
+		Expr: &influxql.Call{Name: "last", Args: []influxql.Expr{&influxql.VarRef{Val: "val4", Type: influxql.String}}},
+		Ref:  influxql.VarRef{Val: "val4", Type: influxql.String},
+	},
 }
 
 func getMinMaxBool(rows []influx.Row) (int64, int, int64, int) {
@@ -8262,9 +8409,11 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
-		sh:     sh,
-		Fields: fields,
+		sh:         sh,
+		Fields:     fields,
+		Dimensions: []string{"tagkey1", "tagkey2", "tagkey3", "tagkey4"},
 	}
+	r := pts[0]
 	// end ****
 	enableStates := []bool{true, false}
 	for _, v := range enableStates {
@@ -8278,6 +8427,9 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 			outputRowDataType *hybridqp.RowDataTypeImpl
 			readerOps         []hybridqp.ExprOptions
 			aggOps            []hybridqp.ExprOptions
+			hintType          hybridqp.HintType
+			seriesKey         []byte
+			GroupByAllDims    bool
 			expect            func(chunks []executor.Chunk) bool
 		}{
 			// select multi calls at the same time
@@ -8381,6 +8533,38 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 				},
 				// skip: true,
 			},
+			// select last_row calls at the same time with time range
+			{
+				name: "select last_row calls at the same time with time range",
+				q: fmt.Sprintf(`select /*+ full_series */ last_row(field1_string),last_row(field2_int),last_row(field3_bool),last_row(field4_float) 
+                                         from cpu WHERE time>=%v AND time<=%v`, minT, maxT),
+
+				tr:                util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+				fields:            fields,
+				outputRowDataType: outputRowDataType_LastRowCalls,
+				readerOps:         readerOps_LastRowCalls,
+				aggOps:            aggOps_LastRowCalls,
+				hintType:          hybridqp.FullSeriesQuery,
+				seriesKey:         r.IndexKey,
+				GroupByAllDims:    true,
+				expect: func(chunks []executor.Chunk) bool {
+					if len(chunks) != 1 {
+						t.Errorf("The result should be 1 chunk")
+					}
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Column(0).StringValue(0), "test-test-test-test-0") && success
+					success = ast.Equal(t, ck.Column(0).ColumnTime(0), int64(1609460199900000000)) && success
+					success = ast.Equal(t, ck.Column(1).IntegerValue(0), int64(1)) && success
+					success = ast.Equal(t, ck.Column(1).ColumnTime(0), int64(1609460199900000000)) && success
+					success = ast.Equal(t, ck.Column(2).BooleanValue(0), true) && success
+					success = ast.Equal(t, ck.Column(2).ColumnTime(0), int64(1609460199900000000)) && success
+					success = ast.Equal(t, ck.Column(3).FloatValue(0), 1.1) && success
+					success = ast.Equal(t, ck.Column(3).ColumnTime(0), int64(1609460199900000000)) && success
+					return success
+				},
+				// skip: true,
+			},
 		} {
 			t.Run(tt.name, func(t *testing.T) {
 				if tt.skip {
@@ -8399,6 +8583,9 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 				opt.Sources = source
 				opt.StartTime = tt.tr.Min
 				opt.EndTime = tt.tr.Max
+				opt.HintType = tt.hintType
+				opt.SeriesKey = tt.seriesKey
+				opt.GroupByAllDims = tt.GroupByAllDims
 				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
 				indexInfo, err := sh.CreateCursor(ctx, querySchema)
@@ -8481,9 +8668,11 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
-		sh:     sh,
-		Fields: fields,
+		sh:         sh,
+		Fields:     fields,
+		Dimensions: []string{"tagkey1", "tagkey2", "tagkey3", "tagkey4"},
 	}
+	r := pts[0]
 	// end ****
 	enableStates := []bool{true, false}
 	for _, v := range enableStates {
@@ -8497,6 +8686,9 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 			outputRowDataType *hybridqp.RowDataTypeImpl
 			readerOps         []hybridqp.ExprOptions
 			aggOps            []hybridqp.ExprOptions
+			hintType          hybridqp.HintType
+			seriesKey         []byte
+			GroupByAllDims    bool
 			expect            func(chunks []executor.Chunk) bool
 		}{
 			// select multi calls at the same time
@@ -8587,6 +8779,64 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 				},
 				// skip: true,
 			},
+			// select last_row calls at the same time with time range
+			{
+				name: "select last_row calls at the same time with time range",
+				q: fmt.Sprintf(`select /*+ full_series */ last_row(field1_string),last_row(field2_int),last_row(field3_bool),last_row(field4_float) 
+                                         from cpu WHERE time>=%v AND time<=%v`, minT, maxT),
+
+				tr:                util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+				fields:            fields,
+				outputRowDataType: outputRowDataType_LastRowCalls,
+				readerOps:         readerOps_LastRowCalls,
+				aggOps:            aggOps_LastRowCalls,
+				hintType:          hybridqp.FullSeriesQuery,
+				seriesKey:         r.IndexKey,
+				GroupByAllDims:    true,
+				expect: func(chunks []executor.Chunk) bool {
+					if len(chunks) != 1 {
+						t.Errorf("The result should be 1 chunk")
+					}
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Column(0).NilCount(), 1) && success
+					success = ast.Equal(t, ck.Column(1).IntegerValue(0), int64(1)) && success
+					success = ast.Equal(t, ck.Column(1).ColumnTime(0), int64(1609460199900000000)) && success
+					success = ast.Equal(t, ck.Column(2).NilCount(), 1) && success
+					success = ast.Equal(t, ck.Column(3).NilCount(), 1) && success
+					return success
+				},
+				// skip: true,
+			},
+			// select last_field calls at the same time with time range
+			{
+				name: "select last_field calls at the same time with time range",
+				q: fmt.Sprintf(`select /*+ full_series */ last(field1_string),last(field2_int),last(field3_bool),last(field4_float) 
+                                         from cpu WHERE time>=%v AND time<=%v`, minT, maxT),
+
+				tr:                util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+				fields:            fields,
+				outputRowDataType: outputRowDataType_LastRowCalls,
+				readerOps:         readerOps_LastFieldCalls,
+				aggOps:            aggOps_LastFieldCalls,
+				hintType:          hybridqp.FullSeriesQuery,
+				seriesKey:         r.IndexKey,
+				GroupByAllDims:    true,
+				expect: func(chunks []executor.Chunk) bool {
+					if len(chunks) != 1 {
+						t.Errorf("The result should be 1 chunk")
+					}
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Column(0).NilCount(), 1) && success
+					success = ast.Equal(t, ck.Column(1).IntegerValue(0), int64(1)) && success
+					success = ast.Equal(t, ck.Column(1).ColumnTime(0), int64(1609460199900000000)) && success
+					success = ast.Equal(t, ck.Column(2).NilCount(), 1) && success
+					success = ast.Equal(t, ck.Column(3).NilCount(), 1) && success
+					return success
+				},
+				// skip: true,
+			},
 		} {
 			t.Run(tt.name, func(t *testing.T) {
 				if tt.skip {
@@ -8605,6 +8855,9 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 				opt.Sources = source
 				opt.StartTime = tt.tr.Min
 				opt.EndTime = tt.tr.Max
+				opt.HintType = tt.hintType
+				opt.SeriesKey = tt.seriesKey
+				opt.GroupByAllDims = tt.GroupByAllDims
 				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
 				indexInfo, err := sh.CreateCursor(ctx, querySchema)
@@ -8987,7 +9240,8 @@ func Test_CreateLogicalPlan(t *testing.T) {
 
 	// **** start write data to the shard.
 	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
-
+	defer sh.Close()
+	defer sh.indexBuilder.Close()
 	if err := sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -9261,7 +9515,7 @@ func TestCreateCursorIndexShardTierErr(t *testing.T) {
 	executor.RegistryTransformCreator(&executor.LogicalTSSPScan{}, &TsspSequenceReader{})
 	msNames := []string{"cpu"}
 	startTime := mustParseTime(time.RFC3339Nano, "2021-01-01T01:00:00Z")
-	//pts, minT, maxT := GenDataRecord_FullFields(msNames, 5, 10000, time.Millisecond*10, startTime)
+
 	pts, _, _ := GenDataRecord(msNames, 5, 2000, time.Second, startTime, true, false, true)
 	fields := map[string]influxql.DataType{
 		"field2_int":    influxql.Integer,
@@ -9286,6 +9540,7 @@ func TestCreateCursorIndexShardTierErr(t *testing.T) {
 	}
 	sh.ForceFlush()
 	sh.waitSnapshot()
+	time.Sleep(time.Second)
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,

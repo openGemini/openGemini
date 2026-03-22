@@ -15,18 +15,21 @@
 package httpd_test
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/openGemini/openGemini/app/ts-recover/recover"
 	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/backup"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/raftconn"
+	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 )
@@ -37,6 +40,45 @@ type mockMetaClient4Backup struct {
 
 var isInc bool
 var isMasterPt = true
+
+const fixedBackupDir = "/tmp/openGemini/backup_dir"
+
+func backupPath(elem ...string) string {
+	parts := append([]string{fixedBackupDir}, elem...)
+	return filepath.Join(parts...)
+}
+
+func shardDataPath() string {
+	return backupPath("data", "data", "db0", "0", "rp0", "0_0_0_0")
+}
+
+func backupArchivedPath(backupRoot, archiveDir, originalPath string) string {
+	return filepath.Join(backupRoot, archiveDir, strings.TrimPrefix(originalPath, string(os.PathSeparator)))
+}
+
+func prepareBackupDir(t *testing.T) {
+	t.Helper()
+
+	target := filepath.Join(t.TempDir(), "backup_dir")
+	if err := os.MkdirAll(target, 0700); err != nil {
+		t.Fatalf("create temp backup dir failed: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(fixedBackupDir), 0700); err != nil {
+		t.Fatalf("create fixed backup parent dir failed: %v", err)
+	}
+	_ = os.RemoveAll(fixedBackupDir)
+	if err := os.Symlink(target, fixedBackupDir); err != nil {
+		t.Fatalf("link fixed backup dir failed: %v", err)
+	}
+
+	isInc = false
+	isMasterPt = true
+	t.Cleanup(func() {
+		_ = os.RemoveAll(fixedBackupDir)
+		isInc = false
+		isMasterPt = true
+	})
+}
 
 func (m *mockMetaClient4Backup) DBRepGroups(database string) []meta.ReplicaGroup {
 	if isMasterPt {
@@ -100,13 +142,13 @@ func (m *mockTableStore) GetAllMstList() []string {
 
 func (m *mockTableStore) GetBothFilesRef(measurement string, hasTimeFilter bool, tr util.TimeRange, flushed *bool) ([]immutable.TSSPFile, []immutable.TSSPFile, bool) {
 	orderFiles := make([]immutable.TSSPFile, 0, 0)
-	filePath := fmt.Sprintf("/tmp/openGemini/backup_dir/data/data/db0/0/rp0/0_0_0_0/tssp/%s/00000476-0001-00000000.tssp", measurement)
+	filePath := filepath.Join(shardDataPath(), "tssp", measurement, "00000476-0001-00000000.tssp")
 	orderFiles = append(orderFiles, mockTsspFile{
 		path: filePath,
 	})
 	CreateFile(filePath)
 	if isInc {
-		filePath := fmt.Sprintf("/tmp/openGemini/backup_dir/data/data/db0/0/rp0/0_0_0_0/tssp/%s/00000476-0002-00000000.tssp", measurement)
+		filePath := filepath.Join(shardDataPath(), "tssp", measurement, "00000476-0002-00000000.tssp")
 		orderFiles = append(orderFiles, mockTsspFile{
 			path: filePath,
 		})
@@ -114,13 +156,13 @@ func (m *mockTableStore) GetBothFilesRef(measurement string, hasTimeFilter bool,
 	}
 
 	unOrderFiles := make([]immutable.TSSPFile, 0, 0)
-	filePath = fmt.Sprintf("/tmp/openGemini/backup_dir/data/data/db0/0/rp0/0_0_0_0/tssp/%s/outoforder/00000476-0001-00000000.tssp", measurement)
+	filePath = filepath.Join(shardDataPath(), "tssp", measurement, "outoforder", "00000476-0001-00000000.tssp")
 	unOrderFiles = append(unOrderFiles, mockTsspFile{
 		path: filePath,
 	})
 	CreateFile(filePath)
 	if isInc {
-		filePath := fmt.Sprintf("/tmp/openGemini/backup_dir/data/data/db0/0/rp0/0_0_0_0/tssp/%s/outoforder/00000476-0002-00000000.tssp", measurement)
+		filePath := filepath.Join(shardDataPath(), "tssp", measurement, "outoforder", "00000476-0002-00000000.tssp")
 		unOrderFiles = append(unOrderFiles, mockTsspFile{
 			path: filePath,
 		})
@@ -128,6 +170,10 @@ func (m *mockTableStore) GetBothFilesRef(measurement string, hasTimeFilter bool,
 	}
 
 	return orderFiles, unOrderFiles, false
+}
+
+func (m *mockTableStore) GetCSFilesRef(measurement string) ([]immutable.TSSPFile, bool) {
+	return []immutable.TSSPFile{}, true
 }
 
 type mockTableStore2 struct {
@@ -141,19 +187,23 @@ func (m *mockTableStore2) GetAllMstList() []string {
 
 func (m *mockTableStore2) GetBothFilesRef(measurement string, hasTimeFilter bool, tr util.TimeRange, flushed *bool) ([]immutable.TSSPFile, []immutable.TSSPFile, bool) {
 	files := make([]immutable.TSSPFile, 0, 0)
-	filePath := "/tmp/openGemini/backup_dir/data/data/db0/0/rp0/0_0_0_0/tssp/a_0000/00000476-0001-00000000.tssp"
+	filePath := filepath.Join(shardDataPath(), "tssp", "a_0000", "00000476-0001-00000000.tssp")
 	files = append(files, mockTsspFile{
 		path: filePath,
 	})
 
 	if isInc {
-		filePath := "/tmp/openGemini/backup_dir/data/data/db0/0/rp0/0_0_0_0/tssp/a_0000/00000476-0002-00000000.tssp"
+		filePath := filepath.Join(shardDataPath(), "tssp", "a_0000", "00000476-0002-00000000.tssp")
 		files = append(files, mockTsspFile{
 			path: filePath,
 		})
 	}
 
 	return files, []immutable.TSSPFile{}, true
+}
+
+func (m *mockTableStore2) GetCSFilesRef(measurement string) ([]immutable.TSSPFile, bool) {
+	return []immutable.TSSPFile{}, true
 }
 
 type mockTableStore3 struct {
@@ -166,13 +216,78 @@ func (m *mockTableStore3) GetAllMstList() []string {
 	return []string{"a_0000", "b_0000"}
 }
 
+func (m *mockTableStore3) GetBothFilesRef(measurement string, hasTimeFilter bool, tr util.TimeRange, flushed *bool) ([]immutable.TSSPFile, []immutable.TSSPFile, bool) {
+	return []immutable.TSSPFile{}, []immutable.TSSPFile{}, true
+}
+
+func (m *mockTableStore3) GetCSFilesRef(measurement string) ([]immutable.TSSPFile, bool) {
+	csFiles := make([]immutable.TSSPFile, 0, 0)
+	filePath := filepath.Join(shardDataPath(), "columnstore", measurement, "00000476-0001-00000000.tssp")
+	csFiles = append(csFiles, mockTsspFile{
+		path: filePath,
+	})
+	idxPath := filepath.Join(shardDataPath(), "columnstore", measurement, "00000476-0001-00000000.idx")
+	CreateFile(filePath)
+	CreateFile(idxPath)
+	if isInc {
+		filePath := filepath.Join(shardDataPath(), "columnstore", measurement, "00000476-0002-00000000.tssp")
+		csFiles = append(csFiles, mockTsspFile{
+			path: filePath,
+		})
+		idxPath = filepath.Join(shardDataPath(), "columnstore", measurement, "00000476-0002-00000000.idx")
+		CreateFile(filePath)
+		CreateFile(idxPath)
+	}
+	return csFiles, true
+}
+
+type mockTableStore4 struct {
+	immutable.TablesStore
+	files *immutable.TSSPFiles
+}
+
+func (m *mockTableStore4) GetAllMstList() []string {
+	return []string{"a_0000", "b_0000"}
+}
+
+func (m *mockTableStore4) GetBothFilesRef(measurement string, hasTimeFilter bool, tr util.TimeRange, flushed *bool) ([]immutable.TSSPFile, []immutable.TSSPFile, bool) {
+	return []immutable.TSSPFile{}, []immutable.TSSPFile{}, true
+}
+
+func (m *mockTableStore4) GetCSFilesRef(measurement string) ([]immutable.TSSPFile, bool) {
+	csFiles := make([]immutable.TSSPFile, 0, 0)
+	filePath := filepath.Join(shardDataPath(), "columnstore", measurement, "00000476-0001-00000000.tssp")
+	csFiles = append(csFiles, mockCSTsspFile{
+		path: filePath,
+	})
+	idxPath := filepath.Join(shardDataPath(), "columnstore", measurement, "00000476-0001-00000000.idx")
+	countPath := filepath.Join(shardDataPath(), "columnstore", measurement, "count.txt")
+	CreateFile(filePath)
+	CreateFile(idxPath)
+	CreateFile(countPath)
+	if isInc {
+		filePath := filepath.Join(shardDataPath(), "columnstore", measurement, "00000476-0002-00000000.tssp")
+		csFiles = append(csFiles, mockCSTsspFile{
+			path: filePath,
+		})
+		idxPath = filepath.Join(shardDataPath(), "columnstore", measurement, "00000476-0002-00000000.idx")
+		CreateFile(filePath)
+		CreateFile(idxPath)
+	}
+	return csFiles, true
+}
+
 func CreateEngine(mode int) *engine.EngineImpl {
 	client := &mockMetaClient4Backup{}
-	dbPtInfo := engine.NewDBPTInfo("db0", 0, "/tmp/openGemini/backup_dir/data/data/db0/0", "", nil, nil, nil)
+	dbPtInfo := engine.NewDBPTInfo("db0", 0, backupPath("data", "data", "db0", "0"), "", nil, nil, nil)
 	dbPtInfo.AddShard(11, &mockShard{mode: mode})
 	dbPtInfo.AddShard(12, &mockShard{mode: mode})
 	dbPtInfo.AddShard(13, &mockShard{mode: mode})
 	dbPtInfo.AddShard(14, &mockShard{mode: mode})
+	raftStore, _ := raftlog.Init(backupPath("data", "wal", "db0", "0", "__raft_entries__"), 0)
+	dbPtInfo.SetNode(&raftconn.RaftNode{
+		Store: raftStore,
+	})
 
 	e := &engine.EngineImpl{
 		DBPartitions: map[string]map[uint32]*engine.DBPTInfo{
@@ -187,10 +302,11 @@ func CreateEngine(mode int) *engine.EngineImpl {
 }
 
 func TestBackup(t *testing.T) {
-	_ = os.MkdirAll("/tmp/openGemini/backup_dir", 0700)
+	prepareBackupDir(t)
+	_ = os.MkdirAll(backupPath(), 0700)
 
-	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
-	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
+	fullBackupPath := backupPath("backup")
+	incBackupPath := backupPath("backup_inc")
 
 	b := &engine.Backup{
 		IsInc:           false,
@@ -210,13 +326,42 @@ func TestBackup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	os.RemoveAll("/tmp/openGemini/backup_dir")
+	os.RemoveAll(backupPath())
+}
+
+func TestBackupCSFile(t *testing.T) {
+	prepareBackupDir(t)
+	_ = os.MkdirAll(backupPath(), 0700)
+
+	fullBackupPath := backupPath("backup")
+	incBackupPath := backupPath("backup_inc")
+
+	b := &engine.Backup{
+		IsInc:           false,
+		IsRemote:        false,
+		BackupPath:      fullBackupPath,
+		Engine:          CreateEngine(4),
+		OnlyBackupMater: true,
+	}
+	if err := b.RunBackupData(); err != nil {
+		t.Fatal(err)
+	}
+
+	b.IsInc = true
+	isInc = true
+	b.BackupPath = incBackupPath
+	if err := b.RunBackupData(); err != nil {
+		t.Fatal(err)
+	}
+
+	os.RemoveAll(backupPath())
 }
 
 func TestBackupPanic(t *testing.T) {
-	_ = os.MkdirAll("/tmp/openGemini/backup_dir", 0700)
+	prepareBackupDir(t)
+	_ = os.MkdirAll(backupPath(), 0700)
 
-	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
+	fullBackupPath := backupPath("backup")
 
 	b := &engine.Backup{
 		IsInc:           false,
@@ -231,12 +376,13 @@ func TestBackupPanic(t *testing.T) {
 }
 
 func TestRecover(t *testing.T) {
+	prepareBackupDir(t)
 	isMasterPt = false
-	os.RemoveAll("/tmp/openGemini/backup_dir")
-	_ = os.MkdirAll("/tmp/openGemini/backup_dir", 0700)
+	os.RemoveAll(backupPath())
+	_ = os.MkdirAll(backupPath(), 0700)
 
-	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
-	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
+	fullBackupPath := backupPath("backup")
+	incBackupPath := backupPath("backup_inc")
 
 	b := &engine.Backup{
 		IsInc:      false,
@@ -248,34 +394,37 @@ func TestRecover(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	metafile := filepath.Join(fullBackupPath, backup.MetaBackupDir, backup.BackupLogPath, backup.MetaBackupLog)
-	CreateFile(metafile)
-	indexPath := fmt.Sprintf("%s/data_backup/tmp/openGemini/backup_dir/data/data/db0/0/rp0/index/index.file", fullBackupPath)
+	indexRawPath := backupPath("data", "data", "db0", "0", "rp0", "index", "index.file")
+	indexPath := backupArchivedPath(fullBackupPath, backup.DataBackupDir, indexRawPath)
 	CreateFile(indexPath)
-	indexPath = fmt.Sprintf("%s/data_backup/tmp/openGemini/backup_dir/data/data/db0/0/rp0/index/index.file", incBackupPath)
+	indexPath = backupArchivedPath(incBackupPath, backup.DataBackupDir, indexRawPath)
 	CreateFile(indexPath)
 
-	recoverConfig := &recover.RecoverConfig{
+	recoverConfig := &recover.RecoverOptions{
 		RecoverMode:        "2",
 		FullBackupDataPath: fullBackupPath,
 		IncBackupDataPath:  incBackupPath,
 		Force:              true,
-		DataDir:            "/tmp/openGemini/backup_dir/data",
+		DataDir:            backupPath("data"),
+		MetaDir:            backupPath("data", "meta"),
 	}
+	_ = os.MkdirAll(filepath.Join(fullBackupPath, backup.WalBackupDir, "wal"), 0700)
+	_ = os.MkdirAll(filepath.Join(fullBackupPath, backup.MetaBackupDir), 0700)
 
-	if err := recover.BackupRecover(recoverConfig); err == nil {
+	if err := recoverConfig.BackupRecover(); err != nil {
 		t.Fatal(err)
 	}
 
-	os.RemoveAll("/tmp/openGemini/backup_dir")
+	os.RemoveAll(backupPath())
 }
 
 func TestRecover2(t *testing.T) {
+	prepareBackupDir(t)
 	isMasterPt = false
-	_ = os.MkdirAll("/tmp/openGemini/backup_dir", 0700)
+	_ = os.MkdirAll(backupPath(), 0700)
 
-	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
-	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
+	fullBackupPath := backupPath("backup")
+	incBackupPath := backupPath("backup_inc")
 
 	b := &engine.Backup{
 		IsInc:      false,
@@ -294,26 +443,28 @@ func TestRecover2(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	metafile := filepath.Join(incBackupPath, backup.MetaBackupDir, backup.BackupLogPath, backup.MetaBackupLog)
-	CreateFile(metafile)
-	indexPath := fmt.Sprintf("%s/data_backup/tmp/openGemini/backup_dir/data/data/db0/0/rp0/index/index.file", fullBackupPath)
+	indexRawPath := backupPath("data", "data", "db0", "0", "rp0", "index", "index.file")
+	indexPath := backupArchivedPath(fullBackupPath, backup.DataBackupDir, indexRawPath)
 	CreateFile(indexPath)
-	indexPath = fmt.Sprintf("%s/data_backup/tmp/openGemini/backup_dir/data/data/db0/0/rp0/index/index.file", incBackupPath)
+	indexPath = backupArchivedPath(incBackupPath, backup.DataBackupDir, indexRawPath)
 	CreateFile(indexPath)
 
-	recoverConfig := &recover.RecoverConfig{
+	r := &recover.RecoverOptions{
 		RecoverMode:        "1",
 		FullBackupDataPath: fullBackupPath,
 		IncBackupDataPath:  incBackupPath,
 		Force:              true,
-		DataDir:            "/tmp/openGemini/backup_dir/data",
+		DataDir:            backupPath("data"),
+		MetaDir:            backupPath("data", "meta"),
 	}
+	_ = os.MkdirAll(filepath.Join(incBackupPath, backup.WalBackupDir, "wal"), 0700)
+	_ = os.MkdirAll(filepath.Join(incBackupPath, backup.MetaBackupDir), 0700)
 
-	if err := recover.BackupRecover(recoverConfig); err == nil {
+	if err := r.BackupRecover(); err != nil {
 		t.Fatal(err)
 	}
 
-	os.RemoveAll("/tmp/openGemini/backup_dir")
+	os.RemoveAll(backupPath())
 }
 
 func CreateFile(path string) {
@@ -337,6 +488,8 @@ func (ms *mockShard) GetTableStore() immutable.TablesStore {
 		return &mockTableStore2{}
 	case 3:
 		return &mockTableStore3{}
+	case 4:
+		return &mockTableStore4{}
 	}
 	return &mockTableStore{}
 }
@@ -344,14 +497,22 @@ func (ms *mockShard) GetTableStore() immutable.TablesStore {
 func (ms *mockShard) GetIndexBuilder() *tsi.IndexBuilder {
 	ib := &tsi.IndexBuilder{}
 
-	CreateFile("/tmp/openGemini/backup_dir/data/data/db0/0/rp0/index/index.file")
-	ib.SetPath("/tmp/openGemini/backup_dir/data/data/db0/0/rp0/index")
+	CreateFile(backupPath("data", "data", "db0", "0", "rp0", "index", "index.file"))
+	ib.SetPath(backupPath("data", "data", "db0", "0", "rp0", "index"))
 
 	return ib
 }
 
 func (ms *mockShard) GetDataPath() string {
-	return "/tmp/openGemini/backup_dir/data/data/db0/0/rp0/0_0_0_0"
+	return shardDataPath()
+}
+
+func (ms *mockShard) IsOpened() bool {
+	return true
+}
+
+func (ms *mockShard) OpenAndEnable(m metaclient.MetaClient) error {
+	return nil
 }
 
 type mockTsspFile struct {
@@ -377,4 +538,48 @@ func (m mockTsspFile) RefFileReader() {
 
 func (m mockTsspFile) UnrefFileReader() {
 	return
+}
+
+func (m mockTsspFile) GetPkInfo() *colstore.PKInfo {
+	return nil
+}
+
+func (m mockTsspFile) GetSkipIndexInfo() []*colstore.SkipIndexInfo {
+	return []*colstore.SkipIndexInfo{}
+}
+
+type mockCSTsspFile struct {
+	immutable.TSSPFile
+	path string
+}
+
+func (m mockCSTsspFile) Path() string {
+	return m.path
+}
+
+func (m mockCSTsspFile) Ref() {
+	return
+}
+
+func (m mockCSTsspFile) Unref() {
+	return
+}
+
+func (m mockCSTsspFile) RefFileReader() {
+	return
+}
+
+func (m mockCSTsspFile) UnrefFileReader() {
+	return
+}
+
+func (m mockCSTsspFile) GetPkInfo() *colstore.PKInfo {
+	return &colstore.PKInfo{}
+}
+
+func (m mockCSTsspFile) GetSkipIndexInfo() []*colstore.SkipIndexInfo {
+	p := filepath.Join(shardDataPath(), "columnstore", "a_0000", "00000476-0002-00000000.skipIndex")
+	info := colstore.NewSkipIndexInfo(p)
+	CreateFile(p)
+	return []*colstore.SkipIndexInfo{info}
 }

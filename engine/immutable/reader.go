@@ -581,15 +581,15 @@ func appendBooleanColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, 
 func appendStringColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, nilCount uint32, col *record.ColVal, ctx *ReadContext) error {
 	col.Init()
 
-	strVar := &col.Val
-	offs := &col.Offset
+	var err error
+	value := col.Val
+	offsets := col.Offset
 	if !ctx.Ascending {
-		ctx.decBuf = ctx.decBuf[:0]
-		ctx.offset = ctx.offset[:0]
-		strVar = &ctx.decBuf
-		offs = &ctx.offset
+		value = ctx.decBuf[:0]
+		offsets = ctx.offset[:0]
 	}
-	value, offsets, err := encoding.DecodeStringBlock(encData, strVar, offs, ctx.coderCtx)
+
+	value, offsets, err = encoding.DecodeStringBlock(encData, value, offsets, ctx.coderCtx)
 	if err != nil {
 		return err
 	}
@@ -602,9 +602,13 @@ func appendStringColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, n
 			ctx.col.Bitmap = nilBitmap
 			ctx.col.BitMapOffset = int(bitmapOffset)
 			reverseStringValues(value, offsets, col, &ctx.col)
+			ctx.decBuf = value
+			ctx.offset = offsets
 			return nil
 		}
 
+		col.Val = value
+		col.Offset = offsets
 		col.ReserveBitmap(rows)
 		col.AppendBitmap(nilBitmap, int(bitmapOffset), rows, 0, rows)
 		col.Len += rows
@@ -723,6 +727,17 @@ type BaseFilterOptions struct {
 	FieldsIdx     []int            // field index in schema
 	FilterTags    []string         // filter tag name
 	CondFunctions *binaryfilterfunc.ConditionImpl
+}
+
+func (opts *BaseFilterOptions) Init(fieldSize int) {
+	opts.FilterTags = opts.FilterTags[:0]
+	opts.FieldsIdx = opts.FieldsIdx[:0]
+	for i := range fieldSize {
+		opts.FieldsIdx = append(opts.FieldsIdx, i)
+	}
+	opts.CondFunctions = &binaryfilterfunc.ConditionImpl{}
+	clear(opts.RedIdxMap)
+	clear(opts.FiltersMap)
 }
 
 type FilterOptions struct {
@@ -1460,7 +1475,7 @@ func AggregateData(newRec, baseRec *record.Record, ops []*comm.CallOption) bool 
 			swap = false
 		case "first":
 			swap = firstMeta(newRec, baseRec, idx)
-		case "last":
+		case "last", "last_row":
 			swap = lastMeta(newRec, baseRec, idx)
 		default:
 			fmt.Println("not support", call.Call.Name)
@@ -1504,6 +1519,13 @@ func ResetAggregateData(newRec *record.Record, ops []*comm.CallOption) {
 			setTimeColumnValue(timeCol, firstTime)
 		case "last":
 			setColumnDefaultValue(newRec.Schema.Field(idx), newRec.Column(idx))
+			_, lastTime := newRec.RecMeta.ColMeta[idx].Last()
+			setTimeColumnValue(timeCol, lastTime)
+		case "last_row":
+			setColumnDefaultValue(newRec.Schema.Field(idx), newRec.Column(idx))
+			if newRec.RecMeta.ColMeta[idx].IsEmpty() {
+				continue
+			}
 			_, lastTime := newRec.RecMeta.ColMeta[idx].Last()
 			setTimeColumnValue(timeCol, lastTime)
 		default:

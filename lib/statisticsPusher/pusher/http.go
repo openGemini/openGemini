@@ -74,8 +74,13 @@ func (c *HttpConfig) CreateURL() string {
 }
 
 func (c *HttpConfig) BasicAuth() (string, string) {
-	if c.Username == "" {
+	if c.Username == "" && c.Password == "" {
 		return "", ""
+	}
+
+	// Service-oriented version use monitor as default user
+	if c.Username == "" {
+		return "monitor", c.Password
 	}
 
 	return c.Username, c.Password

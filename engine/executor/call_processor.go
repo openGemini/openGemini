@@ -62,15 +62,6 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 			// Operators implemented through registration
 			// TODO migrate all operators
 			if aggOp := GetAggOperator(name); aggOp != nil {
-				if strings.Contains(name, query.CASTOR) {
-					processor, err := NewWideProcessorImpl(inRowDataType, outRowDataType, exprOpt)
-					if err != nil {
-						return nil, fmt.Errorf("unsupported aggregation operator of call processor: %s", name)
-					}
-					proRes.coProcessor = processor
-					proRes.isUDAFCall = true
-					return proRes, nil
-				}
 				params := &AggCallFuncParams{
 					InRowDataType:  inRowDataType,
 					OutRowDataType: outRowDataType,
@@ -89,6 +80,15 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 				}
 				continue
 			}
+			if strings.Contains(name, query.CASTOR) || name == query.ML_FORECAST {
+				processor, err := NewWideProcessorImpl(inRowDataType, outRowDataType, exprOpt)
+				if err != nil {
+					return nil, err
+				}
+				proRes.coProcessor = processor
+				proRes.isUDAFCall = true
+				return proRes, nil
+			}
 			switch name {
 			case "count":
 				routine, err = NewCountRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], isSingleCall)
@@ -99,7 +99,7 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 			case "first":
 				routine, err = NewFirstRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], isSingleCall, auxProcessor)
 				coProcessor.AppendRoutine(routine)
-			case "last":
+			case "last", "last_row":
 				routine, err = NewLastRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], isSingleCall, auxProcessor)
 				coProcessor.AppendRoutine(routine)
 			case "percentile":
@@ -220,18 +220,30 @@ func NewWideProcessorImpl(inRowDataType, outRowDataType hybridqp.RowDataType, ex
 	for _, exprOpt := range exprOpts {
 		inOrdinal := inRowDataType.FieldIndex(exprOpt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
 		outOrdinal := outRowDataType.FieldIndex(exprOpt.Ref.Val)
-		if inOrdinal < 0 || outOrdinal < 0 || inOrdinal != outOrdinal {
+		if inOrdinal < 0 || outOrdinal < 0 {
 			panic("input and output schemas are not aligned for iterator")
 		}
 	}
 	var wideRoutine *WideRoutineImpl
 	expr := exprOpts[0].Expr.(*influxql.Call)
-	args := expr.Args[1:]
+	args := make([]influxql.Expr, 4)
+	if expr.Name == query.ML_FORECAST {
+		// infer(v, 'model_name', 'model_params')
+		args[0] = &influxql.StringLiteral{Val: ML_INFER_UDF_NAME}
+		args[1] = expr.Args[len(expr.Args)-2]
+		args[2] = &influxql.StringLiteral{Val: UDF_DETECT}
+		args[3] = expr.Args[len(expr.Args)-1]
+	} else {
+		args = expr.Args[len(expr.Args)-4:]
+	}
 	switch expr.Name {
 	case query.CASTOR:
+		args = expr.Args[1:]
 		wideRoutine = NewWideRoutineImpl(NewWideIterator(CastorReduce(CopyArrowRecordToChunk), args))
-	case query.CASTOR_AD:
+	case query.CASTOR_AD, query.ML_FORECAST:
 		wideRoutine = NewWideRoutineImpl(NewWideIterator(CastorReduce(CopyCastorADArrowRecordToChunk), args))
+	case query.CASTOR_MM_AD:
+		wideRoutine = NewWideRoutineImpl(NewWideMultiColIterator(CastorReduce(CopyCastorADArrowRecordToChunk), args))
 	default:
 		return nil, fmt.Errorf("unsupported aggregation operator of call processor: %s", expr.Name)
 	}

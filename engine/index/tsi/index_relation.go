@@ -17,11 +17,12 @@ package tsi
 import (
 	"fmt"
 
+	"github.com/openGemini/openGemini/lib/dictmap"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
-	"github.com/savsgio/dictpool"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 // IndexRelation define functions of a specific index
@@ -100,7 +101,7 @@ func (relation *IndexRelation) IndexCacheClear() error {
 }
 
 type PrimaryIndex interface {
-	CreateIndexIfNotExists(mmRows *dictpool.Dict) error
+	CreateIndexIfNotExists(mmRows dictmap.DictMap[string, *[]influx.Row]) error
 	GetPrimaryKeys(name []byte, opt *query.ProcessorOptions) ([]uint64, error)
 	GetDeletePrimaryKeys(name []byte, condition influxql.Expr, tr TimeRange) ([]uint64, error)
 	SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions, callBack func(num int64) error, _ interface{}) (GroupSeries, int64, error)

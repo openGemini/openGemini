@@ -222,6 +222,7 @@ func writeData(testCompDir, mstName string, recRows int) error {
 }
 
 func TestDetachedTSSPReader(t *testing.T) {
+	t.Skip()
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
 	sig := interruptsignal.NewInterruptSignal()

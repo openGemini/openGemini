@@ -75,7 +75,7 @@ func haveTextFilter(expr influxql.Expr) bool {
 		switch expr.Op {
 		case influxql.AND, influxql.OR:
 			return haveTextFilter(expr.LHS) || haveTextFilter(expr.RHS)
-		case influxql.MATCH, influxql.MATCHPHRASE, influxql.LIKE:
+		case influxql.MATCH, influxql.MATCHPHRASE, influxql.UNMATCHPHRASE, influxql.LIKE:
 			return true
 		default:
 			return false
@@ -246,6 +246,8 @@ func (idx *TextIndex) SearchByTokenIndex(name string, sids []uint64, n *influxql
 		return tokenIndex.Search(clv.Match, value.Val, sids)
 	case influxql.MATCHPHRASE:
 		return tokenIndex.Search(clv.Match_Phrase, value.Val, sids)
+	case influxql.UNMATCHPHRASE:
+		return tokenIndex.Search(clv.UnMatch_Phrase, value.Val, sids)
 	case influxql.LIKE:
 		return tokenIndex.Search(clv.Fuzzy, value.Val, sids)
 	default:
@@ -293,7 +295,7 @@ func (idx *TextIndex) SearchTextIndexByExpr(name string, sids []uint64, expr inf
 			} else {
 				return clv.UnionInvertIndexAndExpr(li, ri), nil
 			}
-		case influxql.MATCH, influxql.MATCHPHRASE, influxql.LIKE:
+		case influxql.MATCH, influxql.MATCHPHRASE, influxql.UNMATCHPHRASE, influxql.LIKE:
 			return idx.SearchByTokenIndex(name, sids, expr)
 		default:
 			return nil, ErrTextExpr

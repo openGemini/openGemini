@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/smart_query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
@@ -59,7 +60,9 @@ var (
 const (
 	// PanicCrashEnv is the environment variable that, when set, will prevent
 	// the handler from recovering any panics.
-	PanicCrashEnv = "INFLUXDB_PANIC_CRASH"
+	PanicCrashEnv     = "INFLUXDB_PANIC_CRASH"
+	QueryTypeInfluxQL = "influxql"
+	QueryTypeSQL      = "sql"
 )
 
 type qCtxKey uint8
@@ -164,6 +167,7 @@ type RowsChan struct {
 	Rows    models.Rows // models.Rows of data
 	Records []*models.RecordContainer
 	Partial bool // is partial of rows
+	JSONBuf []byte
 }
 
 // ExecutionOptions contains the options for executing a query.
@@ -225,6 +229,12 @@ type ExecutionOptions struct {
 
 	// IsArrowQuery indicates whether the query uses arrow flight protocol
 	IsArrowQuery bool
+
+	// IsGetFlightInfoQuery indicates whether the query is to get flight info
+	IsGetFlightInfoQuery bool
+
+	// QueryType indicates the type of query, either "influxql" or "sql"
+	QueryType string
 }
 
 func NewExecutionOptions(db, rp string, nodeID uint64, chunkSize, innerChunkSize int, chunked, readOnly, quiet, parallelQuery bool) *ExecutionOptions {
@@ -259,6 +269,7 @@ type StatementExecutor interface {
 	// results channel in the ExecutionContext.
 	ExecuteStatement(stmt influxql.Statement, ctx *ExecutionContext, seq int) error
 	Statistics(buffer []byte) ([]byte, error)
+	ExecuteSmartStatement(stmt *smart_query.SmartSelectStatement, results chan *Result) error
 }
 
 // StatementNormalizer normalizes a statement before it is executed.
@@ -305,6 +316,22 @@ func (e *Executor) Close() error {
 // called after Open is called.
 func (e *Executor) WithLogger(log *logger.Logger) {
 	e.Logger = log.With(zap.String("service", "query"))
+}
+
+func (e *Executor) ExecuteSmartQuery(query *smart_query.SmartSelectStatement) <-chan *Result {
+	results := make(chan *Result)
+	go e.executeSmartQuery(query, results)
+	return results
+}
+
+func (e *Executor) executeSmartQuery(query *smart_query.SmartSelectStatement, results chan *Result) {
+	defer close(results)
+	err := e.StatementExecutor.ExecuteSmartStatement(query, results)
+	if err != nil {
+		results <- &Result{
+			Err: err,
+		}
+	}
 }
 
 // ExecuteQuery executes each statement within a query.
@@ -384,8 +411,11 @@ LOOP:
 		}
 
 		// Log each normalized statement.
+		var start time.Time
 		if !ctx.Quiet {
-			e.Logger.Info("Executing query", zap.String("query", stmt.String()))
+			start = time.Now()
+			logger.GetQueryLogger().Info("Executing query (start)",
+				zap.String("query", stmt.String()), zap.Uint64("queryID", ctx.QueryID[i]))
 		}
 
 		// Send any other statements to the underlying statement executor.
@@ -396,6 +426,11 @@ LOOP:
 			if qerr := ctx.Err(); qerr != nil {
 				err = qerr
 			}
+		}
+
+		if !ctx.Quiet {
+			logger.GetQueryLogger().Info("Executing query (end)",
+				zap.Uint64("queryID", ctx.QueryID[i]), zap.Duration("elapsed", time.Since(start)))
 		}
 
 		// Send an error for this result if it failed for some reason.
@@ -528,11 +563,16 @@ LOOP:
 			}
 
 			// Log each normalized statement.
+			var start time.Time
 			if !ctx.Quiet {
-				e.Logger.Info("Executing query", zap.String("query", stmt.String()))
+				start = time.Now()
+				logger.GetQueryLogger().Info("Executing query (start)",
+					zap.String("query", stmt.String()), zap.Uint64("queryID", ctx.QueryID[seq]))
 			} else {
 				if seq == 0 {
-					e.Logger.Info("Executing query", zap.String("query", stmt.String()), zap.Int("batch", len(query.Statements)))
+					start = time.Now()
+					logger.GetQueryLogger().Info("Executing query (start)", zap.String("query", stmt.String()),
+						zap.Int("batch", len(query.Statements)), zap.Uint64("queryID", ctx.QueryID[seq]))
 				}
 			}
 
@@ -543,6 +583,17 @@ LOOP:
 				// the query task if there is one.
 				if qerr := ctx.Err(); qerr != nil {
 					err = qerr
+				}
+			}
+
+			// Log each normalized statement.
+			if !ctx.Quiet {
+				logger.GetQueryLogger().Info("Executing query (end)",
+					zap.Uint64("queryID", ctx.QueryID[seq]), zap.Duration("elapsed", time.Since(start)))
+			} else {
+				if seq == 0 {
+					logger.GetQueryLogger().Info("Executing query (end)", zap.Int("batch", len(query.Statements)),
+						zap.Uint64("queryID", ctx.QueryID[seq]), zap.Duration("elapsed", time.Since(start)))
 				}
 			}
 

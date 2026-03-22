@@ -87,6 +87,22 @@ func (n *TSSPFileName) AddSeq(seq uint64) {
 	n.seq += seq
 }
 
+func (n *TSSPFileName) GetSeq() uint64 {
+	return n.seq
+}
+
+func (n *TSSPFileName) GetMerge() uint16 {
+	return n.merge
+}
+
+func (n *TSSPFileName) GetExtend() uint16 {
+	return n.extent
+}
+
+func (n *TSSPFileName) GetLevel() uint16 {
+	return n.level
+}
+
 func (n *TSSPFileName) path(dir string) string {
 	if !n.order {
 		dir = path.Join(dir, unorderedDir)
@@ -98,7 +114,7 @@ func (n *TSSPFileName) path(dir string) string {
 		}
 	}
 
-	return path.Join(dir, fmt.Sprintf("%s%s", n.String(), tsspFileSuffix))
+	return path.Join(dir, fmt.Sprintf("%s%s", n.String(), TsspFileSuffix))
 }
 
 func (n *TSSPFileName) TmpPath(dir string) string {
@@ -120,7 +136,7 @@ func validFileName(name string) bool {
 func getRemoteSuffix(name string) string {
 	extend := filepath.Ext(name)
 	switch extend {
-	case tsspFileSuffix:
+	case TsspFileSuffix:
 		return ""
 	case obs.ObsFileSuffix:
 		return extend

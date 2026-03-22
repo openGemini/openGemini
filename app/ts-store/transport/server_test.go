@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	numenc "github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/agiledragon/gomonkey/v2"
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/stream"
@@ -38,6 +37,7 @@ import (
 	"github.com/openGemini/openGemini/lib/spdy"
 	streamLib "github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/tracing"
+	numenc "github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
@@ -108,6 +108,7 @@ var metaPath = "/tmp/meta"
 func mockStorage() *storage.Storage {
 	node := metaclient.NewNode(metaPath)
 	storeConfig := config.NewStore()
+	storeConfig.InitFields()
 	config.SetHaPolicy(config.SSPolicy)
 	monitorConfig := config.Monitor{
 		Pushers:      "http",

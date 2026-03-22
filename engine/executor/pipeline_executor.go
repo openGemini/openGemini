@@ -231,11 +231,13 @@ func (exec *PipelineExecutor) destroyContext() {
 	exec.contextMutex.Unlock()
 }
 
-func (exec *PipelineExecutor) work(processor Processor) error {
+func (exec *PipelineExecutor) work(processor Processor) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
+			// return the err even if panic
+			err = errno.NewError(errno.RecoverPanic, e)
 			log.Error("runtime panic", zap.String("PipelineExecutor Execute raise stack:", string(debug.Stack())),
-				zap.Error(errno.NewError(errno.RecoverPanic, e)),
+				zap.Error(err),
 				zap.Bool("aborted", exec.aborted),
 				zap.Bool("crashed", exec.crashed), zap.String("query", "PipelineExecutor"),
 				zap.String("query stmt", exec.Query))
@@ -243,7 +245,7 @@ func (exec *PipelineExecutor) work(processor Processor) error {
 		}
 	}()
 
-	err := processor.Work(exec.context)
+	err = processor.Work(exec.context)
 	if err != nil {
 		msg := fmt.Sprintf("%s in pipeline executor failed", processor.Name())
 		log.Error(msg,
@@ -253,7 +255,7 @@ func (exec *PipelineExecutor) work(processor Processor) error {
 			zap.String("query", "PipelineExecutor"),
 			zap.String("query stmt", exec.Query))
 	}
-	return err
+	return
 }
 
 func (exec *PipelineExecutor) Execute(ctx context.Context) error {
@@ -328,6 +330,10 @@ func NewTransformVertex(node hybridqp.QueryNode, transform Processor) *Transform
 		node:      node,
 		transform: transform,
 	}
+}
+
+func (t *TransformVertex) GetNode() hybridqp.QueryNode {
+	return t.node
 }
 
 func (t *TransformVertex) GetTransform() Processor {
@@ -949,7 +955,7 @@ func (builder *ExecutorBuilder) addShardExchange(exchange Exchange) (*TransformV
 		exchange.AddTrait(shard)
 	}
 	// ts-server can also support oneShard optimization
-	if len(exchange.ETraits()) == 1 || (exchange.Schema().Options().IsPromQuery() && len(exchange.ETraits()) > 1) {
+	if builder.shouldAddOneShardExchange(exchange) {
 		builder.oneShardState = true
 		vertex, err := builder.addOneShardExchange(exchange)
 		builder.oneShardState = false
@@ -960,6 +966,16 @@ func (builder *ExecutorBuilder) addShardExchange(exchange Exchange) (*TransformV
 		return builder.addDefaultExchange(exchange)
 	}
 
+}
+
+func (builder *ExecutorBuilder) shouldAddOneShardExchange(exchange Exchange) bool {
+	isOneShadWithoutCastorPushDown := IsOneShardExchange(exchange) &&
+		!(exchange.Schema().Options().IsGroupByAllDims() && exchange.Schema().HasCastorCall())
+
+	isPromQueryWithComplexTraits := exchange.Schema().Options().IsPromQuery() &&
+		len(exchange.ETraits()) > 1
+
+	return isOneShadWithoutCastorPushDown || isPromQueryWithComplexTraits
 }
 
 func (builder *ExecutorBuilder) addOneShardExchange(exchange Exchange) (*TransformVertex, error) {
@@ -1191,7 +1207,13 @@ func (builder *ExecutorBuilder) addHashAgg(hashAgg *LogicalHashAgg) (*TransformV
 				readers = append(readers, v)
 				inRowDataTypes = append(inRowDataTypes, hashAgg.inputs[0].RowDataType())
 			case *ShardsFragmentsGroup:
-				v, err := builder.addGroupHashAgg(hashAgg.Children()[0], &t.frags)
+				var v *TransformVertex
+				var err error
+				if csReader, ok := hashAgg.Children()[0].(*LogicalColumnStoreReader); ok {
+					v, err = builder.addColStoreReaderWithFragments(csReader, t.frags)
+				} else {
+					v, err = builder.addGroupHashAgg(hashAgg.Children()[0], &t.frags)
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -1414,6 +1436,10 @@ func (builder *ExecutorBuilder) addColStoreReader(node *LogicalColumnStoreReader
 	} else {
 		frags = builder.indexInfo
 	}
+	return builder.addColStoreReaderWithFragments(node, frags)
+}
+
+func (builder *ExecutorBuilder) addColStoreReaderWithFragments(node *LogicalColumnStoreReader, frags interface{}) (*TransformVertex, error) {
 	if creator, ok := GetReaderFactoryInstance().Find(node.String()); ok {
 		reader, err := creator.CreateReader(node, frags)
 		if err != nil {
@@ -1447,6 +1473,9 @@ func (builder *ExecutorBuilder) IsMultiMstPlanNode(node hybridqp.QueryNode) bool
 // CanOptimizeExchange used for optimizing one shard or multiple shards in the same prom PT.
 // Eliminate redundant Merge and Agg on the IndexScan upper layer.
 func (builder *ExecutorBuilder) CanOptimizeExchange(node hybridqp.QueryNode, children []*TransformVertex) (*TransformVertex, bool) {
+	if _, ok := node.(*LogicalLLMSemantic); ok {
+		return nil, false
+	}
 	if len(node.Children()) != 1 {
 		return nil, false
 	}
@@ -1476,13 +1505,18 @@ func (builder *ExecutorBuilder) CanOptimizeExchange(node hybridqp.QueryNode, chi
 		return nil, false
 	}
 
-	if builder.multiMstInfosForLocalStore != nil {
-		if _, ok := node.(*LogicalAggregate); !ok {
-			return children[0], true
-		}
-	} else {
+	aggNode, ok := node.(*LogicalAggregate)
+	if !ok {
 		return children[0], true
 	}
+
+	if builder.multiMstInfosForLocalStore == nil {
+		if aggNode.schema.HasCastorCall() {
+			return nil, false
+		}
+		return children[0], true
+	}
+
 	return nil, false
 }
 
@@ -1554,6 +1588,7 @@ func (builder *ExecutorBuilder) addNodeToDag(node hybridqp.QueryNode) (*Transfor
 }
 
 type IndexScanExtraInfo struct {
+	Dsc     bool // Used to determines whether to schedule shards in descending.
 	ShardID uint64
 	Req     *RemoteQuery
 	Store   hybridqp.StoreEngine
@@ -1575,6 +1610,15 @@ func (e *IndexScanExtraInfo) Len() int {
 }
 
 func (e *IndexScanExtraInfo) Next() *ShardInfo {
+	if e.Dsc {
+		if e.curPos >= len(e.Req.ShardIDs) {
+			return nil
+		}
+		shardInfo := &ShardInfo{}
+		shardInfo.ID = e.Req.ShardIDs[len(e.Req.ShardIDs)-e.curPos-1]
+		e.curPos++
+		return shardInfo
+	}
 	if e.curPos >= e.Len() {
 		return nil
 	}
@@ -1598,4 +1642,19 @@ func (e *IndexScanExtraInfo) Clone() *IndexScanExtraInfo {
 	r.ctx = e.ctx
 	r.PtQuery = e.PtQuery
 	return r
+}
+
+// IsOneShardExchange used for serially scheduling shards in one PT.
+func IsOneShardExchange(exchange Exchange) bool {
+	if len(exchange.ETraits()) == 0 {
+		return false
+	}
+	if len(exchange.ETraits()) == 1 {
+		return true
+	}
+	// Serial scheduling of multiple shards, used for last/last_row shard pruning optimization
+	if exchange.Schema().IsLastRowQuery() || exchange.Schema().IsLastFieldQuery() {
+		return true
+	}
+	return false
 }

@@ -67,6 +67,10 @@ func (s *LineFilterIpReader) IsExist(blockId int64, _ *rpn.SKRPNElement) (bool, 
 	return s.isExist(blockId)
 }
 
+func (s *LineFilterIpReader) GetRowCount(blockId int64, _ *rpn.SKRPNElement) (int64, error) {
+	return 0, nil
+}
+
 func (s *LineFilterIpReader) isExist(blockId int64) (bool, error) {
 	s.currentBlockId = blockId
 	filterDataDiskSize := logstore.GetConstant(s.version).FilterDataDiskSize

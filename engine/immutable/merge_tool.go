@@ -211,7 +211,7 @@ func (mt *mergeTool) mergeSelf(ctx *MergeContext) {
 		return
 	}
 
-	mt.mergeSelfStreamMode(ctx)
+	mt.mergeSelfStreamMode(ctx, false)
 }
 
 func (mt *mergeTool) mergeSelfFastMode(ctx *MergeContext) {
@@ -259,8 +259,8 @@ func (mt *mergeTool) mergeSelfFastMode(ctx *MergeContext) {
 		zap.String("mst", ctx.mst))
 }
 
-func (mt *mergeTool) mergeSelfStreamMode(ctx *MergeContext) {
-	orderWg, inorderWg := mt.mts.refMmsTable(ctx.mst, true)
+func (mt *mergeTool) mergeSelfStreamMode(ctx *MergeContext, isOrder bool) *CompactedFileInfo {
+	orderWg, inorderWg := mt.mts.refMmsTable(ctx.mst, !isOrder)
 	success := false
 
 	defer func() {
@@ -270,10 +270,10 @@ func (mt *mergeTool) mergeSelfStreamMode(ctx *MergeContext) {
 		}
 	}()
 
-	files, err := mt.mts.getFilesByPath(ctx.mst, ctx.unordered.path, false)
+	files, err := mt.mts.getFilesByPath(ctx.mst, ctx.unordered.path, isOrder)
 	if err != nil {
 		mt.zlg.Error("failed to get files", zap.Error(err))
-		return
+		return nil
 	}
 
 	statistics.NewMergeStatistics().AddMergeSelfTotal(1)
@@ -282,6 +282,8 @@ func (mt *mergeTool) mergeSelfStreamMode(ctx *MergeContext) {
 
 	order.Append(files.Files()[0])
 	unordered.Append(files.Files()[1:]...)
+
+	var result *CompactedFileInfo
 
 	func() {
 		mt.stat.StatOrderFile(0, 0)
@@ -294,8 +296,12 @@ func (mt *mergeTool) mergeSelfStreamMode(ctx *MergeContext) {
 		}
 
 		mt.stat.StatMergedFile(SumFilesSize(mergedFiles.Files()), mergedFiles.Len())
-		if err := mt.mts.ReplaceFiles(ctx.mst, order.Files(), mergedFiles.Files(), false); err != nil {
+		result = GenerateCompactedInfo(ctx.mst, files.Files(), mergedFiles.Files(), mt.mts.Path(), isOrder)
+		result.Lock = mt.mts.GetLockPath()
+
+		if err := mt.mts.replaceFiles(result, files.Files(), mergedFiles.Files()); err != nil {
 			mt.zlg.Error("failed to replace merged files", zap.Error(err))
+			result = nil
 			return
 		}
 		NewHotFileManager().AddAll(mergedFiles.Files())
@@ -303,6 +309,8 @@ func (mt *mergeTool) mergeSelfStreamMode(ctx *MergeContext) {
 		mt.stat.Push()
 		success = true
 	}()
+
+	return result
 }
 
 func CleanTempFile(f fileops.File) {

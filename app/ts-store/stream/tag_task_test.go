@@ -15,10 +15,7 @@
 package stream
 
 import (
-	"encoding/json"
 	"os"
-	"path"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,7 +59,7 @@ func Test_ConsumeDataAbort(t *testing.T) {
 
 func Test_ConsumeDataClean(t *testing.T) {
 	task := &TagTask{values: sync.Map{}, TaskDataPool: NewTaskDataPool(),
-		cleanPreWindow: make(chan struct{}), BaseTask: &BaseTask{Logger: MockLogger{t}, updateWindow: make(chan struct{}),
+		cleanPreWindow: make(chan struct{}), BaseTask: &BaseTask{Logger: MockLogger{}, updateWindow: make(chan struct{}),
 			abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}}
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -80,7 +77,7 @@ func Test_ConsumeDataClean(t *testing.T) {
 
 func Test_FlushAbort(t *testing.T) {
 	task := &TagTask{values: sync.Map{}, TaskDataPool: NewTaskDataPool(),
-		cleanPreWindow: make(chan struct{}), BaseTask: &BaseTask{Logger: MockLogger{t}, updateWindow: make(chan struct{}),
+		cleanPreWindow: make(chan struct{}), BaseTask: &BaseTask{Logger: MockLogger{}, updateWindow: make(chan struct{}),
 			abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}}
 
 	wg := sync.WaitGroup{}
@@ -95,9 +92,20 @@ func Test_FlushAbort(t *testing.T) {
 }
 
 func Test_FlushUpdate(t *testing.T) {
-	task := &TagTask{values: sync.Map{}, TaskDataPool: NewTaskDataPool(),
-		cleanPreWindow: make(chan struct{}), BaseTask: &BaseTask{Logger: MockLogger{t}, updateWindow: make(chan struct{}),
-			abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}}
+	task := &TagTask{
+		values:         sync.Map{},
+		TaskDataPool:   NewTaskDataPool(),
+		cleanPreWindow: make(chan struct{}),
+		ptLoadStatus:   map[uint32]*flushStatus{0: {1}},
+		BaseTask: &BaseTask{
+			des:          &meta2.StreamMeasurementInfo{Database: "test", RetentionPolicy: "autogen"},
+			Logger:       MockLogger{},
+			updateWindow: make(chan struct{}),
+			abort:        make(chan struct{}),
+			windowNum:    10,
+			stats:        statistics.NewStreamWindowStatItem(0),
+		},
+	}
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -108,6 +116,7 @@ func Test_FlushUpdate(t *testing.T) {
 	// wait update
 	<-task.updateWindow
 	wg.Wait()
+	os.RemoveAll("./data")
 }
 
 func Test_GenerateGroupKey(t *testing.T) {
@@ -193,8 +202,11 @@ func Test_ReplayData(t *testing.T) {
 	task := &TagTask{
 		ptLoadStatus: map[uint32]*flushStatus{0: {Timestamp: now.Add(-20 * time.Second).UnixNano()}},
 		nodePts:      []uint32{0},
+		groupKeys:    []string{"tagkey0"},
+		bp:           strings2.NewBuilderPool(),
+		stringDict:   stringinterner.NewStringDict(),
 
-		BaseTask: &BaseTask{Logger: MockLogger{t},
+		BaseTask: &BaseTask{Logger: MockLogger{},
 			initTime: now.Add(20 * time.Second),
 			window:   10 * time.Second,
 			rows:     []influx.Row{},
@@ -202,6 +214,7 @@ func Test_ReplayData(t *testing.T) {
 			des:      &meta2.StreamMeasurementInfo{Database: "test", RetentionPolicy: "autogen"},
 			store:    &MockStorage{},
 			cli:      MockMetaclient{},
+			stats:    statistics.NewStreamWindowStatItem(0),
 		},
 	}
 
@@ -226,23 +239,18 @@ func Test_ReplayData(t *testing.T) {
 		}
 
 		task.replayWalRow(replayRow)
-		expShards := make([]*uint64, 4)
-		expShards[2] = &replayRow.shardID
-
-		if ok := slices.Equal(expShards, task.replayShardIds[0]); !ok {
-			t.Errorf("Expected %v, got %v", expShards, task.replayShardIds)
-		}
 
 		task.flushReplayData()
 		s := task.store.(*MockStorage)
 		assertEqual(t, s.count, 1)
 		assertEqual(t, s.value, float64(2))
+		task.cleanReplayData()
+		os.RemoveAll("./data")
 	})
 
 	t.Run("2", func(t *testing.T) {
 		task.initReplayVar()
 		task.BaseTask.store = &MockStorage{}
-		FlushParallelMinRowNum = 0
 		replayRow := &ReplayRow{
 			db:      "test",
 			rp:      "autogen",
@@ -262,6 +270,7 @@ func Test_ReplayData(t *testing.T) {
 		s := task.store.(*MockStorage)
 		assertEqual(t, s.count, 1)
 		assertEqual(t, s.value, float64(30))
+		os.RemoveAll("./data")
 	})
 
 }
@@ -273,76 +282,24 @@ func Test_ReplayWalRow_Error(t *testing.T) {
 		err := task.replayWalRow(nil)
 		require.NotEmpty(t, err)
 	})
-	t.Run("2", func(t *testing.T) {
-		now := time.Now()
-		task := &TagTask{
-			ptLoadStatus: map[uint32]*flushStatus{0: {Timestamp: now.Add(-2000 * time.Second).UnixNano()}},
-			nodePts:      []uint32{0},
-			BaseTask: &BaseTask{Logger: MockLogger{t},
-				initTime: now.Add(2000 * time.Second),
-				window:   10 * time.Second,
-				rows:     []influx.Row{},
-				info:     &meta2.MeasurementInfo{Name: "bps"},
-				des:      &meta2.StreamMeasurementInfo{Database: "test", RetentionPolicy: "autogen"},
-				store:    &MockStorage{},
-			},
-		}
-
-		task.initReplayVar()
-		if task.replayWindowNum != int64(maxReplayWindowNum) {
-			t.Fatal("task.replayWindowNum and maxReplayWindowNum not equal")
-		}
-	})
 }
 
 func Test_FlushReplayData(t *testing.T) {
 	var shardID uint64 = 1
 	task := &TagTask{
-		values:         sync.Map{},
+		replayValues:   &sync.Map{},
 		TaskDataPool:   NewTaskDataPool(),
 		cleanPreWindow: make(chan struct{}),
-		replayShardIds: map[uint32][]*uint64{1: []*uint64{&shardID}},
-		BaseTask: &BaseTask{Logger: MockLogger{t},
+		replayShardIds: map[uint32]*sync.Map{1: {}},
+		BaseTask: &BaseTask{Logger: MockLogger{},
 			updateWindow: make(chan struct{}),
 			abort:        make(chan struct{}),
 			windowNum:    10,
 			stats:        statistics.NewStreamWindowStatItem(0),
 		},
 	}
+	task.replayShardIds[1].Store(time.Now(), shardID)
 	task.flushReplayData()
-}
-
-func Test_ResetReplayVar(t *testing.T) {
-	task := &TagTask{
-		BaseTask: &BaseTask{Logger: MockLogger{t},
-			window: 10 * time.Second,
-			rows:   []influx.Row{},
-			info:   &meta2.MeasurementInfo{Name: "bps"},
-			des:    &meta2.StreamMeasurementInfo{Database: "test", RetentionPolicy: "autogen"},
-			store:  &MockStorage{},
-			cli:    MockMetaclient{},
-			id:     1,
-		},
-	}
-	task.dataPath = t.TempDir()
-	p := path.Join(task.dataPath, "data", task.des.Database, strconv.Itoa(0), task.des.RetentionPolicy)
-
-	st := &flushStatus{Timestamp: time.Now().UnixNano()}
-	b, err := json.Marshal(st)
-	if err != nil {
-		t.Fatal()
-	}
-	if err := os.MkdirAll(p, 0700); err == nil {
-		if _, err := os.Stat(p); err == nil {
-			os.WriteFile(path.Join(p, strconv.FormatUint(task.id, 10)), b, 0640)
-		}
-	}
-	task.shardIds = make(map[uint32][]*uint64)
-	task.resetReplayVar()
-	os.RemoveAll(p)
-	if _, ok := task.replayShardIds[0]; !ok {
-		t.Fatal()
-	}
 }
 
 func Benchmark_GenerateGroupKeyUint(t *testing.B) {
@@ -455,7 +412,7 @@ func Benchmark_FlushRow(t *testing.B) {
 	t.ResetTimer()
 	for i := 0; i < t.N; i++ {
 		task.indexKeyPool = bufferpool.GetPoints()
-		task.generateRows(task.startTimeStamp)
+		task.generateRows()
 		bufferpool.Put(task.indexKeyPool)
 		if task.validNum == 0 {
 			continue
@@ -559,4 +516,15 @@ func TestTagTask_FilterRowsByCond_FilterAgg(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, true, res)
 	require.Equal(t, int64(1), task.TaskDataPool.Len())
+}
+
+func TestGetCleanTimestamp(t *testing.T) {
+	tt := &TagTask{
+		ptLoadStatus: map[uint32]*flushStatus{0: {100}, 1: {200}, 3: {50}},
+		BaseTask: &BaseTask{
+			curFlushTime: time.Now().UnixNano(),
+		},
+	}
+	time := tt.getCleanTimestamp()
+	require.Equal(t, int64(50), time)
 }

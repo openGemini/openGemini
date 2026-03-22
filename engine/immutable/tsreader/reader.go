@@ -32,9 +32,17 @@ type TSSPReader interface {
 		ctx *immutable.ReadContext, ioPriority int) (*record.Record, error)
 }
 
-func UnrefTSSPFile(readers ...immutable.TSSPFile) {
-	for _, reader := range readers {
-		reader.UnrefFileReader()
-		reader.Unref()
+func UnrefTSSPFile(files ...immutable.TSSPFile) {
+	fileCacheManager := immutable.GetQueryfileCache()
+	if fileCacheManager != nil && len(files) <= int(fileCacheManager.GetCap()) {
+		for _, file := range files {
+			fileCacheManager.Put(file)
+			file.Unref()
+		}
+	} else {
+		for _, file := range files {
+			file.UnrefFileReader()
+			file.Unref()
+		}
 	}
 }

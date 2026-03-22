@@ -18,7 +18,6 @@ import threading
 import time
 
 import psutil
-from .metrics_handler import MetricsHandler
 from multiprocessing import get_context
 from multiprocessing.queues import Queue
 from opentelemetry import trace, metrics
@@ -29,9 +28,9 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
-metrics_handler = MetricsHandler()
-metrics_queue = Queue(ctx=get_context())
+from opentelemetry.sdk.trace.sampling import ParentBased, ALWAYS_OFF
+from opentelemetry.propagate import set_global_textmap
+from opentelemetry.trace.propagation import tracecontext
 
 # Agent Module Metrics
 # Number of tasks received
@@ -69,87 +68,84 @@ ATTRIBUTE_TASK_ID = "task_id"
 ATTRIBUTE_PROCESS = "process"
 
 
-def init_telemetry(monitor_addr: str, monitor_database: str, https_enabled: bool, sampling_interval: int):
+def init_telemetry_main_process(monitor_addr: str, monitor_database: str, https_enabled: bool, sampling_interval: int, host):
     prot = "https" if https_enabled else "http"
-    span_endpoint = f"{prot}://{monitor_addr}/api/v1/otlp/traces?db={monitor_database}"
-    metric_endpoint = f"{prot}://{monitor_addr}/api/v1/otlp/metrics?db={monitor_database}"
+    span_endpoint = f"{prot}://{monitor_addr}/api/v1/otlp/{monitor_database}/traces"
+    metric_endpoint = f"{prot}://{monitor_addr}/api/v1/otlp/{monitor_database}/metrics"
     # configurate Resource
     resource = Resource.create({
-        "service.name": "openGemini-Castor",
+        "service.name": "openGemini-castor",
+        "host": f"{host[0]}:{host[1]}"
     })
     # configurate Tracing
-    trace.set_tracer_provider(TracerProvider(resource=resource))
+    sampler = ParentBased(root=ALWAYS_OFF)
+    trace.set_tracer_provider(TracerProvider(resource=resource, sampler=sampler))
     otlp_processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=span_endpoint))
     trace.get_tracer_provider().add_span_processor(otlp_processor)
+    set_global_textmap(tracecontext.TraceContextTextMapPropagator())
     # configurate Metrics
     otlp_reader = PeriodicExportingMetricReader(
         OTLPMetricExporter(endpoint=metric_endpoint)
         , export_interval_millis=sampling_interval * 1000
     )
     metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[otlp_reader]))
-
-    init_metrics_handler(sampling_interval)
-
-
-def init_metrics_handler(sampling_interval: int):
-    init_agent_metrics()
-    init_udf_metrics()
-    init_system_metrics(sampling_interval)
+    return MainProcessMetricsHandler(sampling_interval)
 
 
-def init_agent_metrics():
-    agent_meter = metrics.get_meter("castor_agent")
-    castor_tasks = agent_meter.create_counter(
-        name=METRIC_CASTOR_TASKS,
-        description="Number of tasks received")
-    castor_tasks_active = agent_meter.create_up_down_counter(
-        name=METRIC_CASTOR_TASKS_ACTIVE,
-        description="Number of active tasks"
-    )
-    castor_tasks_success = agent_meter.create_counter(
-        name=METRIC_CASTOR_TASKS_SUCCESS,
-        description="Total number of successful tasks"
-    )
-    castor_tasks_fail = agent_meter.create_counter(
-        name=METRIC_CASTOR_TASKS_FAIL,
-        description="Total number of fail tasks"
-    )
-    castor_received_bytes = agent_meter.create_counter(
-        name=METRIC_CASTOR_RECEIVED_BYTES,
-        description="Total bytes received")
-    castor_sent_bytes = agent_meter.create_counter(
-        name=METRIC_CASTOR_SENT_BYTES,
-        description="castor_sent_bytes")
-    metrics_handler.register_counter(METRIC_CASTOR_TASKS, castor_tasks)
-    metrics_handler.register_up_down_counter(METRIC_CASTOR_TASKS_ACTIVE, castor_tasks_active)
-    metrics_handler.register_counter(METRIC_CASTOR_TASKS_SUCCESS, castor_tasks_success)
-    metrics_handler.register_counter(METRIC_CASTOR_TASKS_FAIL, castor_tasks_fail)
-    metrics_handler.register_counter(METRIC_CASTOR_RECEIVED_BYTES, castor_received_bytes)
-    metrics_handler.register_counter(METRIC_CASTOR_SENT_BYTES, castor_sent_bytes)
+class MainProcessMetricsHandler:
+    def __init__(self, sampling_interval: int):
+        # agent metrics
+        agent_meter = metrics.get_meter("castor_agent")
+        self.castor_sent_bytes = agent_meter.create_counter(
+            name=METRIC_CASTOR_SENT_BYTES,
+            description="castor_sent_bytes")
+        self.castor_received_bytes = agent_meter.create_counter(
+            name=METRIC_CASTOR_RECEIVED_BYTES,
+            description="Total bytes received")
+        self.castor_tasks_fail = agent_meter.create_counter(
+            name=METRIC_CASTOR_TASKS_FAIL,
+            description="Total number of fail tasks"
+        )
+        self.castor_tasks_success = agent_meter.create_counter(
+            name=METRIC_CASTOR_TASKS_SUCCESS,
+            description="Total number of successful tasks"
+        )
+        self.castor_tasks_active = agent_meter.create_up_down_counter(
+            name=METRIC_CASTOR_TASKS_ACTIVE,
+            description="Number of active tasks"
+        )
+        self.castor_tasks = agent_meter.create_counter(
+            name=METRIC_CASTOR_TASKS,
+            description="Number of tasks received")
+
+        # system metrics
+        init_system_metrics(sampling_interval)
 
 
-def init_udf_metrics():
-    udf_meter = metrics.get_meter("castor_udf")
-    castor_algorithm_runs = udf_meter.create_counter(
-        name=METRIC_ALGORITHM_RUNS,
-        description="how many successful runs of each algorithm"
-    )
-    castor_algorithm_fail = udf_meter.create_counter(
-        name=METRIC_ALGORITHM_FAIL,
-        description="how many failed runs of each algorithm"
-    )
-    castor_algorithm_active = udf_meter.create_up_down_counter(
-        name=METRIC_ALGORITHM_ACTIVE,
-        description="how many active runs of each algorithm"
-    )
-    castor_run_duration_seconds = udf_meter.create_histogram(
-        name=METRIC_RUN_DURATION_SECONDS,
-        description="histogram of algorithm run duration"
-    )
-    metrics_handler.register_counter(METRIC_ALGORITHM_RUNS, castor_algorithm_runs)
-    metrics_handler.register_counter(METRIC_ALGORITHM_FAIL, castor_algorithm_fail)
-    metrics_handler.register_up_down_counter(METRIC_ALGORITHM_ACTIVE, castor_algorithm_active)
-    metrics_handler.register_histogram(METRIC_RUN_DURATION_SECONDS, castor_run_duration_seconds)
+def init_telemetry():
+    return MetricsHandler()
+
+
+class MetricsHandler:
+    def __init__(self):
+        # udf metrics
+        udf_meter = metrics.get_meter("castor_udf")
+        self.castor_algorithm_active = udf_meter.create_up_down_counter(
+            name=METRIC_ALGORITHM_ACTIVE,
+            description="how many active runs of each algorithm"
+        )
+        self.castor_algorithm_fail = udf_meter.create_counter(
+            name=METRIC_ALGORITHM_FAIL,
+            description="how many failed runs of each algorithm"
+        )
+        self.castor_algorithm_run_duration = udf_meter.create_histogram(
+            name=METRIC_RUN_DURATION_SECONDS,
+            description="histogram of algorithm run duration"
+        )
+        self.castor_algorithm_runs = udf_meter.create_counter(
+            name=METRIC_ALGORITHM_RUNS,
+            description="how many successful runs of each algorithm"
+        )
 
 
 def init_system_metrics(sampling_interval: int):
@@ -169,6 +165,14 @@ def collect_system_metrics(sampling_interval: int):
         description="Memory in use",
         unit="MB"
     )
+    # first time calling cpu_percent(), pass a non_zero interval value to perform actual measurement
+    try:
+        main_process = psutil.Process()
+        main_process.cpu_percent(interval=0.1)
+        for child in main_process.children(recursive=True):
+            child.cpu_percent(interval=0.1)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return
     while True:
         try:
             main_process = psutil.Process()
@@ -178,11 +182,11 @@ def collect_system_metrics(sampling_interval: int):
             cpu_usage.set(cpu_percent, {ATTRIBUTE_PROCESS: main_process.pid})
             memory_usage.set(memory_cost / 1024 / 1024, {ATTRIBUTE_PROCESS: main_process.pid})
             for child in main_process.children(recursive=True):
-                    cpu_percent = child.cpu_percent(interval=0.1)
-                    cpu_usage.set(cpu_percent, {ATTRIBUTE_PROCESS: child.pid})
-                    memory_cost = child.memory_info().rss
-                    memory_usage.set(memory_cost / 1024 / 1024, {ATTRIBUTE_PROCESS: child.pid})
-                    cpu_total += cpu_percent
+                cpu_percent = child.cpu_percent(interval=0.1)
+                cpu_usage.set(cpu_percent, {ATTRIBUTE_PROCESS: child.pid})
+                memory_cost = child.memory_info().rss
+                memory_usage.set(memory_cost / 1024 / 1024, {ATTRIBUTE_PROCESS: child.pid})
+                cpu_total += cpu_percent
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
         cpu_usage.set(cpu_total, {ATTRIBUTE_PROCESS: "total"})

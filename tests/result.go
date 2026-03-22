@@ -41,12 +41,12 @@ type ResultSeries struct {
 func CompareSortedResults(expString, actString string) bool {
 	exp, act := &Results{}, &Results{}
 
-	err := json.Unmarshal([]byte(expString), exp)
+	err := json2.Unmarshal([]byte(expString), exp)
 	if err != nil {
 		return false
 	}
 
-	err = json.Unmarshal([]byte(actString), act)
+	err = json2.Unmarshal([]byte(actString), act)
 	if err != nil {
 		return false
 	}

@@ -59,7 +59,7 @@ func (m *CSParquetManager) Run() {
 	m.logDir = conf.GetReliabilityLogDir()
 	m.dataDir = conf.GetOutputDir()
 	m.id = uint64(time.Now().UnixNano())
-	m.ts = scheduler.NewTaskScheduler(func(chan struct{}, func()) {}, compLimiter)
+	m.ts = scheduler.NewTaskScheduler(func(chan struct{}, func()) {}, CompLimiter)
 	m.Recover()
 }
 
@@ -91,8 +91,9 @@ func (m *CSParquetManager) Recover() {
 		file := filepath.Join(m.logDir, dirs[i].Name())
 		plan := &CSParquetPlan{}
 		plan.SetLogFile(file)
-		err = ReadReliabilityLog(file, plan)
+		err = fileops.ReadReliabilityLog(file, plan)
 		if err == nil {
+			log.Error("read reliable log ")
 			m.execute(plan)
 			continue
 		}
@@ -134,10 +135,14 @@ func (m *CSParquetManager) convert(file string, db string, rp string, mst string
 	})
 	plan.DstFile = path.Join(dstPath, fmt.Sprintf("%d%s", plan.Id, parquetSuffix))
 
-	reliabilityLog, err := SaveReliabilityLog(plan, m.logDir, "", func() string {
+	reliabilityLog, err := fileops.SaveReliabilityLog(plan, m.logDir, "", func() string {
 		return fmt.Sprintf("%d.log", plan.Id)
 	})
-	if err == nil {
+	if err != nil {
+		log.Error("save reliable log failed",
+			zap.Uint64("planID", plan.Id),
+			zap.Error(err))
+	} else {
 		plan.SetLogFile(reliabilityLog)
 		m.execute(plan)
 	}

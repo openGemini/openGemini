@@ -16,17 +16,19 @@ package immutable
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
 	"sync"
 	"sync/atomic"
 
-	"github.com/golang/snappy"
 	"github.com/influxdata/influxdb/pkg/bloom"
+	"github.com/klauspost/compress/snappy"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/failpoint"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/obs"
@@ -37,7 +39,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/encoding/lz4"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
-	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
 
@@ -266,11 +267,6 @@ func (r *tsspFileReader) validate(offset, size int64) error {
 		return fmt.Errorf("invlaid read offset, %v < %v", offset, r.trailer.dataOffset)
 	}
 
-	if offset+size > r.trailer.dataOffset+r.trailer.dataSize {
-		return fmt.Errorf("read offset size out of range, [%d, %d] [%d %d]", r.trailer.dataOffset, r.trailer.dataSize,
-			offset, size)
-	}
-
 	return nil
 }
 
@@ -336,10 +332,11 @@ func (r *tsspFileReader) readSegmentMetaRecord(cm *ChunkMeta, dst *record.Record
 			if err != nil {
 				return nil, err
 			}
-		case "first", "last":
+		case "first", "last", "last_row":
 			isFirst := call.Call.Name == "first"
+			isLastRow := call.Call.Name == "last_row"
 			// one call support pre agg, other columns are aux fields
-			err = readFirstOrLast(cm, ref, dst, decs, r, copied, isFirst, ioPriority)
+			err = readFirstOrLast(cm, ref, dst, decs, r, copied, isFirst, isLastRow, ioPriority)
 			if err != nil {
 				return nil, err
 			}
@@ -415,7 +412,6 @@ func (r *tsspFileReader) readSegmentRecord(cm *ChunkMeta, segment int, dst *reco
 		}
 
 		err = decodeColumnData(ref, data, colBuilder, decs, false)
-		failpoint.Inject("mock-decodeColumnData-panic", nil)
 		if err != nil {
 			r.UnrefCachePage(cachePage)
 			err = errReadFail(r.FileName(), ref.Name, err)
@@ -465,13 +461,6 @@ func (r *tsspFileReader) decodeTimeColumn(cm *ChunkMeta, segment int, chunkData 
 // for metaBlock read
 func (r *tsspFileReader) ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32,
 	dst *pool.Buffer, ioPriority int) (rb []byte, cachePage *readcache.CachePage, err error) {
-	end := offset + int64(size)
-	mOff, mSize := r.trailer.metaOffsetSize()
-	if offset < mOff || end > mOff+mSize {
-		err = fmt.Errorf("invalid read meta offset(%d) size(%d), [%d, %d]", offset, size, mOff, mSize)
-		log.Error("read chunk meta fail", zap.String("file", r.FileName()), zap.Error(err))
-		return nil, nil, err
-	}
 
 	if dst == nil {
 		dst = &pool.Buffer{}
@@ -617,16 +606,13 @@ func chunkMetaDataAndOffsets(src []byte, itemCount uint32) ([]byte, []uint32, er
 	return src[:n], offs, nil
 }
 
-func (r *tsspFileReader) unmarshalChunkMetas(src []byte, itemCount uint32, dst []ChunkMeta) ([]ChunkMeta, error) {
+func (r *tsspFileReader) unmarshalChunkMetas(codecCtx *ChunkMetaCodecCtx, src []byte, itemCount uint32, dst []ChunkMeta) ([]ChunkMeta, error) {
 	cmData, ofs, err := chunkMetaDataAndOffsets(src, itemCount)
 	if err != nil {
 		return nil, err
 	}
 
-	var codecCtx *ChunkMetaCodecCtx
 	if r.chunkMetaCompressMode == ChunkMetaCompressSelf {
-		codecCtx = GetChunkMetaCodecCtx()
-		defer codecCtx.Release()
 		codecCtx.SetTrailer(&r.trailer)
 	}
 
@@ -660,10 +646,10 @@ func (r *tsspFileReader) unmarshalChunkMetas(src []byte, itemCount uint32, dst [
 }
 
 func (r *tsspFileReader) ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta, ioPriority int) ([]ChunkMeta, error) {
-	buf, release := pool.GetChunkMetaBuffer()
-	defer release()
+	ctx := GetChunkMetaCodecCtx()
+	defer ctx.Release()
 
-	rb, cp, err := r.ReadMetaBlock(metaIdx, m.id, m.offset, m.size, m.count, buf, ioPriority)
+	rb, cp, err := r.ReadMetaBlock(metaIdx, m.id, m.offset, m.size, m.count, &ctx.buf, ioPriority)
 	defer r.UnrefMetaCachePage(cp)
 	if err != nil {
 		log.Error("read chunk meta fail", zap.String("file", r.FileName()), zap.Error(err))
@@ -676,7 +662,7 @@ func (r *tsspFileReader) ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []Chun
 		dst = append(dst, make([]ChunkMeta, delta)...)
 	}
 	dst = dst[:0]
-	return r.unmarshalChunkMetas(rb, m.count, dst)
+	return r.unmarshalChunkMetas(ctx, rb, m.count, dst)
 }
 
 func (r *tsspFileReader) MetaIndexAt(idx int) (*MetaIndex, error) {
@@ -1129,8 +1115,9 @@ var (
 )
 
 func (r *tsspFileReader) lazyInit() error {
-	failpoint.Inject("lazyInit-error", func() {
-		failpoint.Return(fmt.Errorf("lazyInit error"))
+	failpoint.ApplyMethod("lazyInit-error", r, "LoadComponents", func() error {
+		val := failpoint.GetValue("lazyInit-error", func() {})
+		return errors.New(val.String())
 	})
 
 	if err := r.LoadComponents(); err != nil {

@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -409,6 +409,12 @@ func (s *Stream) updateShardGroupAndShardKey(database, retentionPolicy string, r
 
 	if !sameSg {
 		*asis = s.MetaClient.GetAliveShards(database, sg, false)
+		// update mst info if shard group is newly created.
+		mi, err = s.MetaClient.Measurement(database, retentionPolicy, mi.OriginName())
+		if err != nil {
+			s.logger.Error("write failed", zap.Error(err))
+			return
+		}
 	}
 
 	if (*si).Type == influxql.RANGE {
@@ -417,19 +423,10 @@ func (s *Stream) updateShardGroupAndShardKey(database, retentionPolicy string, r
 		if len((*si).ShardKey) > 0 {
 			r.ShardKey = r.ShardKey[len(r.Name)+1:]
 		}
-		var shardIdxes []int
-		if mi.InitNumOfShards == 0 {
+		shardIdxes := meta2.GetShardIdxes(mi.ShardIdexes, sg.ID)
+		// num of shards not specified and adaptive shard not enabled
+		if len(shardIdxes) == 0 {
 			shardIdxes = *asis
-		} else {
-			shardIdxes = mi.ShardIdexes[sg.ID]
-			if len(shardIdxes) == 0 { // need to update mst info if shard group is newly created.
-				mi, err = s.MetaClient.Measurement(database, retentionPolicy, mi.OriginName())
-				if err != nil {
-					s.logger.Error("write failed", zap.Error(err))
-					return
-				}
-				shardIdxes = mi.ShardIdexes[sg.ID]
-			}
 		}
 		sh = sg.ShardFor(meta2.HashID(r.ShardKey), shardIdxes)
 	}

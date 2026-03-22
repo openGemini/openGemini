@@ -70,3 +70,13 @@ func SetHardWrite(hardWriteConf bool) {
 func IsHardWrite() bool {
 	return hardWrite
 }
+
+var smartQuery bool
+
+func SetSmartQuery(en bool) {
+	smartQuery = en
+}
+
+func IsSmartQuery() bool {
+	return smartQuery
+}

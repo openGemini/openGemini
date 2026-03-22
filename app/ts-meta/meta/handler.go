@@ -22,8 +22,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/openGemini/openGemini/lib/backup"
 	"github.com/openGemini/openGemini/lib/config"
@@ -36,8 +34,8 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 type IStore interface {
@@ -53,22 +51,34 @@ type IStore interface {
 	markBalancer(enable bool) error
 	movePt(db string, pt uint32, to uint64) error
 	ExpandGroups() error
-	leaderHTTP() string
+	LeaderHTTP() string
 	leadershipTransfer() error
 	SpecialCtlData(cmd string) error
 	ModifyRepDBMasterPt(db string, rgId uint32, newMasterPtId uint32) error
 	RecoverMetaData(databases []string, metaData []byte, node map[uint64]uint64) error
+	RestoreData(metaHost string) error
+	GetConfig() *config.Meta
+	forceMetaData(*meta.Data) error
 }
 
-var httpScheme = map[bool]string{
-	true:  "https",
-	false: "http",
-}
-
-// #nosec
-var httpsClient = &http.Client{Transport: &http.Transport{
-	TLSClientConfig: config.NewTLSConfig(true),
-}}
+var (
+	httpScheme = map[bool]string{
+		true:  "https",
+		false: "http",
+	}
+	// #nosec
+	httpsClient = &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: config.NewTLSConfig(true),
+		},
+		Timeout: config.DefaultHeartbeatTimeout,
+	}
+	// #nosec
+	httpClient = &http.Client{
+		Transport: http.DefaultTransport,
+		Timeout:   config.DefaultHeartbeatTimeout,
+	}
+)
 
 // handler represents an HTTP handler for the meta service.
 type httpHandler struct {
@@ -77,11 +87,6 @@ type httpHandler struct {
 	store            IStore
 	statisticsPusher *statisticsPusher.StatisticsPusher
 	client           *metaclient.Client
-
-	analysisLock      sync.RWMutex
-	analysisCache     *AnalysisCache
-	analysisStartUp   time.Time
-	analysisLockStart time.Time
 }
 
 // newHandler returns a new instance of handler with routes.
@@ -91,7 +96,6 @@ func newHttpHandler(c *config.Meta, store IStore) *httpHandler {
 		logger: logger.NewLogger(errno.ModuleMeta).With(zap.String("service", "meta_http_handler")),
 		store:  store,
 	}
-	h.resetAnalysis()
 
 	return h
 }
@@ -116,8 +120,6 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.WrapHandler(h.serveDebug).ServeHTTP(w, r)
 		case "/getdata":
 			h.WrapHandler(h.serveGetdata).ServeHTTP(w, r) //get the Data in the store
-		case "/analysisCache":
-			h.WrapHandler(h.serveAnalysisHeartInfo).ServeHTTP(w, r)
 		case "/debug/vars":
 			h.WrapHandler(h.serveExpvar).ServeHTTP(w, r)
 		}
@@ -127,8 +129,6 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.WrapHandler(h.userSnapshot).ServeHTTP(w, r)
 		case "/metaRecover":
 			h.WrapHandler(h.metaRecover).ServeHTTP(w, r)
-		case "/analysisCache":
-			h.WrapHandler(h.serveAnalysisHeart).ServeHTTP(w, r)
 		case "/takeover":
 			h.logger.Info("serverTakeover")
 			h.WrapHandler(h.serveTakeover).ServeHTTP(w, r)
@@ -146,8 +146,14 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.WrapHandler(h.specialCtlData).ServeHTTP(w, r)
 		case "/modifyRepDBMasterPt":
 			h.WrapHandler(h.modifyRepDBMasterPt).ServeHTTP(w, r)
+		case "/backupMeta":
+			h.WrapHandler(h.backupMeta).ServeHTTP(w, r)
 		case "/recoverMeta":
 			h.WrapHandler(h.recoverMeta).ServeHTTP(w, r)
+		case "/restoreData":
+			h.WrapHandler(h.restoreData).ServeHTTP(w, r)
+		case "/forceMetaData":
+			h.WrapHandler(h.forceMetaData).ServeHTTP(w, r)
 		}
 	default:
 		http.Error(w, "", http.StatusBadRequest)
@@ -211,7 +217,7 @@ func (h *httpHandler) getOtherStat(errorMap map[string]string, status map[string
 			if h.config.HTTPSEnabled {
 				resp, err = httpsClient.Get(url)
 			} else {
-				resp, err = http.DefaultClient.Get(url)
+				resp, err = httpClient.Get(url)
 			}
 
 			if err != nil {
@@ -442,7 +448,7 @@ func (h *httpHandler) serveExpandGroups(w http.ResponseWriter, r *http.Request) 
 func (h *httpHandler) leadershipTransfer(w http.ResponseWriter, r *http.Request) {
 	err := h.store.leadershipTransfer()
 	if err != nil && strings.Contains(err.Error(), "node is not the leader") {
-		l := h.store.leaderHTTP()
+		l := h.store.LeaderHTTP()
 		if l == "" {
 			h.httpErr(errors.New("no raft leader"), w, http.StatusServiceUnavailable)
 		}
@@ -494,7 +500,7 @@ func (h *httpHandler) specialCtlData(w http.ResponseWriter, r *http.Request) {
 
 	err := h.store.SpecialCtlData(cmd)
 	if errno.Equal(err, errno.MetaIsNotLeader) {
-		l := h.store.leaderHTTP()
+		l := h.store.LeaderHTTP()
 		if l == "" {
 			h.httpErr(errors.New("no leader"), w, http.StatusServiceUnavailable)
 			return
@@ -568,6 +574,34 @@ func (h *httpHandler) modifyRepDBMasterPt(w http.ResponseWriter, r *http.Request
 	h.logger.Info("modifyRepDBMasterPt", zap.String("db", db), zap.Uint64("rgId", rgId), zap.Uint64("newMasterPtId", newMasterPtId), zap.Error(err))
 }
 
+func (h *httpHandler) backupMeta(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	h.logger.Info("backupMeta query", zap.String("q", fmt.Sprintln(q)))
+	backupPath := q.Get(backup.BackupPath)
+	if backupPath == "" {
+		http.Error(w, "missing the required parameter backupPath", http.StatusBadRequest)
+		return
+	}
+	isRemote := q.Get(backup.IsRemote) == "true"
+	isNode := q.Get(backup.IsNode) == "true"
+	var dbs []string
+	if q.Get(backup.DataBases) != "" {
+		dbs = strings.Split(q.Get(backup.DataBases), ",")
+	}
+
+	b := &Backup{
+		IsRemote:   isRemote,
+		IsNode:     isNode,
+		BackupPath: backupPath,
+		Databases:  dbs,
+		MetaDir:    h.config.Dir,
+	}
+	if err := b.RunBackupMeta(); err != nil {
+		logger.GetLogger().Error("run backup error", zap.Error(err))
+		http.Error(w, "run backup error", http.StatusBadRequest)
+	}
+}
+
 func (h *httpHandler) recoverMeta(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	h.logger.Info("recoverMeta query", zap.String("q", fmt.Sprintln(q)))
@@ -592,7 +626,7 @@ func (h *httpHandler) recoverMeta(w http.ResponseWriter, r *http.Request) {
 	}
 
 	defer func() {
-		err = h.store.userSnapshot(0)
+		err = h.store.userSnapshot(uint32(h.store.GetConfig().Version))
 		if err != nil {
 			h.logger.Error("run userSnapshot error", zap.Error(err))
 		}
@@ -606,6 +640,7 @@ func (h *httpHandler) recoverMeta(w http.ResponseWriter, r *http.Request) {
 	if len(databases) != 0 {
 		for _, d := range databases {
 			dbPts := globalService.store.getDbPtsByDbnameV2(d)
+			h.logger.Info("assignDbpts", zap.Any("dbPts", dbPts))
 			if err := assignDbpt(dbPts); err != nil {
 				http.Error(w, fmt.Sprintf("recover meta error: %s", err.Error()), http.StatusBadRequest)
 				return
@@ -620,4 +655,92 @@ func (h *httpHandler) recoverMeta(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// curl -i -X POST 'http://127.0.0.1:8091/restoreData?inUseDataHosts=127.0.0.1:8000'
+func (h *httpHandler) restoreData(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	h.logger.Info(fmt.Sprintf("url: %v, param: %v\n", r.URL.Path, r.URL.RawQuery))
+
+	// Get the requested lease name.
+	dataHost := q.Get("inUseDataHosts")
+
+	if dataHost == "" {
+		http.Error(w, "error data host", http.StatusBadRequest)
+		return
+	}
+
+	err := h.store.RestoreData(dataHost)
+
+	if errno.Equal(err, errno.MetaIsNotLeader) {
+		l := h.store.LeaderHTTP()
+		if l == "" {
+			h.httpErr(errors.New("no leader"), w, http.StatusServiceUnavailable)
+			return
+		}
+		scheme := "http://"
+		if h.config.HTTPSEnabled {
+			scheme = "https://"
+		}
+
+		url := fmt.Sprintf("%s%s/restoreData?%s", scheme, l, r.URL.RawQuery)
+		h.logger.Info("Redirect", zap.String("url", url))
+		http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+		return
+	}
+
+	if err != nil {
+		h.logger.Error("store.restoreData error", zap.Error(err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Apply was successful. Return the new store index to the client.
+	resp := &proto2.Response{
+		OK:    proto.Bool(true),
+		Index: proto.Uint64(h.store.index()),
+	}
+
+	h.logger.Info("restoreData resp", zap.String("dataHost", dataHost), zap.Any("resp", resp))
+	// Marshal the response.
+	b, err := json.Marshal(resp)
+	if err != nil {
+		h.httpErr(err, w, http.StatusInternalServerError)
+		return
+	}
+
+	// Send response to client.
+	w.WriteHeader(http.StatusOK)
+	w.Header().Add("Content-Type", "application/json")
+	b = append(b, "\n"...)
+	_, err = w.Write(b)
+	if err != nil {
+		h.logger.Error("write result failed", zap.Error(err))
+	}
+}
+
+// curl -i -XPOST "http://127.0.01:8091/forceMetaData" \
+// --data-binary "{}"
+func (h *httpHandler) forceMetaData(w http.ResponseWriter, r *http.Request) {
+	h.logger.Info("forceMetaData")
+	var err error
+	defer func() {
+		h.handleResponse(w, err)
+	}()
+	defer func(Body io.ReadCloser) {
+		err = Body.Close()
+		if err != nil {
+			h.logger.Error("close req fail", zap.Error(err))
+		}
+	}(r.Body)
+	all, err := io.ReadAll(r.Body)
+	if err != nil {
+		return
+	}
+	metaData := &meta.Data{}
+	err = json.Unmarshal(all, metaData)
+	if err != nil {
+		return
+	}
+	err = h.store.forceMetaData(metaData)
 }

@@ -110,9 +110,6 @@ func NewStreamDetachedReader(readerCtx *immutable.FileReaderContext, path *spars
 func (r *StreamDetachedReader) Init() (err error) {
 	mst := r.options.GetMeasurements()[0]
 	r.dataPath = obs.GetBaseMstPath(r.ctx.shardPath, mst.Name)
-	if immutable.GetDetachedFlushEnabled() {
-		r.localPath = obs.GetLocalMstPath(obs.GetPrefixDataPath(), r.dataPath)
-	}
 	chunkCount, err := immutable.GetMetaIndexChunkCount(r.path.Option(), r.dataPath)
 	if err != nil {
 		return
@@ -313,7 +310,7 @@ func (t *StreamDetachedReader) filterBySk(currInfo *colstore.DetachedPKInfo) (bo
 	for j := range t.skFileReader {
 		t.tempFrs[0].Start += uint32(currInfo.StartBlockId)
 		t.tempFrs[0].End += uint32(currInfo.StartBlockId)
-		frs, err := t.ctx.skIndexReader.Scan(t.skFileReader[j], t.tempFrs)
+		frs, _, err := t.ctx.skIndexReader.Scan(t.skFileReader[j], t.tempFrs)
 		if err != nil {
 			return false, err
 		}

@@ -19,7 +19,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/config"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 func normalisedIndexDuration(igd, sgd time.Duration) time.Duration {
@@ -63,6 +63,7 @@ type IndexGroupInfo struct {
 	DeletedAt  time.Time
 	EngineType config.EngineType
 	ClearInfo  *ReplicaClearInfo
+	Timezone   string
 }
 
 // Choose the first toCold index as the NoClear index.
@@ -132,6 +133,7 @@ func (igi *IndexGroupInfo) marshal() *proto2.IndexGroupInfo {
 		DeletedAt:  proto.Int64(MarshalTime(igi.DeletedAt)),
 		EngineType: proto.Uint32(uint32(igi.EngineType)),
 		ClearInfo:  igi.ClearInfo.marshal(),
+		Timezone:   proto.String(igi.Timezone),
 	}
 
 	pb.Indexes = make([]*proto2.IndexInfo, len(igi.Indexes))
@@ -156,6 +158,7 @@ func (igi *IndexGroupInfo) unmarshal(pb *proto2.IndexGroupInfo) {
 	}
 	igi.DeletedAt = UnmarshalTime(pb.GetDeletedAt())
 	igi.EngineType = config.EngineType(pb.GetEngineType())
+	igi.Timezone = pb.GetTimezone()
 
 	if len(pb.GetIndexes()) > 0 {
 		igi.Indexes = make([]IndexInfo, len(pb.GetIndexes()))

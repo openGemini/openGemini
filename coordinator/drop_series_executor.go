@@ -16,11 +16,13 @@ package coordinator
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"go.uber.org/zap"
 )
 
 type DropSeriesExecutor struct {
@@ -40,6 +42,15 @@ func NewDropSeriesExecutor(logger *logger.Logger, mc meta.MetaClient, me IMetaEx
 }
 
 func (e *DropSeriesExecutor) Execute(stmt *influxql.DropSeriesStatement, database string) error {
+	if expr, ok := stmt.Condition.(*influxql.BinaryExpr); ok {
+		if expr.Op != influxql.EQREGEX &&
+			expr.Op != influxql.EQ && expr.Op != influxql.NEQ {
+			return errors.New("where condition only support =, !=, =~")
+		}
+	} else {
+		return errors.New("where condition is illegal")
+	}
+
 	if len(stmt.Sources) != 1 {
 		return errors.New("there must be and can only be one table")
 	}
@@ -51,13 +62,19 @@ func (e *DropSeriesExecutor) Execute(stmt *influxql.DropSeriesStatement, databas
 		return errors.New("the current input table does not exist")
 	}
 	names := make([]string, 0, len(mis))
-	for _, m := range mis {
-		names = append(names, m.Name)
+	for k := range mis {
+		names = append(names, k)
 	}
 
 	err = e.me.EachDBNodes(database, func(nodeID uint64, pts []uint32) error {
 		err = e.store.DropSeries(nodeID, database, pts, names, stmt.Condition)
 		return err
-	})
+	}, e.mc.GetNodePtsMap)
+
+	if err != nil {
+		e.logger.Error("exec drop series command fail", zap.Error(err))
+		return fmt.Errorf("exec drop series command fail, retry later please: %v", err)
+	}
+
 	return err
 }

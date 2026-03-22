@@ -20,7 +20,7 @@ import (
 	"time"
 
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 type DurationDescriptor struct {
@@ -157,6 +157,7 @@ type IndexDescriptor struct {
 	IndexID      uint64
 	IndexGroupID uint64
 	TimeRange    TimeRangeInfo
+	Timezone     string
 }
 
 type TimeRangeInfo struct {
@@ -207,6 +208,7 @@ func (i *IndexDescriptor) marshal() *proto2.IndexDescriptor {
 	pb.IndexID = proto.Uint64(i.IndexID)
 	pb.IndexGroupID = proto.Uint64(i.IndexGroupID)
 	pb.TimeRange = i.TimeRange.marshal()
+	pb.Timezone = &i.Timezone
 	return pb
 }
 
@@ -214,6 +216,7 @@ func (i *IndexDescriptor) unmarshal(index *proto2.IndexDescriptor) {
 	i.IndexID = index.GetIndexID()
 	i.IndexGroupID = index.GetIndexGroupID()
 	i.TimeRange.unmarshal(index.GetTimeRange())
+	i.Timezone = index.GetTimezone()
 }
 
 func (d *ShardDurationInfo) MarshalBinary() ([]byte, error) {
@@ -524,12 +527,14 @@ func (cis *CardinalityInfos) SortAndMerge() {
 
 type CardinalityInfo struct {
 	TimeRange   TimeRangeInfo
+	Timezone    string
 	Cardinality uint64
 }
 
 func (c *CardinalityInfo) marshal() *proto2.CardinalityInfo {
 	pb := &proto2.CardinalityInfo{
 		TimeRange:   c.TimeRange.marshal(),
+		Timezone:    &c.Timezone,
 		Cardinality: proto.Uint64(c.Cardinality),
 	}
 	return pb
@@ -537,6 +542,7 @@ func (c *CardinalityInfo) marshal() *proto2.CardinalityInfo {
 
 func (c *CardinalityInfo) unmarshal(pb *proto2.CardinalityInfo) {
 	c.TimeRange.unmarshal(pb.GetTimeRange())
+	c.Timezone = pb.GetTimezone()
 	c.Cardinality = pb.GetCardinality()
 }
 
@@ -635,5 +641,123 @@ func (s *ShowClusterInfo) UnmarshalBinary(buf []byte) error {
 	for i := range pb.Events {
 		s.Events[i].unmarshal(pb.Events[i])
 	}
+	return nil
+}
+
+type DbPtLastIndexInfo struct {
+	Database  string
+	PtId      uint32
+	LastIndex uint64
+	NodeId    uint64
+}
+
+func (l *DbPtLastIndexInfo) marshal() *proto2.DbPtLastIndexInfo {
+	pb := &proto2.DbPtLastIndexInfo{
+		Database:  proto.String(l.Database),
+		PtId:      proto.Uint32(l.PtId),
+		LastIndex: proto.Uint64(l.LastIndex),
+	}
+	return pb
+}
+
+func (l *DbPtLastIndexInfo) unmarshal(pb *proto2.DbPtLastIndexInfo) {
+	l.Database = pb.GetDatabase()
+	l.PtId = pb.GetPtId()
+	l.LastIndex = pb.GetLastIndex()
+}
+
+type ShowLastInfoResponse struct {
+	Infos []DbPtLastIndexInfo
+	Err   error
+}
+
+func (r *ShowLastInfoResponse) MarshalBinary() ([]byte, error) {
+	pb := &proto2.ShowLastInfoResponse{}
+	pb.Infos = make([]*proto2.DbPtLastIndexInfo, len(r.Infos))
+	for i := range r.Infos {
+		pb.Infos[i] = r.Infos[i].marshal()
+	}
+	if r.Err != nil {
+		pb.Err = proto.String(r.Err.Error())
+	}
+	return proto.Marshal(pb)
+}
+
+func (r *ShowLastInfoResponse) UnmarshalBinary(buf []byte) error {
+	pb := &proto2.ShowLastInfoResponse{}
+	if err := proto.Unmarshal(buf, pb); err != nil {
+		return err
+	}
+	r.Infos = make([]DbPtLastIndexInfo, len(pb.Infos))
+	for i := range pb.Infos {
+		r.Infos[i].unmarshal(pb.Infos[i])
+	}
+	if pb.Err != nil {
+		r.Err = errors.New(pb.GetErr())
+	}
+	return nil
+}
+
+func (r *ShowLastInfoResponse) Error() error {
+	return r.Err
+}
+
+type MstWriteStatus map[string]int64
+
+type PTMstWriteStatus map[uint32]MstWriteStatus
+
+type RPPTWriteStatusResponse struct {
+	StatusInfo PTMstWriteStatus
+	Error      error
+}
+
+func (r *RPPTWriteStatusResponse) marshal() *proto2.RPPTWriteStatusResponse {
+	pb := &proto2.RPPTWriteStatusResponse{}
+	pb.PtMstWriteStatus = make(map[uint32]*proto2.MstWriteStatus, len(r.StatusInfo))
+
+	for ptId, mstWriteStatus := range r.StatusInfo {
+		pbMstWriteStatus := &proto2.MstWriteStatus{}
+		pbMstWriteStatus.MstWriteStatus = make(map[string]int64, len(mstWriteStatus))
+
+		for mstName, status := range mstWriteStatus {
+			pbMstWriteStatus.MstWriteStatus[mstName] = status
+		}
+
+		pb.PtMstWriteStatus[ptId] = pbMstWriteStatus
+	}
+	if r.Error != nil {
+		pb.Err = proto.String(r.Error.Error())
+	}
+	return pb
+}
+
+func (r *RPPTWriteStatusResponse) MarshalBinary() ([]byte, error) {
+	pb := r.marshal()
+	return proto.Marshal(pb)
+}
+
+func (r *RPPTWriteStatusResponse) unmarshal(pb *proto2.RPPTWriteStatusResponse) {
+	r.StatusInfo = make(PTMstWriteStatus, len(pb.GetPtMstWriteStatus()))
+
+	for ptId, pbMstWriteStatus := range pb.GetPtMstWriteStatus() {
+		mstWriteStatus := make(MstWriteStatus, len(pbMstWriteStatus.GetMstWriteStatus()))
+
+		for mstName, status := range pbMstWriteStatus.GetMstWriteStatus() {
+			mstWriteStatus[mstName] = status
+		}
+
+		r.StatusInfo[ptId] = mstWriteStatus
+	}
+	if pb.Err != nil {
+		r.Error = errors.New(pb.GetErr())
+	}
+}
+
+func (r *RPPTWriteStatusResponse) UnmarshalBinary(buf []byte) error {
+	pb := &proto2.RPPTWriteStatusResponse{}
+	if err := proto.Unmarshal(buf, pb); err != nil {
+		return err
+	}
+	r.unmarshal(pb)
 	return nil
 }

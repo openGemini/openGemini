@@ -23,8 +23,8 @@ import (
 	"github.com/hashicorp/raft"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 // storeFSM represents the finite state machine used by Store to interact with Raft.
@@ -51,12 +51,13 @@ func (fsm *storeFSM) ApplyBatch(logs []*raft.Log) []interface{} {
 			panic(fmt.Errorf("cannot marshal command: %s err %+v", string(logs[i].Data), err))
 		}
 		if cmd.GetType() != proto2.Command_VerifyDataNodeCommand {
-			fsm.Logger.Info(fmt.Sprintf("BatchApply log term %d index %d type %d", logs[i].Term, logs[i].Index, int32(cmd.GetType())))
+			// log cmd name
+			fsm.Logger.Info("BatchApply log", zap.Uint64("term", logs[i].Term), zap.Uint64("index", logs[i].Index), zap.String("type", cmd.GetType().String()))
 		}
-		ret[i] = fsm.executeCmd(cmd)
+		ret[i] = fsm.executeCmd(&cmd)
 		if ret[i] == nil {
 			dataChanged = true
-			fsm.data.AddCmdAsOpToOpMap(cmd, logs[i].Index)
+			fsm.data.AddCmdAsOpToOpMap(&cmd, logs[i].Index)
 			if cmd.GetType() != proto2.Command_UpdateNodeTmpIndexCommand {
 				fsm.data.UpdateNodeTmpIndexCommandStart = logs[i].Index
 			}
@@ -88,8 +89,9 @@ func (fsm *storeFSM) Apply(l *raft.Log) interface{} {
 		s.cacheMu.Lock()
 		defer s.cacheMu.Unlock()
 	}
-	fsm.Logger.Info(fmt.Sprintf("Apply log term %d index %d type %d", l.Term, l.Index, int32(cmd.GetType())))
-	err := fsm.executeCmd(cmd)
+	// log cmd name
+	fsm.Logger.Info("Apply log", zap.Uint64("term", l.Term), zap.Uint64("index", l.Index), zap.String("type", cmd.GetType().String()))
+	err := fsm.executeCmd(&cmd)
 
 	// Copy term and index to new metadata.
 	fsm.data.Term = l.Term
@@ -98,7 +100,7 @@ func (fsm *storeFSM) Apply(l *raft.Log) interface{} {
 	if err != nil {
 		return err
 	}
-	fsm.data.AddCmdAsOpToOpMap(cmd, l.Index)
+	fsm.data.AddCmdAsOpToOpMap(&cmd, l.Index)
 	if cmd.GetType() != proto2.Command_UpdateNodeTmpIndexCommand {
 		fsm.data.UpdateNodeTmpIndexCommandStart = l.Index
 	}
@@ -175,6 +177,13 @@ var applyFunc = map[proto2.Command_Type]func(fsm *storeFSM, cmd *proto2.Command)
 	proto2.Command_UpdateIndexInfoTierCommand:       applyUpdateIndexInfoTier,
 	proto2.Command_ReplaceMergeShardsCommand:        applyReplaceMergeShards,
 	proto2.Command_RecoverMetaData:                  applyRecoverMetaData,
+	proto2.Command_AlterShardsNumCommand:            applyAlterShardsNum,
+	proto2.Command_ClearUselessDataNodeCommand:      applyClearUselessDataNode,
+	proto2.Command_CreateResourceCommand:            applyCreateResource,
+	proto2.Command_DropResourceCommand:              applyDropResource,
+	proto2.Command_CreateTaskCommand:                applyCreateTask,
+	proto2.Command_DropTaskCommand:                  applyDropTask,
+	proto2.Command_UpdateShardingPlanCommand:        applyUpdateShardingPlan,
 }
 
 func applyCreateDatabase(fsm *storeFSM, cmd *proto2.Command) interface{} {
@@ -437,9 +446,37 @@ func applyRecoverMetaData(fsm *storeFSM, cmd *proto2.Command) interface{} {
 	return fsm.applyRecoverMetaData(cmd)
 }
 
-func (fsm *storeFSM) executeCmd(cmd proto2.Command) interface{} {
+func applyAlterShardsNum(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyAlterShardsNum(cmd)
+}
+
+func applyClearUselessDataNode(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyClearUselessDataNodeCommand(cmd)
+}
+
+func applyCreateResource(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyCreateResource(cmd)
+}
+
+func applyDropResource(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyDropResource(cmd)
+}
+
+func applyCreateTask(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyCreateTask(cmd)
+}
+
+func applyDropTask(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyDropTask(cmd)
+}
+
+func applyUpdateShardingPlan(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyShardingPlan(cmd)
+}
+
+func (fsm *storeFSM) executeCmd(cmd *proto2.Command) interface{} {
 	if handler, ok := applyFunc[cmd.GetType()]; ok {
-		return handler(fsm, &cmd)
+		return handler(fsm, cmd)
 	}
 	fsm.Logger.Error("cannot apply command: %x", zap.Int32("typ", int32(cmd.GetType())))
 	return nil
@@ -470,7 +507,7 @@ func (fsm *storeFSM) applyCreateDbPtViewCommand(cmd *proto2.Command) interface{}
 }
 
 func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateDatabaseCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateDatabaseCommand_Command)
 	v, ok := ext.(*proto2.CreateDatabaseCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a CreateDatabaseCommand", ext))
@@ -527,7 +564,7 @@ func (fsm *storeFSM) applyMarkDatabaseDeleteCommand(cmd *proto2.Command) interfa
 }
 
 func (fsm *storeFSM) applyDropDatabaseCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DropDatabaseCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_DropDatabaseCommand_Command)
 	v, ok := ext.(*proto2.DropDatabaseCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a DropDatabaseCommand", ext))
@@ -565,7 +602,7 @@ func (fsm *storeFSM) applyCreateRetentionPolicyCommand(cmd *proto2.Command) inte
 }
 
 func (fsm *storeFSM) applyCreateContinuousQueryCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateContinuousQueryCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateContinuousQueryCommand_Command)
 	v, ok := ext.(*proto2.CreateContinuousQueryCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a CreateContinuousQueryCommand", ext))
@@ -584,7 +621,7 @@ func (fsm *storeFSM) applyContinuousQueryReportCommand(cmd *proto2.Command) inte
 }
 
 func (fsm *storeFSM) applyDropContinuousQueryCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DropContinuousQueryCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_DropContinuousQueryCommand_Command)
 	v, ok := ext.(*proto2.DropContinuousQueryCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a DropContinuousQueryCommand", ext))
@@ -601,7 +638,7 @@ func (fsm *storeFSM) applyDropContinuousQueryCommand(cmd *proto2.Command) interf
 
 // applyNotifyCQLeaseChangedCommand notify all sql that cq lease has been changed.
 func (fsm *storeFSM) applyNotifyCQLeaseChangedCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_NotifyCQLeaseChangedCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_NotifyCQLeaseChangedCommand_Command)
 	_, ok := ext.(*proto2.NotifyCQLeaseChangedCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a NotifyCQLeaseChangedCommand", ext))
@@ -671,7 +708,7 @@ func (fsm *storeFSM) applySetAdminPrivilegeCommand(cmd *proto2.Command) interfac
 }
 
 func (fsm *storeFSM) applySetDataCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_SetDataCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_SetDataCommand_Command)
 	v := ext.(*proto2.SetDataCommand)
 
 	// Overwrite data.
@@ -699,7 +736,7 @@ func (fsm *storeFSM) applyCreateDataNodeCommand(cmd *proto2.Command) interface{}
 }
 
 func (fsm *storeFSM) applyCreateSqlNodeCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateSqlNodeCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateSqlNodeCommand_Command)
 	v, ok := ext.(*proto2.CreateSqlNodeCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a CreateSqlNodeCommand", ext))
@@ -741,7 +778,7 @@ func (fsm *storeFSM) applyUpdateNodeStatusCommand(cmd *proto2.Command) interface
 }
 
 func (fsm *storeFSM) applyUpdateSqlNodeStatusCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateSqlNodeStatusCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdateSqlNodeStatusCommand_Command)
 	v, ok := ext.(*proto2.UpdateSqlNodeStatusCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a UpdateSqlNodeStatusCommand", ext))
@@ -750,7 +787,7 @@ func (fsm *storeFSM) applyUpdateSqlNodeStatusCommand(cmd *proto2.Command) interf
 }
 
 func (fsm *storeFSM) applyUpdateMetaNodeStatusCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateMetaNodeStatusCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdateMetaNodeStatusCommand_Command)
 	v, ok := ext.(*proto2.UpdateMetaNodeStatusCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a UpdateMetaNodeStatusCommand", ext))
@@ -759,13 +796,13 @@ func (fsm *storeFSM) applyUpdateMetaNodeStatusCommand(cmd *proto2.Command) inter
 }
 
 func (fsm *storeFSM) applyCreateEventCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateEventCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateEventCommand_Command)
 	v := ext.(*proto2.CreateEventCommand)
 	return fsm.data.CreateMigrateEvent(v.GetEventInfo())
 }
 
 func (fsm *storeFSM) applyUpdateEventCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateEventCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdateEventCommand_Command)
 	v := ext.(*proto2.UpdateEventCommand)
 	return fsm.data.UpdateMigrateEvent(v.GetEventInfo())
 }
@@ -775,7 +812,7 @@ func (fsm *storeFSM) applyUpdatePtInfoCommand(cmd *proto2.Command) interface{} {
 }
 
 func (fsm *storeFSM) applyRemoveEvent(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_RemoveEventCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_RemoveEventCommand_Command)
 	v := ext.(*proto2.RemoveEventCommand)
 	return fsm.data.RemoveEventInfo(v.GetEventId())
 }
@@ -840,7 +877,7 @@ func (fsm *storeFSM) applyUpdateShardDownSampleInfoCommand(cmd *proto2.Command) 
 }
 
 func (fsm *storeFSM) applyMarkTakeoverCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_MarkTakeoverCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_MarkTakeoverCommand_Command)
 	v := ext.(*proto2.MarkTakeoverCommand)
 
 	fsm.data.MarkTakeover(v.GetEnable())
@@ -848,7 +885,7 @@ func (fsm *storeFSM) applyMarkTakeoverCommand(cmd *proto2.Command) interface{} {
 }
 
 func (fsm *storeFSM) applyMarkBalancerCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_MarkBalancerCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_MarkBalancerCommand_Command)
 	v := ext.(*proto2.MarkBalancerCommand)
 
 	fsm.data.MarkBalancer(v.GetEnable())
@@ -876,7 +913,7 @@ func (fsm *storeFSM) applyUpdateMeasurementCommand(cmd *proto2.Command) interfac
 }
 
 func (fsm *storeFSM) applyUpdateNodeTmpIndexCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateNodeTmpIndexCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdateNodeTmpIndexCommand_Command)
 	v, ok := ext.(*proto2.UpdateNodeTmpIndexCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a UpdateNodeTmpIndexCommand", ext))
@@ -885,7 +922,7 @@ func (fsm *storeFSM) applyUpdateNodeTmpIndexCommand(cmd *proto2.Command) interfa
 }
 
 func (fsm *storeFSM) applyInsertFilesCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_InsertFilesCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_InsertFilesCommand_Command)
 	v, ok := ext.(*proto2.InsertFilesCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a InsertFilesCommand", ext))
@@ -911,4 +948,32 @@ func (fsm *storeFSM) applyReplaceMergeShards(cmd *proto2.Command) interface{} {
 
 func (fsm *storeFSM) applyRecoverMetaData(cmd *proto2.Command) interface{} {
 	return meta2.ApplyRecoverMetaData(fsm.data, cmd)
+}
+
+func (fsm *storeFSM) applyAlterShardsNum(cmd *proto2.Command) interface{} {
+	return meta2.ApplyAlterShardsNum(fsm.data, cmd)
+}
+
+func (fsm *storeFSM) applyClearUselessDataNodeCommand(cmd *proto2.Command) interface{} {
+	return meta2.ApplyClearUselessDataNodeCommand(fsm.data, cmd)
+}
+
+func (fsm *storeFSM) applyCreateResource(cmd *proto2.Command) interface{} {
+	return meta2.ApplyCreateResource(fsm.data, cmd)
+}
+
+func (fsm *storeFSM) applyDropResource(cmd *proto2.Command) interface{} {
+	return meta2.ApplyDropResource(fsm.data, cmd)
+}
+
+func (fsm *storeFSM) applyCreateTask(cmd *proto2.Command) interface{} {
+	return meta2.ApplyCreateTask(fsm.data, cmd)
+}
+
+func (fsm *storeFSM) applyDropTask(cmd *proto2.Command) interface{} {
+	return meta2.ApplyDropTask(fsm.data, cmd)
+}
+
+func (fsm *storeFSM) applyShardingPlan(cmd *proto2.Command) interface{} {
+	return meta2.ApplyShardingPlan(fsm.data, cmd)
 }

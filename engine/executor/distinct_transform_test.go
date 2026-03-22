@@ -16,11 +16,13 @@ package executor_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/stretchr/testify/assert"
 )
@@ -46,9 +48,9 @@ func buildChunk2(b *executor.ChunkBuilder) executor.Chunk {
 	inCk2 := b.NewChunk("mst")
 
 	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
-		*ParseChunkTags("name=a"), *ParseChunkTags("name=b"),
-	}, []int{0, 4})
-	inCk2.AppendIntervalIndexes([]int{0, 4})
+		*ParseChunkTags("name=a"),
+	}, []int{0})
+	inCk2.AppendIntervalIndexes([]int{0})
 	inCk2.AppendTimes([]int64{9 * 60 * 1000000000, 10 * 60 * 1000000000, 11 * 60 * 1000000000, 13 * 60 * 1000000000, 14 * 60 * 1000000000})
 
 	inCk2.Column(0).AppendFloatValues([]float64{1.0, 1.0, 1.0, 1.0, 3.0})
@@ -63,9 +65,9 @@ func buildChunk3(b *executor.ChunkBuilder) executor.Chunk {
 	inCk3 := b.NewChunk("mst")
 
 	inCk3.AppendTagsAndIndexes([]executor.ChunkTags{
-		*ParseChunkTags("name=b"), *ParseChunkTags("name=c"),
-	}, []int{0, 4})
-	inCk3.AppendIntervalIndexes([]int{0, 4})
+		*ParseChunkTags("name=a"),
+	}, []int{0})
+	inCk3.AppendIntervalIndexes([]int{0})
 	inCk3.AppendTimes([]int64{15 * 60 * 1000000000, 16 * 60 * 1000000000, 17 * 60 * 1000000000, 18 * 60 * 1000000000, 19 * 60 * 1000000000})
 
 	inCk3.Column(0).AppendFloatValues([]float64{6.0, 1.0, 1.0, 1.0, 3.0})
@@ -80,7 +82,8 @@ func buildChunk4(b *executor.ChunkBuilder) executor.Chunk {
 	inCk3 := b.NewChunk("mst")
 
 	inCk3.AppendTagsAndIndexes([]executor.ChunkTags{
-		*ParseChunkTags("name=d")}, []int{0})
+		*ParseChunkTags("name=a"),
+	}, []int{0})
 	inCk3.AppendIntervalIndexes([]int{0})
 	inCk3.AppendTimes([]int64{20 * 60 * 1000000000, 21 * 60 * 1000000000, 22 * 60 * 1000000000, 23 * 60 * 1000000000, 24 * 60 * 1000000000})
 
@@ -96,7 +99,8 @@ func buildChunk5(b *executor.ChunkBuilder) executor.Chunk {
 	inCk3 := b.NewChunk("mst")
 
 	inCk3.AppendTagsAndIndexes([]executor.ChunkTags{
-		*ParseChunkTags("name=d")}, []int{0})
+		*ParseChunkTags("name=a"),
+	}, []int{0})
 	inCk3.AppendIntervalIndexes([]int{0})
 	inCk3.AppendTimes([]int64{25 * 60 * 1000000000, 26 * 60 * 1000000000, 27 * 60 * 1000000000, 28 * 60 * 1000000000, 29 * 60 * 1000000000})
 
@@ -112,9 +116,9 @@ func buildChunk6(b *executor.ChunkBuilder) executor.Chunk {
 	inCk3 := b.NewChunk("mst")
 
 	inCk3.AppendTagsAndIndexes([]executor.ChunkTags{
-		*ParseChunkTags("name=e"),
-		*ParseChunkTags("name=f")}, []int{0, 1})
-	inCk3.AppendIntervalIndexes([]int{0, 1})
+		*ParseChunkTags("name=a"),
+	}, []int{0})
+	inCk3.AppendIntervalIndexes([]int{0})
 	inCk3.AppendTimes([]int64{30 * 60 * 1000000000, 31 * 60 * 1000000000})
 
 	inCk3.Column(0).AppendFloatValues([]float64{11.0, 12.0})
@@ -152,8 +156,9 @@ func buildDstOutputChunk() []executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
-		*ParseChunkTags("name=a"), *ParseChunkTags("name=b"), *ParseChunkTags("name=d"), *ParseChunkTags("name=e"), *ParseChunkTags("name=f")}, []int{0, 2, 4, 5, 6})
-	chunk.AppendIntervalIndexes([]int{0, 2, 4, 5, 6})
+		*ParseChunkTags("name=a"),
+	}, []int{0})
+	chunk.AppendIntervalIndexes([]int{0})
 	chunk.AppendTimes([]int64{1 * 60 * 1000000000, 4 * 60 * 1000000000, 14 * 60 * 1000000000, 15 * 60 * 1000000000, 22 * 60 * 1000000000, 30 * 60 * 1000000000, 31 * 60 * 1000000000})
 
 	chunk.Column(0).AppendFloatValues([]float64{1.0, 1.0, 3.0, 6.0, 5.0, 11.0, 12.0})
@@ -171,19 +176,325 @@ func TestDistinctTransform(t *testing.T) {
 	inChunks := buildInputChunks()
 	dstChunks := buildDstOutputChunk()
 
-	opt := query.ProcessorOptions{
-		Dimensions: []string{"name"},
-		Interval:   hybridqp.Interval{Duration: 34 * 60 * 1000000000 * time.Nanosecond},
-		Ordered:    true,
-		Ascending:  true,
-		ChunkSize:  10,
-	}
+	opt := query.ProcessorOptions{ChunkSize: 10}
+	fields := buildInRowDataTypeIntegral().Fields()
+	columnNames := []string{"value1", "value2"}
+	schema := executor.NewQuerySchema(fields, columnNames, &opt, nil)
 
 	testDistinctTransformBase(
 		t,
 		inChunks, dstChunks,
 		buildInRowDataTypeIntegral(), buildInRowDataTypeIntegral(),
-		&opt,
+		schema,
+	)
+}
+
+func buildDistinctSchema() *executor.QuerySchema {
+	opt := query.ProcessorOptions{
+		ChunkSize: 10,
+	}
+	fields := buildDistinctRowData().Fields()
+	columnNames := []string{"f0", "f1", "f2", "f3", "f4"}
+	schema := executor.NewQuerySchema(fields, columnNames, &opt, nil)
+	return schema
+}
+
+func buildDistinctRowData() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "f0", Type: influxql.Tag},
+		influxql.VarRef{Val: "f1", Type: influxql.Integer},
+		influxql.VarRef{Val: "f2", Type: influxql.Float},
+		influxql.VarRef{Val: "f3", Type: influxql.String},
+		influxql.VarRef{Val: "f4", Type: influxql.Boolean},
+	)
+	return rowDataType
+}
+
+func buildInCksByDistCols() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildDistinctRowData()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("t1=a,t2=b"),
+	}, []int{0})
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
+
+	inCk1.Column(0).AppendStringValues([]string{"a", "b", "b", "c", "c"})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inCk1.Column(1).AppendIntegerValues([]int64{1, 1, 1, 1, 2})
+	inCk1.Column(1).AppendManyNotNil(5)
+
+	inCk1.Column(2).AppendFloatValues([]float64{4.0, 2.0, 1.0, 1.0, 2.0})
+	inCk1.Column(2).AppendManyNotNil(5)
+
+	inCk1.Column(3).AppendStringValues([]string{"a1", "a1", "b1", "b1", "b1"})
+	inCk1.Column(3).AppendManyNotNil(5)
+
+	inCk1.Column(4).AppendBooleanValues([]bool{false, false, false, false, true})
+	inCk1.Column(4).AppendManyNotNil(5)
+
+	inCk2 := b.NewChunk("mst")
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("t1=a,t2=c"),
+	}, []int{0})
+	inCk2.AppendIntervalIndexes([]int{0})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
+
+	inCk2.Column(0).AppendStringValues([]string{"c", "c", "e", "b", "a"})
+	inCk2.Column(0).AppendManyNotNil(5)
+
+	inCk2.Column(1).AppendIntegerValues([]int64{2, 2, 2, 2, 4})
+	inCk2.Column(1).AppendManyNotNil(5)
+
+	inCk2.Column(2).AppendFloatValues([]float64{1.0, 1.0, 2.0, 3.0, 2.0})
+	inCk2.Column(2).AppendManyNotNil(5)
+
+	inCk2.Column(3).AppendStringValues([]string{"b1", "b1", "c1", "a1", "a1"})
+	inCk2.Column(3).AppendManyNotNil(5)
+
+	inCk2.Column(4).AppendBooleanValues([]bool{false, true, true, true, false})
+	inCk2.Column(4).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildOutCksByDistCols1() []executor.Chunk {
+	rowDataType := buildDistinctRowData()
+	dstChunks := make([]executor.Chunk, 0, 1)
+	b := executor.NewChunkBuilder(rowDataType)
+
+	dstCk := b.NewChunk("mst")
+	dstCk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("t1=a,t2=b"),
+		*ParseChunkTags("t1=a,t2=c"),
+	}, []int{0, 5})
+	dstCk.AppendIntervalIndexes([]int{0, 5})
+	dstCk.AppendTimes([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+
+	dstCk.Column(0).AppendStringValues([]string{"a", "b", "b", "c", "c", "c", "c", "e", "b", "a"})
+	dstCk.Column(0).AppendManyNotNil(10)
+
+	dstCk.Column(1).AppendIntegerValues([]int64{1, 1, 1, 1, 2, 2, 2, 2, 2, 4})
+	dstCk.Column(1).AppendManyNotNil(10)
+
+	dstCk.Column(2).AppendFloatValues([]float64{4.0, 2.0, 1.0, 1.0, 2.0, 1.0, 1.0, 2.0, 3.0, 2.0})
+	dstCk.Column(2).AppendManyNotNil(10)
+
+	dstCk.Column(3).AppendStringValues([]string{"a1", "a1", "b1", "b1", "b1", "b1", "b1", "c1", "a1", "a1"})
+	dstCk.Column(3).AppendManyNotNil(10)
+
+	dstCk.Column(4).AppendBooleanValues([]bool{false, false, false, false, true, false, true, true, true, false})
+	dstCk.Column(4).AppendManyNotNil(10)
+
+	dstChunks = append(dstChunks, dstCk)
+	return dstChunks
+}
+
+func buildOutCksByDistCols2() []executor.Chunk {
+	rowDataType := buildDistinctRowData()
+	dstChunks := make([]executor.Chunk, 0, 1)
+	b := executor.NewChunkBuilder(rowDataType)
+
+	dstCk := b.NewChunk("mst")
+	dstCk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("t1=a,t2=b"),
+		*ParseChunkTags("t1=a,t2=c"),
+	}, []int{0, 2})
+	dstCk.AppendIntervalIndexes([]int{0, 2})
+	dstCk.AppendTimes([]int64{1, 5, 6, 10})
+
+	dstCk.Column(0).AppendStringValues([]string{"a", "c", "c", "a"})
+	dstCk.Column(0).AppendManyNotNil(4)
+
+	dstCk.Column(1).AppendIntegerValues([]int64{1, 2, 2, 4})
+	dstCk.Column(1).AppendManyNotNil(4)
+
+	dstCk.Column(2).AppendFloatValues([]float64{4.0, 2.0, 1.0, 2.0})
+	dstCk.Column(2).AppendManyNotNil(4)
+
+	dstCk.Column(3).AppendStringValues([]string{"a1", "b1", "b1", "a1"})
+	dstCk.Column(3).AppendManyNotNil(4)
+
+	dstCk.Column(4).AppendBooleanValues([]bool{false, true, false, false})
+	dstCk.Column(4).AppendManyNotNil(4)
+
+	dstChunks = append(dstChunks, dstCk)
+	return dstChunks
+}
+
+func buildOutCksByDistCols3() []executor.Chunk {
+	rowDataType := buildDistinctRowData()
+	dstChunks := make([]executor.Chunk, 0, 1)
+	b := executor.NewChunkBuilder(rowDataType)
+
+	dstCk := b.NewChunk("mst")
+	dstCk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("t1=a,t2=b"),
+		*ParseChunkTags("t1=a,t2=c"),
+	}, []int{0, 3})
+	dstCk.AppendIntervalIndexes([]int{0, 3})
+	dstCk.AppendTimes([]int64{1, 3, 5, 6, 7, 8, 9, 10})
+
+	dstCk.Column(0).AppendStringValues([]string{"a", "b", "c", "c", "c", "e", "b", "a"})
+	dstCk.Column(0).AppendManyNotNil(8)
+
+	dstCk.Column(1).AppendIntegerValues([]int64{1, 1, 2, 2, 2, 2, 2, 4})
+	dstCk.Column(1).AppendManyNotNil(8)
+
+	dstCk.Column(2).AppendFloatValues([]float64{4.0, 1.0, 2.0, 1.0, 1.0, 2.0, 3.0, 2.0})
+	dstCk.Column(2).AppendManyNotNil(8)
+
+	dstCk.Column(3).AppendStringValues([]string{"a1", "b1", "b1", "b1", "b1", "c1", "a1", "a1"})
+	dstCk.Column(3).AppendManyNotNil(8)
+
+	dstCk.Column(4).AppendBooleanValues([]bool{false, false, true, false, true, true, true, false})
+	dstCk.Column(4).AppendManyNotNil(8)
+
+	dstChunks = append(dstChunks, dstCk)
+	return dstChunks
+}
+
+func TestDistinctTransformByDistCols(t *testing.T) {
+	inChunks := buildInCksByDistCols()
+	schema := buildDistinctSchema()
+
+	dstChunks := buildOutCksByDistCols1()
+	testDistinctTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildDistinctRowData(), buildDistinctRowData(),
+		schema,
+	)
+
+	fields := schema.Fields()
+	dstChunks = buildOutCksByDistCols2()
+	for i, field := range fields {
+		if i == 1 {
+			field.Auxiliary = true
+		}
+	}
+	testDistinctTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildDistinctRowData(), buildDistinctRowData(),
+		schema,
+	)
+
+	dstChunks = buildOutCksByDistCols3()
+	for i, field := range fields {
+		if i == 3 || i == 4 {
+			field.Auxiliary = true
+		} else {
+			field.Auxiliary = false
+		}
+	}
+	testDistinctTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildDistinctRowData(), buildDistinctRowData(),
+		schema,
+	)
+}
+
+func TestDistinctTransformByDistColsForSameTag(t *testing.T) {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildDistinctRowData()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("t1=a"),
+	}, []int{0})
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{1, 2})
+
+	inCk1.Column(0).AppendStringValues([]string{"a", "b"})
+	inCk1.Column(0).AppendManyNotNil(2)
+
+	inCk1.Column(1).AppendIntegerValues([]int64{1, 1})
+	inCk1.Column(1).AppendManyNotNil(2)
+
+	inCk1.Column(2).AppendFloatValues([]float64{4.0, 2.0})
+	inCk1.Column(2).AppendManyNotNil(2)
+
+	inCk1.Column(3).AppendStringValues([]string{"a1", "a1"})
+	inCk1.Column(3).AppendManyNotNil(2)
+
+	inCk1.Column(4).AppendBooleanValues([]bool{false, true})
+	inCk1.Column(4).AppendManyNotNil(2)
+
+	inCk2 := b.NewChunk("mst")
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("t1=a"),
+	}, []int{0})
+	inCk2.AppendIntervalIndexes([]int{0})
+	inCk2.AppendTimes([]int64{3, 4})
+
+	inCk2.Column(0).AppendStringValues([]string{"a", "b"})
+	inCk2.Column(0).AppendManyNotNil(2)
+
+	inCk2.Column(1).AppendIntegerValues([]int64{1, 2})
+	inCk2.Column(1).AppendManyNotNil(2)
+
+	inCk2.Column(2).AppendFloatValues([]float64{3.0, 6.0})
+	inCk2.Column(2).AppendManyNotNil(2)
+
+	inCk2.Column(3).AppendStringValues([]string{"a2", "a2"})
+	inCk2.Column(3).AppendManyNotNil(2)
+
+	inCk2.Column(4).AppendBooleanValues([]bool{false, true})
+	inCk2.Column(4).AppendManyNotNil(2)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	dstCk := b.NewChunk("mst")
+	dstCk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("t1=a"),
+	}, []int{0})
+	dstCk.AppendIntervalIndexes([]int{0})
+	dstCk.AppendTimes([]int64{1, 2, 4})
+
+	dstCk.Column(0).AppendStringValues([]string{"a", "b", "b"})
+	dstCk.Column(0).AppendManyNotNil(3)
+
+	dstCk.Column(1).AppendIntegerValues([]int64{1, 1, 2})
+	dstCk.Column(1).AppendManyNotNil(3)
+
+	dstCk.Column(2).AppendFloatValues([]float64{4.0, 2.0, 6.0})
+	dstCk.Column(2).AppendManyNotNil(3)
+
+	dstCk.Column(3).AppendStringValues([]string{"a1", "a1", "a2"})
+	dstCk.Column(3).AppendManyNotNil(3)
+
+	dstCk.Column(4).AppendBooleanValues([]bool{false, true, true})
+	dstCk.Column(4).AppendManyNotNil(3)
+
+	dstChunks = append(dstChunks, dstCk)
+
+	schema := buildDistinctSchema()
+	fields := schema.Fields()
+	for i, field := range fields {
+		if i == 0 || i == 1 {
+			field.Auxiliary = true
+		} else {
+			field.Auxiliary = false
+		}
+	}
+	testDistinctTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildDistinctRowData(), buildDistinctRowData(),
+		schema,
 	)
 }
 
@@ -191,14 +502,14 @@ func testDistinctTransformBase(
 	t *testing.T,
 	inChunks []executor.Chunk, dstChunks []executor.Chunk,
 	inRowDataType, outRowDataType hybridqp.RowDataType,
-	opt *query.ProcessorOptions,
+	schema hybridqp.Catalog,
 ) {
 	// generate each executor node node to build a dag.
 	source := NewSourceFromMultiChunk(inRowDataType, inChunks)
 	trans := executor.NewDistinctTransform(
 		[]hybridqp.RowDataType{inRowDataType},
 		[]hybridqp.RowDataType{outRowDataType},
-		opt)
+		schema)
 	sink := NewNilSink(outRowDataType)
 	err := executor.Connect(source.Output, trans.Inputs[0])
 	if err != nil {
@@ -228,13 +539,17 @@ func testDistinctTransformBase(
 		t.Fatalf("the chunk number is not the same as the target: %d != %d\n", len(dstChunks), len(outChunks))
 	}
 	for i := range outChunks {
+		fmt.Println(outChunks[i].String())
+		fmt.Println(dstChunks[i].String())
 		assert.Equal(t, outChunks[i].Name(), dstChunks[i].Name())
-		assert.Equal(t, outChunks[i].Tags(), dstChunks[i].Tags())
 		assert.Equal(t, outChunks[i].Time(), dstChunks[i].Time())
 		assert.Equal(t, outChunks[i].TagIndex(), dstChunks[i].TagIndex())
 		assert.Equal(t, outChunks[i].IntervalIndex(), dstChunks[i].IntervalIndex())
 		for j := range outChunks[i].Columns() {
 			assert.Equal(t, outChunks[i].Column(j), dstChunks[i].Column(j))
+		}
+		for k := range outChunks[i].Tags() {
+			assert.Equal(t, outChunks[i].Tags()[k].PointTags(), dstChunks[i].Tags()[k].PointTags())
 		}
 	}
 }
@@ -252,13 +567,16 @@ func TestDistinctTransform_Err(t *testing.T) {
 
 	inRowDataType := buildInRowDataTypeIntegral()
 	outRowDataType := buildDstRowDataTypeIntegral()
+	fields := buildInRowDataTypeIntegral().Fields()
+	columnNames := []string{"value1", "value2"}
+	schema := executor.NewQuerySchema(fields, columnNames, &opt, nil)
 
 	// generate each executor node node to build a dag.
 	source := NewSourceFromMultiChunk(inRowDataType, inChunks)
 	trans := executor.NewDistinctTransform(
 		[]hybridqp.RowDataType{inRowDataType},
 		[]hybridqp.RowDataType{outRowDataType},
-		&opt)
+		schema)
 	sink := NewNilSink(outRowDataType)
 	err := executor.Connect(source.Output, trans.Inputs[0])
 	if err != nil {

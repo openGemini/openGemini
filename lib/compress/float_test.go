@@ -16,12 +16,12 @@ package compress_test
 
 import (
 	"math"
+	"math/rand/v2"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/compress"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/stretchr/testify/require"
 )
@@ -82,7 +82,7 @@ func TestCodecFloatBlock_rand(t *testing.T) {
 func TestCodecFloatBlock_small(t *testing.T) {
 	var values []float64
 	for i := 0; i < 4; i++ {
-		values = append(values, float64(rand.Int63()%10000)/100)
+		values = append(values, float64(rand.Int64()%10000)/100)
 	}
 	codecFloatBlock(t, values)
 	codecFloatBlockWithMLF(t, values)
@@ -108,7 +108,7 @@ func TestCodecFloatBlock_same(t *testing.T) {
 func TestCodecFloatBlock_int(t *testing.T) {
 	var values []float64
 	for i := 0; i < 1000; i++ {
-		values = append(values, float64(rand.Int31n(100)))
+		values = append(values, float64(rand.Int32N(100)))
 	}
 	codecFloatBlock(t, values)
 	codecFloatBlockWithMLF(t, values)

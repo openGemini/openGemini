@@ -113,6 +113,10 @@ func (r *BloomFilterIndexReader) MayBeInFragment(fragId uint32) (bool, error) {
 	return r.sk.IsExist(int64(fragId), r.bf)
 }
 
+func (r *BloomFilterIndexReader) GetFragmentRowCount(fragId uint32) (int64, error) {
+	return 0, nil
+}
+
 func (r *BloomFilterIndexReader) StartSpan(span *tracing.Span) {
 	r.span = span
 }
@@ -199,18 +203,14 @@ type BloomFilterWriter struct {
 	*skipIndexWriter
 }
 
+func (b *BloomFilterWriter) Flush() error {
+	return nil
+}
+
 func NewBloomFilterWriter(dir, msName, dataFilePath, lockPath string, tokens string) *BloomFilterWriter {
 	return &BloomFilterWriter{
 		newSkipIndexWriter(dir, msName, dataFilePath, lockPath, tokens),
 	}
-}
-
-func (b *BloomFilterWriter) Open() error {
-	return nil
-}
-
-func (b *BloomFilterWriter) Close() error {
-	return nil
 }
 
 func (b *BloomFilterWriter) getSkipIndexFilePath(fieldName string, detached bool) string {
@@ -221,14 +221,17 @@ func (b *BloomFilterWriter) getSkipIndexFilePath(fieldName string, detached bool
 }
 
 func (b *BloomFilterWriter) CreateAttachIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int) error {
-	var err error
 	var data []byte
 	var skipIndexFilePath string
 	for _, i := range schemaIdx {
 		skipIndexFilePath = b.getSkipIndexFilePath(writeRec.Schema[i].Name, false)
 		data = b.GenBloomFilterData(&writeRec.ColVals[i], rowsPerSegment, writeRec.Schema[i].Type)
 
-		err = writeSkipIndexToDisk(data, b.lockPath, skipIndexFilePath)
+		writer, err := b.GetWriter(skipIndexFilePath)
+		if err != nil {
+			return err
+		}
+		err = writer.WriteData(data)
 		if err != nil {
 			return err
 		}
@@ -254,12 +257,12 @@ func (b *BloomFilterWriter) GenBloomFilterData(src *record.ColVal, rowsPerSegmen
 	segCnt := len(rowsPerSegment)
 	segBfSize := int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize)
 	res := make([]byte, segCnt*segBfSize)
-	var segCol []record.ColVal
-	segCol = src.SplitColBySize(segCol, rowsPerSegment, refType)
+	segCol := splitCol(src, rowsPerSegment, refType)
 
 	start := 0
 	end := 0
-	for _, col := range segCol {
+	for i := range segCol {
+		col := &segCol[i]
 		end = start + segBfSize
 		offs, lens := col.GetOffsAndLens()
 		tk.ProcessTokenizerBatch(col.Val, res[start:end-crcSize], offs, lens)
@@ -269,4 +272,14 @@ func (b *BloomFilterWriter) GenBloomFilterData(src *record.ColVal, rowsPerSegmen
 	}
 	tokenizer.FreeSimpleGramTokenizer(tk)
 	return res
+}
+
+func splitCol(src *record.ColVal, rowsPerSegment []int, refType int) []record.ColVal {
+	var segCol []record.ColVal
+	if len(rowsPerSegment) == 1 {
+		segCol = append(segCol, *src)
+	} else {
+		segCol = src.SplitColBySize(segCol, rowsPerSegment, refType)
+	}
+	return segCol
 }

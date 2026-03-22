@@ -16,13 +16,13 @@ package machine
 
 import (
 	"encoding/binary"
+	"math/rand/v2"
 	"net"
 	"strconv"
 	"strings"
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/rand"
 	"go.uber.org/zap"
 )
 
@@ -30,7 +30,7 @@ import (
 var machineID uint64
 
 func init() {
-	machineID = uint64(rand.Int63())
+	machineID = uint64(rand.Int64())
 }
 
 func GetMachineID() uint64 {
@@ -49,7 +49,7 @@ func InitMachineID(addr string) {
 		return
 	}
 
-	r := uint64(rand.Int63() & 0xffff)
+	r := uint64(rand.Int64() & 0xffff)
 	buf := []byte{
 		uint8(r >> 8), uint8(r & 0xff),
 		ip[0], ip[1], ip[2], ip[3],

@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/snappy"
+	"github.com/klauspost/compress/snappy"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
 	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
 	"github.com/prometheus/common/model"
@@ -320,8 +320,8 @@ func buildExp(promExps []*PromExp, evalTime time.Time) (string, string) {
 			Result:     matrix,
 		},
 	}
-	instantExp, _ := json.Marshal(instantRes)
-	rangeExp, _ := json.Marshal(rangeRes)
+	instantExp, _ := json2.Marshal(instantRes)
+	rangeExp, _ := json2.Marshal(rangeRes)
 	return string(instantExp), string(rangeExp)
 }
 

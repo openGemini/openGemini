@@ -27,6 +27,8 @@ import (
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/transport/query"
 	"github.com/openGemini/openGemini/engine"
+	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/config"
@@ -37,12 +39,16 @@ import (
 	internal "github.com/openGemini/openGemini/lib/msgservice/data"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/raftconn"
+	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/scheduler"
 	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/smart_query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 const dataPath = "/tmp/test_data"
@@ -170,14 +176,6 @@ func (s *mockShard) GetRPName() string {
 	return "rp0"
 }
 
-type MockJSONMarshaller struct {
-	MarshalFunc func(v interface{}) ([]byte, error)
-}
-
-func (m *MockJSONMarshaller) Marshal(v interface{}) ([]byte, error) {
-	return nil, errors.New("error json")
-}
-
 func (m *mockShard) GetIndexBuilder() *tsi.IndexBuilder {
 	ltime := uint64(time.Now().Unix())
 	lockPath := ""
@@ -227,6 +225,33 @@ const (
 	DelIndexBuilderId = math.MaxUint64
 )
 
+func (e *MockMEngine) DbPTRef(db string, ptId uint32, read bool) error {
+	return nil
+}
+
+func (e *MockMEngine) MarkDropSeries(db string, ptID uint32, mstName []byte, expr influxql.Expr, t tsi.TimeRange) error {
+	return errors.New("error")
+}
+
+func (e *MockMEngine) DbPTUnref(db string, ptId uint32, read bool) {}
+
+func (e *MockMEngine) GetTask(typ scheduler.TaskType, id uint64) (scheduler.Task, error) {
+	switch typ {
+	case scheduler.CompactTask:
+		return &immutable.CompactTask{}, nil
+	default:
+		return nil, errors.New("wrong task type")
+	}
+}
+
+func (e *MockMEngine) GetCompactTaskById(typ scheduler.TaskType, id uint64) (scheduler.Task, error) {
+	return &immutable.CompactTask{}, nil
+}
+
+func (e *MockMEngine) CompactFiles(typ scheduler.TaskType, id uint64, info *immutable.CompactedFileInfo) error {
+	return nil
+}
+
 func (m *MockMEngine) GetDatabase(database string) map[uint32]*engine.DBPTInfo {
 	shards := map[uint64]engine.Shard{
 		11: &mockShard{},
@@ -261,50 +286,19 @@ func (m *MockMEngine) GetDatabase(database string) map[uint32]*engine.DBPTInfo {
 	return mapDBPTInfo
 }
 
+func (m *MockMEngine) GetRPPTWriteStat(db, rp string) (meta.PTMstWriteStatus, error) {
+	if db == "db0" && rp == "rp0" {
+		return map[uint32]meta.MstWriteStatus{
+			0: {
+				"mst0": 5,
+			},
+		}, nil
+	}
+	return nil, errors.New("error")
+}
+
 type mockMetaClient struct {
 	metaclient.MetaClient
-}
-
-func (m *MockMEngineNoDeletedTsids) GetDatabase(database string) map[uint32]*engine.DBPTInfo {
-	shards := map[uint64]engine.Shard{
-		11: &mockShard{},
-	}
-	node := &raftconn.RaftNode{DataCommittedC: make(map[uint64]chan error), Identity: "db_1"}
-	dBPT := &engine.DBPTInfo{}
-	dBPT.SetDelIndexBuilder(make(map[string]*tsi.IndexBuilder))
-	dBPT.SetShards(shards)
-	dBPT.SetNode(node)
-	dBPT.SetDatabase("db0")
-	timeRangeInfo := &meta.ShardTimeRangeInfo{
-		ShardDuration: &meta.ShardDurationInfo{
-			DurationInfo: meta.DurationDescriptor{Duration: time.Second}},
-		OwnerIndex: meta.IndexDescriptor{IndexID: uint64(666)},
-	}
-	dBPT.SetPath(dataPath)
-	dBPT.SetWalPath(path.Join(dataPath, "wal"))
-	lockPath := path.Join(dataPath, "LOCK")
-	dBPT.SetLockPath(&lockPath)
-
-	dBPT.SetIndexBuilder(make(map[uint64]*tsi.IndexBuilder))
-	rp := "rp0"
-	msInfo := &meta.MeasurementInfo{
-		EngineType: config.TSSTORE,
-	}
-	client := &mockMetaClient{}
-	dBPT.NewShard(rp, uint64(66), timeRangeInfo, client, msInfo)
-
-	mapDBPTInfo := map[uint32]*engine.DBPTInfo{
-		1: dBPT,
-	}
-	return mapDBPTInfo
-}
-
-func (m *MockMEngineNoDeletedTsids) OpenShardLazy(sh engine.Shard) error {
-	return nil
-}
-
-type MockMEngineNoDeletedTsids struct {
-	engine.Engine
 }
 
 func (m *mockMetaClient) DatabaseOption(name string) (*obs.ObsOptions, error) {
@@ -318,6 +312,22 @@ func (m *MockMEngine) OpenShardLazy(sh engine.Shard) error {
 type MockMEngineError struct {
 	engine.Engine
 }
+
+func (e *MockMEngineError) DbPTRef(db string, ptId uint32, read bool) error {
+	if db == "db1" {
+		return errors.New("error DbPTRef db1")
+	}
+	return nil
+}
+
+func (e *MockMEngineError) MarkDropSeries(db string, ptID uint32, mstName []byte, expr influxql.Expr, t tsi.TimeRange) error {
+	if db == "db2" {
+		return errors.New("error MarkDropSeries db2")
+	}
+	return nil
+}
+
+func (e *MockMEngineError) DbPTUnref(db string, ptId uint32, read bool) {}
 
 func (m *MockMEngineError) OpenShardLazy(sh engine.Shard) error {
 	return errors.New("error")
@@ -359,55 +369,23 @@ func TestDropSeries_Process(t *testing.T) {
 
 	s := &storage.Storage{}
 
-	s.SetEngine(&MockMEngineError{})
-	h.SetStore(s)
-	_, e := h.Process()
-	require.ErrorContains(t, e, "error")
-
 	s.SetEngine(&MockMEngine{})
 	h.SetStore(s)
-
-	rsp, _ := h.Process()
-	response, ok := rsp.(*msgservice.DropSeriesResponse)
-	if !ok {
-		t.Fatal("response type is invalid")
-	}
-	assert.NotNil(t, response.GetErr())
-	response.Err = nil
-
-	client := metaclient.NewClient("", false, 0)
-	s.SetMetaClient(client)
-	s.SetEngine(&MockMEngineNoDeletedTsids{})
-	h.SetStore(s)
-
-	rsp, e = h.Process()
+	rsp0, e := h.Process()
 	if e != nil {
-		t.Fatal("execute h.Process failed")
+		t.Fatalf("execute h.Process failed: %v", e)
 	}
-
-	response, ok = rsp.(*msgservice.DropSeriesResponse)
+	r, ok := rsp0.(*msgservice.DropSeriesResponse)
 	if !ok {
 		t.Fatal("response type is invalid")
 	}
-	assert.NotNil(t, response.GetErr())
+	assert.NotNil(t, r.GetErr())
 
-	fileops.MkdirAll(dataPath, 0750)
-	defer fileops.RemoveAll(dataPath)
-	rsp, _ = h.Process()
-	response, ok = rsp.(*msgservice.DropSeriesResponse)
-	if !ok {
-		t.Fatal("response type is invalid")
-	}
-	assert.Nil(t, response.Error())
-
-	db = "db0"
-	pt = []uint32{1}
-	condition = "tag1 = 'a1'"
-	measurements = []string{""}
-	h = NewHandler(msgservice.DropSeriesRequestMessage)
-	if err := h.SetMessage(&msgservice.DropSeriesRequest{
+	db1 := "db1"
+	h1 := NewHandler(msgservice.DropSeriesRequestMessage)
+	if err := h1.SetMessage(&msgservice.DropSeriesRequest{
 		DropSeriesRequest: internal.DropSeriesRequest{
-			Db:           &db,
+			Db:           &db1,
 			PtIDs:        pt,
 			Measurements: measurements,
 			Condition:    &condition,
@@ -415,12 +393,97 @@ func TestDropSeries_Process(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	s.SetEngine(&MockMEngineError{})
+	h1.SetStore(s)
+	rsp0, e = h1.Process()
+	if e != nil {
+		t.Fatalf("execute h.Process failed: %v", e)
+	}
+	r, ok = rsp0.(*msgservice.DropSeriesResponse)
+	if !ok {
+		t.Fatal("response type is invalid")
+	}
+	require.ErrorContains(t, r.Error(), "error DbPTRef db1")
+
+	db2 := "db2"
+	h2 := NewHandler(msgservice.DropSeriesRequestMessage)
+	if err := h2.SetMessage(&msgservice.DropSeriesRequest{
+		DropSeriesRequest: internal.DropSeriesRequest{
+			Db:           &db2,
+			PtIDs:        pt,
+			Measurements: measurements,
+			Condition:    &condition,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.SetEngine(&MockMEngineError{})
+	h2.SetStore(s)
+	rsp0, e = h2.Process()
+	if e != nil {
+		t.Fatalf("execute h.Process failed: %v", e)
+	}
+	r, ok = rsp0.(*msgservice.DropSeriesResponse)
+	if !ok {
+		t.Fatal("response type is invalid")
+	}
+	require.ErrorContains(t, r.Error(), "error MarkDropSeries db2")
+}
+
+func TestGetTask_Process(t *testing.T) {
+	h := NewHandler(msgservice.GetTaskRequestMessage)
+	if err := h.SetMessage(&msgservice.GetTaskRequest{}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &storage.Storage{}
+
 	s.SetEngine(&MockMEngine{})
 	h.SetStore(s)
+	rsp0, e := h.Process()
+	if e != nil {
+		t.Fatalf("execute h.Process failed: %v", e)
+	}
+	r, ok := rsp0.(*msgservice.GetTaskResponse)
+	if !ok {
+		t.Fatal("response type is invalid")
+	}
+	assert.Nil(t, r.Error())
 
-	rsp, _ = h.Process()
-	_, ok = rsp.(*msgservice.DropSeriesResponse)
-	require.True(t, ok)
+	if err := h.SetMessage(&msgservice.GetTaskRequest{Type: -1}); err != nil {
+		t.Fatal(err)
+	}
+	_, e = h.Process()
+	assert.NoError(t, e)
+}
+
+func TestSendTaskResult_Process(t *testing.T) {
+	h := NewHandler(msgservice.SendTaskResultRequestMessage)
+	if err := h.SetMessage(&msgservice.SendTaskResultRequest{}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &storage.Storage{}
+	s.SetEngine(&MockMEngine{})
+	h.SetStore(s)
+	req := &msgservice.SendTaskResultRequest{}
+	h.SetMessage(req)
+	_, err := h.Process()
+	assert.Error(t, err)
+
+	req.Info = &immutable.CompactTask{}
+	_, err = h.Process()
+	assert.Error(t, err)
+
+	req.Info = &immutable.CompactedFileInfo{}
+	_, err = h.Process()
+	assert.NoError(t, err)
+
+	if err := h.SetMessage(&msgservice.SendTaskResultRequest{Type: -1}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = h.Process()
+	assert.Error(t, err)
 }
 
 func TestDropSeriesConditionError_Process(t *testing.T) {
@@ -445,9 +508,15 @@ func TestDropSeriesConditionError_Process(t *testing.T) {
 	s.SetEngine(&MockMEngine{})
 	h.SetStore(s)
 
-	_, e := h.Process()
-	_, ok := e.(*influxql.ParseError)
-	require.True(t, ok)
+	r, e := h.Process()
+	if e != nil {
+		t.Fatalf("execute h.Process failed: %v", e)
+	}
+	r1, ok := r.(*msgservice.DropSeriesResponse)
+	if !ok {
+		t.Fatal("response type is invalid")
+	}
+	require.ErrorContains(t, r1.Error(), "found EOF, expected identifier, string, number, bool at line 1, char 7")
 }
 
 var clientIDs = []uint64{1000, 2000, 3000}
@@ -598,4 +667,287 @@ func TestShowTagKeys_Process(t *testing.T) {
 		t.Fatal("response type is invalid")
 	}
 	assert.NoError(t, response.Error())
+}
+
+func buildSmartQueryRequest(fields []smart_query.Field, cond smart_query.OrCond) *msgservice.SmarterQueryRequest {
+	db := path.Join(dataPath, "db0")
+	rp := "autogen"
+	mst := "mst0"
+	startTime := int64(0)
+	endTime := int64(1e10)
+	interval := int64(1e9)
+	limit := int64(0)
+	req := &msgservice.SmarterQueryRequest{}
+	req.Db = &db
+	req.RP = &rp
+	req.PtIDs = []uint32{1}
+	req.Mst = proto.String(mst)
+	if len(fields) > 0 {
+		req.Fields = make([]*internal.Field, 0, len(fields))
+		for i := range fields {
+			req.Fields = append(req.Fields,
+				&internal.Field{
+					Call: proto.String(fields[i].Call),
+					Val:  proto.String(fields[i].Val),
+					Typ:  proto.Uint32(uint32(fields[i].Typ)),
+				})
+		}
+	}
+	if len(cond.Cond) > 0 {
+		req.Condition = make([]*internal.EqCond, 0, len(cond.Cond))
+		for i := range cond.Cond {
+			req.Condition = append(req.Condition,
+				&internal.EqCond{
+					Key: proto.String(cond.Cond[i].Key),
+					Val: proto.String(cond.Cond[i].Val),
+					Op:  proto.Int64(int64(cond.Cond[i].Op)),
+					Typ: proto.Uint32(uint32(cond.Cond[i].Typ)),
+				},
+			)
+		}
+	}
+	req.StartTime = proto.Int64(startTime)
+	req.EndTime = proto.Int64(endTime)
+	req.Interval = proto.Int64(interval)
+	req.Limit = proto.Int32(int32(limit))
+	return req
+}
+
+func TestSmarterQuery_Process(t *testing.T) {
+	t.Run("smart query no call", func(t *testing.T) {
+		h := NewHandler(msgservice.SmarterQueryRequestMessage)
+		fields := []smart_query.Field{
+			{Val: "cpu", Typ: influxql.Float},
+		}
+		cond := smart_query.OrCond{
+			Cond: []smart_query.EqCond{{Key: "hostname", Val: "hostname_1", Typ: influxql.Tag, Op: influxql.EQ}},
+		}
+		req := buildSmartQueryRequest(fields, cond)
+		if err := h.SetMessage(req); err != nil {
+			t.Fatal(err)
+		}
+		st := storage.Storage{}
+		eg := &MockEngine{}
+		schema := record.Schemas{{Type: influx.Field_Type_Float, Name: "cpu"}, {Type: influx.Field_Type_Int, Name: record.TimeField}}
+		eg.SetIterator(1, schema)
+		st.SetEngine(eg)
+		h.SetStore(&st)
+		rsp, err := h.Process()
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, ok := rsp.(*msgservice.SmarterQueryResponse)
+		if !ok {
+			t.Fatal("response type is invalid")
+		}
+		assert.NoError(t, response.Error())
+		require.NoError(t, response.UnmarshalBinary(response.Data))
+		res := response.GetResult()
+		require.Equal(t, len(res.GetData()), 1)
+		require.True(t, res.IsSingleSeries())
+	})
+
+	t.Run("smart query merge", func(t *testing.T) {
+		h := NewHandler(msgservice.SmarterQueryRequestMessage)
+		fields := []smart_query.Field{
+			{Call: "max", Val: "cpu", Typ: influxql.Float},
+		}
+		cond := smart_query.OrCond{
+			Cond: []smart_query.EqCond{{Key: "hostname", Val: "hostname_1", Typ: influxql.Tag, Op: influxql.EQ}},
+		}
+		req := buildSmartQueryRequest(fields, cond)
+		if err := h.SetMessage(req); err != nil {
+			t.Fatal(err)
+		}
+		st := storage.Storage{}
+		eg := &MockEngine{}
+		schema := record.Schemas{{Type: influx.Field_Type_Float, Name: "cpu"}, {Type: influx.Field_Type_Int, Name: record.TimeField}}
+		eg.SetIterator(1, schema)
+		st.SetEngine(eg)
+		h.SetStore(&st)
+		rsp, err := h.Process()
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, ok := rsp.(*msgservice.SmarterQueryResponse)
+		if !ok {
+			t.Fatal("response type is invalid")
+		}
+		assert.NoError(t, response.Error())
+		require.NoError(t, response.UnmarshalBinary(response.Data))
+		res := response.GetResult()
+		require.Equal(t, len(res.GetData()), 1)
+		require.True(t, res.IsSingleSeries())
+	})
+
+	t.Run("smart query agg merge", func(t *testing.T) {
+		h := NewHandler(msgservice.SmarterQueryRequestMessage)
+		fields := []smart_query.Field{
+			{Call: "max", Val: "cpu", Typ: influxql.Float},
+		}
+		cond := smart_query.OrCond{
+			Cond: []smart_query.EqCond{{Key: "hostname", Val: "hostname_1", Typ: influxql.Tag, Op: influxql.EQ}},
+		}
+		req := buildSmartQueryRequest(fields, cond)
+		if err := h.SetMessage(req); err != nil {
+			t.Fatal(err)
+		}
+		st := storage.Storage{}
+		eg := &MockEngine{}
+		schema := record.Schemas{{Type: influx.Field_Type_Float, Name: "cpu"}, {Type: influx.Field_Type_Int, Name: record.TimeField}}
+		eg.SetIterator(2, schema)
+		st.SetEngine(eg)
+		h.SetStore(&st)
+		rsp, err := h.Process()
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, ok := rsp.(*msgservice.SmarterQueryResponse)
+		if !ok {
+			t.Fatal("response type is invalid")
+		}
+		assert.NoError(t, response.Error())
+		require.NoError(t, response.UnmarshalBinary(response.Data))
+		res := response.GetResult()
+		require.Equal(t, len(res.GetData()), 1)
+		require.False(t, res.IsSingleSeries())
+	})
+
+	t.Run("smart query colstore count(time)", func(t *testing.T) {
+		h := NewHandler(msgservice.SmarterQueryRequestMessage)
+		fields := []smart_query.Field{
+			{Call: "count", Val: "time", Typ: influxql.Integer},
+		}
+		interval := int64(0)
+		cond := smart_query.OrCond{}
+		req := buildSmartQueryRequest(fields, cond)
+		req.Interval = &interval
+		if err := h.SetMessage(req); err != nil {
+			t.Fatal(err)
+		}
+		st := storage.Storage{}
+		eg := &MockEngine{isColStore: true}
+		schema := record.Schemas{{Type: influx.Field_Type_Int, Name: record.TimeField}, {Type: influx.Field_Type_Int, Name: record.TimeField}}
+		eg.SetIterator(2, schema)
+		st.SetEngine(eg)
+		h.SetStore(&st)
+		rsp, err := h.Process()
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, ok := rsp.(*msgservice.SmarterQueryResponse)
+		if !ok {
+			t.Fatal("response type is invalid")
+		}
+		assert.NoError(t, response.Error())
+		require.NoError(t, response.UnmarshalBinary(response.Data))
+		res := response.GetResult()
+		require.Equal(t, len(res.GetData()), 1)
+		require.True(t, res.IsSingleSeries())
+	})
+
+	t.Run("smart query colstore limit", func(t *testing.T) {
+		h := NewHandler(msgservice.SmarterQueryRequestMessage)
+		fields := []smart_query.Field{
+			{Val: "cpu", Typ: influxql.Float},
+		}
+		interval := int64(0)
+		cond := smart_query.OrCond{}
+		req := buildSmartQueryRequest(fields, cond)
+		req.Interval = &interval
+		tags := influx.PointTags{{Key: "hostname", Value: "hostname_1"}}
+		r := influx.Row{Name: "cpu_0000", Tags: tags}
+		r.UnmarshalIndexKeys(nil)
+		req.HintType = proto.Int64(int64(hybridqp.FullSeriesQuery))
+		req.HintSeriesKeys = r.IndexKey
+		req.Limit = proto.Int32(1)
+		if err := h.SetMessage(req); err != nil {
+			t.Fatal(err)
+		}
+		st := storage.Storage{}
+		eg := &MockEngine{isColStore: true}
+		schema := record.Schemas{{Type: influx.Field_Type_Int, Name: record.TimeField}, {Type: influx.Field_Type_Int, Name: record.TimeField}}
+		eg.SetIterator(1, schema)
+		st.SetEngine(eg)
+		h.SetStore(&st)
+		rsp, err := h.Process()
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, ok := rsp.(*msgservice.SmarterQueryResponse)
+		if !ok {
+			t.Fatal("response type is invalid")
+		}
+		assert.NoError(t, response.Error())
+		require.NoError(t, response.UnmarshalBinary(response.Data))
+		res := response.GetResult()
+		require.Equal(t, len(res.GetData()), 1)
+		require.True(t, res.IsSingleSeries())
+	})
+}
+
+func TestSmarterQuery_SetMessage(t *testing.T) {
+	q := &SmarterQuery{}
+	assert.Error(t, q.SetMessage(&msgservice.SmarterQueryResponse{}), "msgservice.SmarterQueryRequest")
+}
+
+func TestPullRPPTWriteStatus_Process(t *testing.T) {
+	db := "db0"
+	rp := "rp0"
+	t.Run("success case", func(t *testing.T) {
+		h := NewHandler(msgservice.PullRPPTWriteStatusRequestMessage)
+		err := h.SetMessage(&msgservice.ShowTagKeysRequest{})
+		assert.Error(t, err)
+		if err := h.SetMessage(&msgservice.PullRPPTWriteStatusRequest{
+			PullRPPTWriteStatusRequest: internal.PullRPPTWriteStatusRequest{
+				Database:        proto.String(db),
+				RetentionPolicy: proto.String(rp),
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		s := &storage.Storage{}
+		s.SetEngine(&MockMEngine{})
+		h.SetStore(s)
+
+		rsp, err := h.Process()
+		if err != nil {
+			t.Fatalf("execute h.Process failed: %v", err)
+		}
+
+		response, ok := rsp.(*msgservice.PullRPPTWriteStatusResponse)
+		if !ok {
+			t.Fatal("response type is invalid")
+		}
+
+		assert.NotNil(t, response.StatusInfo)
+		assert.Equal(t, 1, len(response.StatusInfo))
+		assert.Equal(t, int64(5), response.StatusInfo[0]["mst0"])
+	})
+	t.Run("fail case", func(t *testing.T) {
+		h := NewHandler(msgservice.PullRPPTWriteStatusRequestMessage)
+		err := h.SetMessage(&msgservice.ShowTagKeysRequest{})
+		assert.Error(t, err)
+		if err := h.SetMessage(&msgservice.PullRPPTWriteStatusRequest{
+			PullRPPTWriteStatusRequest: internal.PullRPPTWriteStatusRequest{
+				Database:        proto.String(db),
+				RetentionPolicy: proto.String("rp1"),
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		s := &storage.Storage{}
+		s.SetEngine(&MockMEngine{})
+		h.SetStore(s)
+		rsp, err := h.Process()
+		if err != nil {
+			t.Fatalf("execute h.Process failed: %v", err)
+		}
+		response, ok := rsp.(*msgservice.PullRPPTWriteStatusResponse)
+		if !ok {
+			t.Fatal("response type is invalid")
+		}
+		assert.ErrorContains(t, response.Error, "error")
+	})
 }

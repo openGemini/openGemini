@@ -101,14 +101,12 @@ type CreateSqlNodeRequest struct {
 }
 
 type CreateNodeResponse struct {
-	//Header     map[string][]string
 	Data []byte
 
 	Err string
 }
 
 type CreateSqlNodeResponse struct {
-	//Header     map[string][]string
 	Data []byte
 
 	Err string
@@ -241,11 +239,11 @@ type RegisterQueryIDOffsetResponse struct {
 	Err    string
 }
 
-type Sql2MetaHeartbeatRequest struct {
+type CQ2MetaHeartbeatRequest struct {
 	Host string
 }
 
-type Sql2MetaHeartbeatResponse struct {
+type CQ2MetaHeartbeatResponse struct {
 	Err string
 }
 
@@ -291,6 +289,17 @@ type ShowClusterRequest struct {
 }
 
 type ShowClusterResponse struct {
+	Data    []byte
+	ErrCode errno.Errno
+	Err     string
+}
+
+type GetShardingPlanRequest struct {
+	DbName string
+	RpName string
+}
+
+type GetShardingPlanResponse struct {
 	Data    []byte
 	ErrCode errno.Errno
 	Err     string

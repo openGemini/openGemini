@@ -64,11 +64,16 @@ func TestQueryMetric(t *testing.T) {
 	showFn := func(r *http.Request) (*http.Response, error) {
 		var buff TempBuffer
 		if strings.Contains(strings.ToLower(r.URL.RawQuery), "show+databases") {
-			b := "{\"results\":[{\"statement_id\":0,\"series\":[{\"name\":\"databases\",\"columns\":[\"name\"],\"values\":[[\"db0\"],[\"monitor\"]]}]}]}"
+			b := `{"results":[{"statement_id":0,"series":[{"name":"databases","columns":["name"],"values":[["db0"],["monitor"],["no_measurements"]]}]}]}`
 			buff.Write([]byte(b))
 		} else if strings.Contains(strings.ToLower(r.URL.RawQuery), "show+measurements") {
-			b := `{"results":[{"statement_id":0,"series":[{"name":"measurements","columns":["name"],"values":[["mst"],["test1"]]}]}]}`
-			buff.Write([]byte(b))
+			if r.URL.Query().Get("db") == "no_measurements" {
+				b := `{"results":[]}`
+				buff.Write([]byte(b))
+			} else {
+				b := `{"results":[{"statement_id":0,"series":[{"name":"measurements","columns":["name"],"values":[["mst"],["test1"]]}]}]}`
+				buff.Write([]byte(b))
+			}
 		} else if strings.Contains(strings.ToLower(r.URL.RawQuery), "show+series+cardinality") {
 			b := `{"results":[{"statement_id":0,"series":[{"columns":["startTime","endTime","count"],"values":[["2021-07-05T00:00:00Z","2021-07-12T00:00:00Z",9]]},{"columns":["startTime","endTime","count"],"values":[["2021-08-16T00:00:00Z","2021-08-23T00:00:00Z",46]]}]}]}`
 			buff.Write([]byte(b))
@@ -98,12 +103,15 @@ func TestQueryMetric(t *testing.T) {
 
 	ReportQueryFrequency = 100 * time.Millisecond // 100ms
 
-	q.Client = &mocks.MockClient{DoFunc: showFn}
+	mc := &mocks.MockClient{DoFunc: showFn}
+	q.Client = mc
 	q.Reporter.Client = &mocks.MockClient{DoFunc: writeFn}
 	q.Start()
+	defer q.Close()
+
 	time.Sleep(1 * time.Second)
 	q.queryMetrics.mu.RLock()
-	require.EqualValues(t, 2, q.queryMetrics.DBCount)
+	require.EqualValues(t, 3, q.queryMetrics.DBCount)
 	require.EqualValues(t, 4, q.queryMetrics.MstCount)
 	require.EqualValues(t, map[string]map[string]int64{
 		"db0": {
@@ -116,8 +124,18 @@ func TestQueryMetric(t *testing.T) {
 		},
 	}, q.queryMetrics.SeriesMap)
 	q.queryMetrics.mu.RUnlock()
-	q.Close()
-	time.Sleep(1 * time.Second)
+
+	mc.DoFunc = func(req *http.Request) (*http.Response, error) {
+		var buff TempBuffer
+		buff.Write([]byte("invalid json"))
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       &buff,
+		}
+		return resp, nil
+	}
+	q.Query()
+	require.Error(t, q.query())
 }
 
 func TestQueryMetric_Manual(t *testing.T) {

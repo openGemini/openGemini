@@ -99,6 +99,10 @@ func (s *FilterReader) IsExist(blockId int64, elem *rpn.SKRPNElement) (bool, err
 	return s.lineFilterReader.isExist(blockId)
 }
 
+func (s *FilterReader) GetRowCount(blockId int64, elem *rpn.SKRPNElement) (int64, error) {
+	return 0, nil
+}
+
 func (s *FilterReader) getAllHashes(expr influxql.Expr) {
 	switch n := expr.(type) {
 	case *influxql.ParenExpr:
@@ -111,7 +115,7 @@ func (s *FilterReader) getAllHashes(expr influxql.Expr) {
 		case influxql.OR:
 			s.getAllHashes(n.LHS)
 			s.getAllHashes(n.RHS)
-		case influxql.MATCHPHRASE:
+		case influxql.MATCHPHRASE, influxql.UNMATCHPHRASE:
 			val := n.RHS.(*influxql.StringLiteral).Val
 			hashValues := make([]uint64, 0)
 			leftV := n.LHS.(*influxql.VarRef).Val
@@ -429,6 +433,10 @@ func (s *LineFilterReader) isExist(blockId int64) (bool, error) {
 		s.isCached = true
 	}
 	return s.hitExpr(s.expr), nil
+}
+
+func (s *LineFilterReader) GetRowCount(blockId int64, elem *rpn.SKRPNElement) (int64, error) {
+	return 0, nil
 }
 
 func (s *LineFilterReader) hitExpr(expr influxql.Expr) bool {

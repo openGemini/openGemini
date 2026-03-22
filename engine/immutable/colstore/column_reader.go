@@ -64,11 +64,12 @@ func appendBooleanColumn(encData []byte, col *record.ColVal, coder *encoding.Cod
 func appendStringColumn(encData []byte, col *record.ColVal, coder *encoding.CoderContext) error {
 	col.Init()
 	if len(encData) != 0 {
-		values, _, err := encoding.DecodeStringBlock(encData, &col.Val, &col.Offset, coder)
+		var err error
+		col.Val, col.Offset, err = encoding.DecodeStringBlock(encData, col.Val, col.Offset, coder)
 		if err != nil {
 			return err
 		}
-		col.Len += len(values)
+		col.Len += len(col.Offset)
 	}
 
 	return nil

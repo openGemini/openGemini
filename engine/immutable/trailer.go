@@ -121,10 +121,6 @@ func (t *Trailer) copyTo(tr *Trailer) {
 	t.ExtraData.CopyTo(&tr.ExtraData)
 }
 
-func (t *Trailer) metaOffsetSize() (int64, int64) {
-	return t.dataOffset + t.dataSize, t.indexSize
-}
-
 func (t *Trailer) metaIndexOffsetSize() (int64, int64) {
 	return t.dataOffset + t.dataSize + t.indexSize, t.metaIndexSize
 }

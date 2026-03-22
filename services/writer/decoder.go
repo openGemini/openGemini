@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding/zstd"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/encoding/zstd"
 	"github.com/openGemini/openGemini/lib/compress"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/pool"

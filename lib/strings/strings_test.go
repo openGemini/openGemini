@@ -78,3 +78,14 @@ func TestStringBuilder(t *testing.T) {
 	str = sb.String()
 	assert.True(t, strings.EqualInterface(str, "12"))
 }
+
+func TestGlobalStringBuilder(t *testing.T) {
+	sb := strings.GetStringBuilder()
+	sb.AppendString("123")
+	str := sb.String()
+	assert.True(t, strings.EqualInterface(str, "123"))
+	sb.Truncate(sb.Size() - 1)
+	str = sb.String()
+	assert.True(t, strings.EqualInterface(str, "12"))
+	strings.PutStringBuilder(sb)
+}

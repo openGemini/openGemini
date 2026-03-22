@@ -390,6 +390,15 @@ func (r *UnorderedReader) AllocNilCol(size int, ref *record.Field) *record.ColVa
 	return nilCol
 }
 
+func (r *UnorderedReader) MatchMaxTime(maxTime int64) int64 {
+	n := GetMaxRowsPerSegment4TsStore() + r.ofs
+	if len(r.times) <= n {
+		return maxTime
+	}
+
+	return min(r.times[n-1], maxTime)
+}
+
 // Read reads data based on the series ID, column, and time range
 func (r *UnorderedReader) Read(sid uint64, maxTime int64) (*record.ColVal, []int64, error) {
 	nilTimes := r.ReadTimes(maxTime)

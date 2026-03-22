@@ -17,12 +17,13 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path"
-	"path/filepath"
 	"sort"
 	"strconv"
 	sysStrings "strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,7 +32,6 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/record"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
@@ -49,14 +49,14 @@ var DeleteDatabaseTimeout = time.Second * 15
 func (e *EngineImpl) DeleteDatabase(db string, ptId uint32) (err error) {
 	traceId := tsi.GenerateUUID()
 	begin := time.Now()
-	e.log.Info("drop database begin", zap.String("db", db),
+	e.log.GetZapLogger().Info("drop database begin", zap.String("db", db),
 		zap.Uint32("pt", ptId), zap.Uint64("trace_id", traceId))
 	defer func() {
-		e.log.Info("drop database finish",
+		e.log.GetZapLogger().Info("drop database finish",
 			zap.Error(err),
 			zap.String("time use", time.Since(begin).String()),
 			zap.String("db", db), zap.Uint32("pt", ptId),
-			zap.Uint64("trace_id", traceId))
+			zap.Uint64("trace_id", traceId), zap.Duration("elapsed", time.Since(begin)))
 	}()
 
 	if err := e.startDrop(db, e.droppingDB); err != nil {
@@ -88,12 +88,20 @@ func (e *EngineImpl) DeleteDatabase(db string, ptId uint32) (err error) {
 		return deleteDataAndWalPath(dataPath, walPath, obsOpt, &lockPath)
 	}
 
+	if stat.PTWriteStat.Enabled() {
+		dbPTInfo.mu.RLock()
+		for rp := range dbPTInfo.newestRpShard {
+			stat.RemovePtWriteStats(db, rp, ptId)
+		}
+		dbPTInfo.mu.RUnlock()
+	}
+
 	done := make(chan bool, 1)
 	if ok = dbPTInfo.markOffload(done); !ok {
 		select {
 		case <-done:
 		case <-time.After(DeleteDatabaseTimeout):
-			log.Warn("offload dbPt timeout", zap.String("db", db), zap.Uint32("pt id", ptId))
+			log.GetZapLogger().Warn("offload dbPt timeout", zap.String("db", db), zap.Uint32("pt id", ptId))
 			dbPTInfo.unMarkOffload()
 			e.mu.RUnlock()
 			atomic.AddInt64(&stat.EngineStat.DropDatabaseErrs, 1)
@@ -120,7 +128,7 @@ func (e *EngineImpl) DeleteDatabase(db string, ptId uint32) (err error) {
 	}
 
 	if dbPTInfo.node != nil {
-		log.Error("delete database trigger raft node stop!!!")
+		log.GetZapLogger().Error("delete database trigger raft node stop!!!")
 		dbPTInfo.node.Stop()
 	}
 	e.mu.RUnlock()
@@ -133,20 +141,14 @@ func (e *EngineImpl) DeleteDatabase(db string, ptId uint32) (err error) {
 }
 
 func (e *EngineImpl) DropRetentionPolicy(db string, rp string, ptId uint32) error {
-	rpName := db + "." + rp
-	if err := e.startDrop(rpName, e.droppingRP); err != nil {
-		return err
-	}
-	defer e.endDrop(rpName, e.droppingRP)
-
 	atomic.AddInt64(&stat.EngineStat.DropRPCount, 1)
 	start := time.Now()
-	e.log.Info("start drop retention policy...", zap.String("db", db), zap.String("rp", rp), zap.Uint32("pt", ptId))
+	e.log.GetZapLogger().Info("start drop retention policy...", zap.String("db", db), zap.String("rp", rp), zap.Uint32("pt", ptId))
 	defer func(st time.Time) {
 		d := time.Since(st)
 		atomic.AddInt64(&stat.EngineStat.DropRPDurations, d.Nanoseconds())
 		stat.UpdateEngineStatS()
-		e.log.Info("drop retention policy done",
+		e.log.GetZapLogger().Info("drop retention policy done",
 			zap.String("db", db), zap.String("rp", rp), zap.Duration("duration", d), zap.Uint32("pt", ptId))
 	}(start)
 
@@ -161,12 +163,19 @@ func (e *EngineImpl) DropRetentionPolicy(db string, rp string, ptId uint32) erro
 		}
 		return nil
 	}
-
-	if err := e.DbPTRef(db, ptId); err != nil {
+	dbPt, err := e.getPartition(db, ptId, true)
+	if err != nil {
 		atomic.AddInt64(&stat.EngineStat.DropRPErrs, 1)
 		return err
 	}
-	defer e.DbPTUnref(db, ptId)
+	defer func() { dbPt.unref() }()
+	stat.RemovePtWriteStats(db, rp, ptId)
+
+	rpName := db + "." + rp
+	if err := e.startDropRP(rpName, dbPt); err != nil {
+		return err
+	}
+	defer e.endDrop(rpName, e.droppingRP)
 
 	if err := e.deleteIndexes(db, ptId, rp, func(dbPTInfo *DBPTInfo, shardID uint64, sh Shard) error {
 		if err := sh.Close(); err != nil {
@@ -187,14 +196,14 @@ func (e *EngineImpl) DropRetentionPolicy(db string, rp string, ptId uint32) erro
 }
 
 func (e *EngineImpl) DropMeasurement(db string, rp string, name string, shardIds []uint64) error {
-	e.log.Info("start delete measurement...", zap.String("db", db), zap.String("name", name))
+	e.log.GetZapLogger().Info("start delete measurement...", zap.String("db", db), zap.String("name", name))
 	start := time.Now()
 	atomic.AddInt64(&stat.EngineStat.DropMstCount, 1)
 	defer func(tm time.Time) {
 		d := time.Since(tm)
 		atomic.AddInt64(&stat.EngineStat.DropMstDurations, d.Nanoseconds())
 		stat.UpdateEngineStatS()
-		e.log.Info("delete measurement done", zap.String("db", db), zap.String("name", name),
+		e.log.GetZapLogger().Info("delete measurement done", zap.String("db", db), zap.String("name", name),
 			zap.Duration("time used", d))
 	}(start)
 
@@ -218,7 +227,7 @@ func (e *EngineImpl) DropMeasurement(db string, rp string, name string, shardIds
 		return err
 	}
 
-	ident := colstore.NewMeasurementIdent(db, rp)
+	ident := util.NewMeasurementIdent(db, rp)
 	ident.SetName(name)
 
 	e.mu.RUnlock()
@@ -235,7 +244,7 @@ func (e *EngineImpl) DropMeasurement(db string, rp string, name string, shardIds
 				continue
 			}
 			if err := sh.DropMeasurement(context.TODO(), name); err != nil {
-				e.log.Error("drop measurement fail", zap.Uint32("ptid", ptID),
+				e.log.GetZapLogger().Error("drop measurement fail", zap.Uint32("ptid", ptID),
 					zap.Uint64("shard", id), zap.Error(err))
 				pt.mu.RUnlock()
 				atomic.AddInt64(&stat.EngineStat.DropMstErrs, 1)
@@ -249,31 +258,21 @@ func (e *EngineImpl) DropMeasurement(db string, rp string, name string, shardIds
 }
 
 func (e *EngineImpl) DropSeries() error {
-	e.log.Info("start drop series task")
+	e.log.GetZapLogger().Info("start drop series task")
 	var errs []error
 	// drop items in index
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	for db, dbptInfoMap := range e.DBPartitions {
-		for pt, dbptInfo := range dbptInfoMap {
-			ibMap := dbptInfo.indexBuilder
-			for indexId, ib := range ibMap {
-				if DelIndexBuilderId == indexId {
-					continue
-				}
-				err := ib.DropSeries()
-				if err != nil {
-					e.log.Error("drop series failed", zap.Uint32("pt", pt), zap.String("db", db), zap.Uint64("indexId", indexId))
-					errs = append(errs, err)
-				}
-			}
+		for ptId, dbptInfo := range dbptInfoMap {
+			errs = dbptInfo.ApplyDroppedSeries(ptId, db, errs)
 		}
 	}
 	if len(errs) > 0 {
 		err := errors.Join(errs...)
 		return err
 	}
-	e.log.Info("end drop series task")
+	e.log.GetZapLogger().Info("end drop series task")
 	return nil
 }
 
@@ -492,7 +491,7 @@ func (e *EngineImpl) StatisticsOps() []opsStat.OpsStatistic {
 		if len(msts) == 0 {
 			continue
 		}
-		ptIDs := e.getDBPtIds(database)
+		ptIDs := e.GetDBPtIds(database)
 		mstCardinality, err := e.SeriesCardinality(database, ptIDs, msts, nil, influxql.TimeRange{
 			Min: time.Unix(0, influxql.MinTime).UTC(),
 			Max: time.Unix(0, influxql.MaxTime).UTC(),
@@ -501,14 +500,11 @@ func (e *EngineImpl) StatisticsOps() []opsStat.OpsStatistic {
 			return nil
 		}
 
-		var ret meta2.CardinalityInfos
-		for i := range mstCardinality {
-			ret = append(ret, mstCardinality[i].CardinalityInfos...)
-		}
-
 		var totalCount uint64
-		for i := range ret {
-			totalCount += ret[i].Cardinality
+		for i := range mstCardinality {
+			for j := range mstCardinality[i].CardinalityInfos {
+				totalCount += mstCardinality[i].CardinalityInfos[j].Cardinality
+			}
 		}
 		valueMap := map[string]interface{}{
 			"numSeries": int64(totalCount),
@@ -520,9 +516,34 @@ func (e *EngineImpl) StatisticsOps() []opsStat.OpsStatistic {
 			Values: valueMap,
 		})
 	}
-
-	statistics = e.getFileSizeStats(statistics)
+	statistics = e.StatisticDatabaseShards(statistics)
 	return statistics
+}
+
+func (e *EngineImpl) StatisticDatabaseShards(statistics []opsStat.OpsStatistic) []opsStat.OpsStatistic {
+	if e.metaClient == nil {
+		return statistics
+	}
+	shardCountStatistics := e.metaClient.StatisticDatabaseShards()
+	statistics = append(statistics, shardCountStatistics...)
+	return statistics
+}
+
+// GetRPPTWriteStat is used by meta to pull write traffic statistics in units of rp
+func (e *EngineImpl) GetRPPTWriteStat(db, rp string) (meta2.PTMstWriteStatus, error) {
+	if !stat.PTWriteStat.Enabled() {
+		return nil, errors.New("PTWriteStatistics not enabled")
+	}
+	rpPtWriteStatus := make(meta2.PTMstWriteStatus)
+	ptIDs := e.GetDBPtIds(db)
+	for _, ptId := range ptIDs {
+		msts := stat.GetPtWriteStats(db, rp, ptId)
+		if msts == nil {
+			continue
+		}
+		rpPtWriteStatus[ptId] = msts.Copy()
+	}
+	return rpPtWriteStatus, nil
 }
 
 func (e *EngineImpl) Databases() []string {
@@ -536,7 +557,7 @@ func (e *EngineImpl) Databases() []string {
 	return databases
 }
 
-func (e *EngineImpl) getDBPtIds(dbName string) []uint32 {
+func (e *EngineImpl) GetDBPtIds(dbName string) []uint32 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	ids := make([]uint32, 0, len(e.DBPartitions[dbName]))
@@ -560,101 +581,127 @@ func (e *EngineImpl) getAllMst(dbName string) [][]byte {
 	return mstNames
 }
 
-func (e *EngineImpl) getFileSizeStats(statistics []opsStat.OpsStatistic) []opsStat.OpsStatistic {
-	dbPath := e.getAllDBPaths()
-	for dbName, paths := range dbPath {
-		var allFileSize int64
-		var dfvFileSize int64
-		var obsFileSize int64
-		for i := range paths {
-			totalSize, dfvSize, obsSize, _ := fileops.GetAllFilesSizeInPath(paths[i])
-			allFileSize += totalSize
-			dfvFileSize += dfvSize
-			obsFileSize += obsSize
-		}
-
-		valueMap := map[string]interface{}{
-			"diskBytes":    allFileSize,
-			"dfvDiskBytes": dfvFileSize,
-			"obsDiskBytes": obsFileSize,
-		}
-		statistics = append(statistics, opsStat.OpsStatistic{
-			Name:   stat.FileStatisticsName,
-			Tags:   stat.StatisticTags{"database": dbName}.Merge(stat.FileTagMap),
-			Values: valueMap,
-		})
-	}
-	return statistics
-}
-
-func (e *EngineImpl) getAllDBPaths() map[string][]string {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	if e.metaClient == nil {
-		return nil
-	}
-	dbs := e.metaClient.Databases()
-	dpPath := make(map[string][]string, len(dbs))
-	for _, db := range dbs {
-		path := make([]string, 2)
-		path[0] = filepath.Join(e.dataPath, config.DataDirectory, db.Name)
-		path[1] = filepath.Join(e.walPath, config.WalDirectory, db.Name)
-		dpPath[db.Name] = path
-	}
-	return dpPath
-}
-
 func (e *EngineImpl) CreateDDLBasePlans(planType hybridqp.DDLType, db string, ptIDs []uint32, tr *influxql.TimeRange) DDLBasePlans {
 	plan := &DDLBasePlansImpl{planType: planType}
 
 	for i := range ptIDs {
 		dbPT := e.getDBPTInfo(db, ptIDs[i])
 		if dbPT == nil {
-			e.log.Info("CreateDDLBasePlans DBPT not found", zap.String("db", db), zap.Uint32("ptID", ptIDs[i]))
+			e.log.GetZapLogger().Info("CreateDDLBasePlans DBPT not found", zap.String("db", db), zap.Uint32("ptID", ptIDs[i]))
 			continue
 		}
 
-		dbPT.walkShards(tr, func(sh Shard) {
+		dbPT.walkShards(tr, func(sh Shard) bool {
 			if p := sh.CreateDDLBasePlan(e.metaClient, planType); p != nil {
 				plan.AddPlan(p)
 			}
+			return true
 		})
 	}
 
 	return plan
 }
 
-func (e *EngineImpl) CreateConsumeIterator(db, mst string, opt *query.ProcessorOptions) []record.Iterator {
+func (e *EngineImpl) MarkDropSeries(db string, ptID uint32, mstName []byte, expr influxql.Expr, t tsi.TimeRange) error {
+	dbptInfo := e.getDBPTInfo(db, ptID)
+	if err := dbptInfo.MarkDropSeries(mstName, e.metaClient, expr, t); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (e *EngineImpl) CreateConsumeIterator(ident util.MeasurementIdent, pts []uint32, opt *query.ProcessorOptions) ([]record.Iterator, func()) {
 	ret := &ConsumeIterator{}
 	tr := &influxql.TimeRange{Min: time.Unix(0, opt.StartTime), Max: time.Unix(0, opt.EndTime)}
 
-	e.walkDBPt(db, func(pt *DBPTInfo) {
-		pt.walkShards(tr, func(sh Shard) {
-			itr := sh.CreateConsumeIterator(mst, opt)
-			if itr == nil {
-				return
-			}
+	var create = func(sh Shard) bool {
+		if sh.GetRPName() != ident.RP {
+			return true
+		}
 
-			ret.itrs = append(ret.itrs, itr)
-			ret.tms = append(ret.tms, sh.GetStartTime().UnixNano())
-		})
+		if err := sh.OpenAndEnable(e.metaClient); err != nil {
+			e.log.Error("OpenAndEnable failed", zap.Error(err), zap.String("ident", ident.String()),
+				zap.Uint64("shard id", sh.GetID()))
+			return true
+		}
+		itr := sh.CreateConsumeIterator(ident.Name, opt)
+		if itr == nil {
+			return true
+		}
+
+		ret.itrs = append(ret.itrs, itr)
+		ret.tms = append(ret.tms, sh.GetStartTime().UnixNano())
+		return true
+	}
+
+	var done func()
+	e.ExecuteInPt(ident.DB, pts, func(group *DBPTGroup) {
+		done = group.Release
+		for _, pt := range group.GetAll() {
+			pt.walkShards(tr, create)
+		}
 	})
 
 	sort.Sort(ret)
-	return ret.itrs
+	return ret.itrs, done
 }
 
-func (e *EngineImpl) walkDBPt(db string, fn func(pt *DBPTInfo)) {
-	ptIDs := e.getDBPtIds(db)
-	for i := range ptIDs {
-		dbPT := e.getDBPTInfo(db, ptIDs[i])
-		if dbPT == nil {
-			e.log.Info("CreateDDLBasePlans DBPT not found", zap.String("db", db), zap.Uint32("ptID", ptIDs[i]))
+type PTExecutorHandler func(group *DBPTGroup)
+
+func (e *EngineImpl) ExecuteInPt(db string, pts []uint32, handler PTExecutorHandler) {
+	if len(pts) == 0 {
+		return
+	}
+
+	group := NewDBPTGroup(len(pts))
+	for _, id := range pts {
+		pt := e.getDBPTInfo(db, id)
+		if pt == nil {
+			e.log.Warn("pt not found", zap.String("db", db), zap.Uint32("ptID", id))
+			continue
+		}
+		if !pt.bgrEnabled {
+			e.log.Warn("pt bgr Unenabled", zap.String("db", db), zap.Uint32("ptID", id))
+			continue
+		}
+		ok := pt.ref()
+		if !ok {
+			e.log.Warn("failed to ref pt", zap.String("db", db), zap.Uint32("ptID", id))
 			continue
 		}
 
-		fn(dbPT)
+		group.Add(pt)
 	}
+
+	defer func() {
+		if re := recover(); re != nil {
+			group.Release()
+			e.log.Error("failed to call handler", zap.Any("recover", re),
+				zap.String("db", db), zap.Uint32s("pts", pts))
+		}
+	}()
+	handler(group)
+}
+
+func (e *EngineImpl) GetShardIDs(db string, ptId uint32, tr *influxql.TimeRange) ([]uint64, error) {
+	dbptInfo := e.getDBPTInfo(db, ptId)
+	if dbptInfo == nil {
+		return nil, fmt.Errorf("dbpt is not found. db: %s, ptID: %d", db, ptId)
+	}
+	return dbptInfo.ShardIds(tr), nil
+}
+
+func (e *EngineImpl) IsColStore(db, rp, mst string) bool {
+	msInfo, ok := colstore.MstManagerIns().Get(db, rp, mst)
+	return ok && msInfo != nil
+}
+
+func (e *EngineImpl) GetColStorePK(db, rp, mst string) (record.Schemas, bool) {
+	mstInfo, ok := colstore.MstManagerIns().Get(db, rp, mst)
+	if !ok || mstInfo == nil {
+		return nil, ok
+	}
+	return mstInfo.PrimaryKey(), ok
 }
 
 type DDLBasePlansImpl struct {
@@ -729,4 +776,31 @@ func (ci *ConsumeIterator) Less(i, j int) bool {
 func (ci *ConsumeIterator) Swap(i, j int) {
 	ci.itrs[i], ci.itrs[j] = ci.itrs[j], ci.itrs[i]
 	ci.tms[i], ci.tms[j] = ci.tms[j], ci.tms[i]
+}
+
+type DBPTGroup struct {
+	pts  []*DBPTInfo
+	once sync.Once
+}
+
+func NewDBPTGroup(size int) *DBPTGroup {
+	return &DBPTGroup{
+		pts: make([]*DBPTInfo, 0, size),
+	}
+}
+
+func (g *DBPTGroup) Add(pt *DBPTInfo) {
+	g.pts = append(g.pts, pt)
+}
+
+func (g *DBPTGroup) GetAll() []*DBPTInfo {
+	return g.pts
+}
+
+func (g *DBPTGroup) Release() {
+	g.once.Do(func() {
+		for _, pt := range g.pts {
+			pt.unref()
+		}
+	})
 }

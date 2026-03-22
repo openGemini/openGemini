@@ -35,6 +35,7 @@ type KeyCondition interface {
 	MayBeInRange(usedKeySize int, indexLeft []*FieldRef, indexRight []*FieldRef, dataTypes []int) (bool, error)
 	CheckInRange(rgs []*Range, dataTypes []int) (Mark, error)
 	AlwaysInRange() (bool, error)
+	GetRPN() []*RPNElement
 }
 
 type KeyConditionImpl struct {
@@ -66,8 +67,10 @@ func (kc *KeyConditionImpl) convertToRPNElem(
 				kc.rpn = append(kc.rpn, &RPNElement{op: rpn.AND})
 			case influxql.OR:
 				kc.rpn = append(kc.rpn, &RPNElement{op: rpn.OR})
-			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ, influxql.MATCHPHRASE, influxql.MATCH, influxql.LIKE, influxql.IPINRANGE:
 			default:
+				if IsCompareOp(v) {
+					break
+				}
 				return errno.NewError(errno.ErrRPNOp, v)
 			}
 		case *influxql.VarRef:
@@ -107,21 +110,43 @@ func (kc *KeyConditionImpl) genRPNElementByVal(
 ) error {
 	rpnElem := &RPNElement{keyColumn: idx}
 	value := NewFieldRef(cols, idx, 0)
+	col := value.cols[idx]
+	valueType := col.dataType
 	switch rhs := rhs.(type) {
 	case *influxql.StringLiteral:
-		value.cols[idx].column.AppendString(rhs.Val)
+		switch valueType {
+		case influx.Field_Type_String:
+			col.column.AppendString(rhs.Val)
+		default:
+			return errno.NewError(errno.ErrRPNElemType, col.name, influx.FieldTypeName[valueType], op.String(), "String")
+		}
 	case *influxql.NumberLiteral:
-		value.cols[idx].column.AppendFloat(rhs.Val)
+		switch valueType {
+		case influx.Field_Type_Float:
+			col.column.AppendFloat(rhs.Val)
+		default:
+			return errno.NewError(errno.ErrRPNElemType, col.name, influx.FieldTypeName[valueType], op.String(), "Float")
+		}
 	case *influxql.IntegerLiteral:
-		value.cols[idx].column.AppendInteger(rhs.Val)
+		switch valueType {
+		case influx.Field_Type_Int:
+			col.column.AppendInteger(rhs.Val)
+		case influx.Field_Type_Float:
+			col.column.AppendFloat(float64(rhs.Val))
+		default:
+			return errno.NewError(errno.ErrRPNElemType, col.name, influx.FieldTypeName[valueType], op.String(), "Integer")
+		}
 	case *influxql.BooleanLiteral:
-		value.cols[idx].column.AppendBoolean(rhs.Val)
+		switch valueType {
+		case influx.Field_Type_Boolean:
+			col.column.AppendBoolean(rhs.Val)
+		default:
+			return errno.NewError(errno.ErrRPNElemType, col.name, influx.FieldTypeName[valueType], op.String(), "Boolean")
+		}
 	default:
 		return errno.NewError(errno.ErrRPNElement, rhs)
 	}
-	if value.cols[idx].column.Len > 1 {
-		value.row = value.cols[idx].column.Len - 1
-	}
+	value.row = col.column.Len - 1
 	if ok := genRPNElementByOp(op, value, rpnElem); ok {
 		kc.rpn = append(kc.rpn, rpnElem)
 	}
@@ -463,7 +488,12 @@ func (kc *KeyConditionImpl) AlwaysInRange() (bool, error) {
 }
 
 func (kc *KeyConditionImpl) HavePrimaryKey() bool {
-	return len(kc.rpn) > 0
+	for _, rpnElem := range kc.rpn {
+		if rpnElem.rg != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (kc *KeyConditionImpl) GetMaxKeyIndex() int {
@@ -494,16 +524,18 @@ func (kc *KeyConditionImpl) SetRPN(rpn []*RPNElement) {
 
 type SKCondition interface {
 	IsExist(blockId int64, reader rpn.SKBaseReader) (bool, error)
+	GetRowCount(blockId int64, reader rpn.SKBaseReader) (int64, error)
 }
 
 type SKConditionImpl struct {
-	schema   record.Schemas
-	rpn      []*rpn.SKRPNElement
-	rpnStack []bool
+	schema     record.Schemas
+	rpn        []*rpn.SKRPNElement
+	rpnStack   []bool
+	countStack []int64
 }
 
 func NewSKCondition(rpnExpr *rpn.RPNExpr, schema record.Schemas) (SKCondition, error) {
-	c := &SKConditionImpl{schema: schema, rpnStack: make([]bool, 0, len(rpnExpr.Val))}
+	c := &SKConditionImpl{schema: schema, rpnStack: make([]bool, 0, len(rpnExpr.Val)), countStack: make([]int64, 0, len(rpnExpr.Val))}
 	if err := c.convertToRPNElem(rpnExpr); err != nil {
 		return nil, err
 	}
@@ -519,8 +551,10 @@ func (c *SKConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr) error {
 				c.rpn = append(c.rpn, &rpn.SKRPNElement{RPNOp: rpn.AND})
 			case influxql.OR:
 				c.rpn = append(c.rpn, &rpn.SKRPNElement{RPNOp: rpn.OR})
-			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ, influxql.MATCHPHRASE, influxql.MATCH, influxql.LIKE, influxql.IPINRANGE:
 			default:
+				if IsCompareOp(v) {
+					break
+				}
 				return errno.NewError(errno.ErrRPNOp, v)
 			}
 		case *influxql.VarRef:
@@ -567,7 +601,11 @@ func (c *SKConditionImpl) genRPNElementByFullText(key string, value interface{},
 }
 
 func (c *SKConditionImpl) genRPNElementByVal(key string, value interface{}, op influxql.Token) error {
-	e := &rpn.SKRPNElement{RPNOp: rpn.InRange, Key: key, Op: op}
+	rpnOp := rpn.InRange
+	if op == influxql.UNMATCHPHRASE {
+		rpnOp = rpn.OutRange
+	}
+	e := &rpn.SKRPNElement{RPNOp: rpnOp, Key: key, Op: op}
 	switch val := value.(type) {
 	case *influxql.StringLiteral:
 		e.Value = val.Val
@@ -590,6 +628,7 @@ func (c *SKConditionImpl) genRPNElementByVal(key string, value interface{}, op i
 
 func (c *SKConditionImpl) IsExist(blockId int64, reader rpn.SKBaseReader) (bool, error) {
 	c.rpnStack = c.rpnStack[:0]
+	c.countStack = c.countStack[:0]
 	for _, elem := range c.rpn {
 		switch elem.RPNOp {
 		case rpn.InRange:
@@ -597,11 +636,28 @@ func (c *SKConditionImpl) IsExist(blockId int64, reader rpn.SKBaseReader) (bool,
 			if err != nil {
 				return false, err
 			}
+			var count int64
+			if ok {
+				count, err = reader.GetRowCount(blockId, elem)
+				if err != nil {
+					return false, err
+				}
+			}
 			c.rpnStack = append(c.rpnStack, ok)
+			c.countStack = append(c.countStack, count)
+		case rpn.OutRange:
+			ok, err := reader.IsExist(blockId, elem)
+			if err != nil {
+				return false, err
+			}
+			c.rpnStack = append(c.rpnStack, ok)
+			c.countStack = append(c.countStack, 0)
 		case rpn.AlwaysTrue:
 			c.rpnStack = append(c.rpnStack, true)
+			c.countStack = append(c.countStack, 0)
 		case rpn.AlwaysFalse:
 			c.rpnStack = append(c.rpnStack, false)
+			c.countStack = append(c.countStack, 0)
 		case rpn.AND:
 			if len(c.rpnStack) < 2 {
 				return false, errno.NewError(errno.ErrRPNIsNullForAnd)
@@ -610,6 +666,7 @@ func (c *SKConditionImpl) IsExist(blockId int64, reader rpn.SKBaseReader) (bool,
 			c.rpnStack = c.rpnStack[:len(c.rpnStack)-1]
 			v2 := c.rpnStack[len(c.rpnStack)-1]
 			c.rpnStack[len(c.rpnStack)-1] = v1 && v2
+			c.countStack[len(c.rpnStack)-1] = 0
 		case rpn.OR:
 			if len(c.rpnStack) < 2 {
 				return false, errno.NewError(errno.ErrRPNIsNullForOR)
@@ -618,6 +675,7 @@ func (c *SKConditionImpl) IsExist(blockId int64, reader rpn.SKBaseReader) (bool,
 			c.rpnStack = c.rpnStack[:len(c.rpnStack)-1]
 			v2 := c.rpnStack[len(c.rpnStack)-1]
 			c.rpnStack[len(c.rpnStack)-1] = v1 || v2
+			c.countStack[len(c.rpnStack)-1] = 0
 		default:
 			return false, errno.NewError(errno.ErrUnknownOpInCondition)
 		}
@@ -626,4 +684,8 @@ func (c *SKConditionImpl) IsExist(blockId int64, reader rpn.SKBaseReader) (bool,
 		return false, errno.NewError(errno.ErrInvalidStackInCondition)
 	}
 	return c.rpnStack[0], nil
+}
+
+func (c *SKConditionImpl) GetRowCount(blockId int64, reader rpn.SKBaseReader) (int64, error) {
+	return c.countStack[0], nil
 }

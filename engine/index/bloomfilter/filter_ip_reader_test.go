@@ -56,7 +56,7 @@ func TestReadLineFilterIp(t *testing.T) {
 
 	filterReader, err := CreateFilterReader(indextype.BloomFilterIp, tmpDir, nil, expr, 4, splitMap, fileName)
 	if err != nil {
-		t.Errorf("NewMultiFiledLineFilterReader failed: %s", err)
+		t.Errorf("NewMultiFieldLineFilterReader failed: %s", err)
 	}
 	filterReader.StartSpan(nil)
 	isExist, _ := filterReader.IsExist(int64(0), nil)
@@ -92,7 +92,7 @@ func TestReadLineFilterIpSubnet(t *testing.T) {
 
 	filterReader, err := CreateFilterReader(indextype.BloomFilterIp, tmpDir, nil, expr, 4, splitMap, fileName)
 	if err != nil {
-		t.Errorf("NewMultiFiledLineFilterReader failed: %s", err)
+		t.Errorf("NewMultiFieldLineFilterReader failed: %s", err)
 	}
 	filterReader.StartSpan(nil)
 	isExist, _ := filterReader.IsExist(int64(0), nil)

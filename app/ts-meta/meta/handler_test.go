@@ -21,7 +21,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -95,31 +95,30 @@ func TestRecoverDatabase(t *testing.T) {
 	go mockHTTPServer(false, "127.0.0.1:8901", t)
 
 	time.Sleep(1 * time.Second)
-	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
-	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
+	backupRoot := filepath.Join(t.TempDir(), "backup_dir")
+	fullBackupPath := filepath.Join(backupRoot, "backup")
+	incBackupPath := filepath.Join(backupRoot, "backup_inc")
 
-	recoverConfig := &recover2.RecoverConfig{
+	opt := &recover2.RecoverOptions{
 		RecoverMode:        "2",
 		FullBackupDataPath: fullBackupPath,
 		IncBackupDataPath:  incBackupPath,
 		Host:               "127.0.0.1:8086",
-		DataDir:            "/tmp/openGemini/backup_dir/data",
+		DataDir:            filepath.Join(backupRoot, "data"),
 	}
 
-	result := backup.BackupResult{Result: "success", DataBases: map[string]struct{}{"prom": {}}}
+	result := backup.BackupResult{Result: "success", Databases: map[string]struct{}{"prom": {}}}
 	b, _ := json.Marshal(result)
 	_ = backup.WriteBackupLogFile(b, fullBackupPath, backup.ResultLog)
 	_ = backup.WriteBackupLogFile(b, incBackupPath, backup.ResultLog)
 
 	t.Run("1", func(t *testing.T) {
-		err := recover2.BackupRecover(recoverConfig)
+		err := opt.BackupRecover()
 		if err == nil {
 			t.Fail()
 		}
 	})
 
-	os.RemoveAll(fullBackupPath)
-	os.RemoveAll(incBackupPath)
 }
 
 func TestHttpHandler_ServeHTTP(t *testing.T) {
@@ -192,7 +191,8 @@ type MockIStore struct {
 func (s *MockIStore) MeteRecover() {
 
 }
-func (s *MockIStore) leaderHTTP() string {
+
+func (s *MockIStore) LeaderHTTP() string {
 	return ""
 }
 
@@ -255,6 +255,15 @@ func (s *MockIStore) ModifyRepDBMasterPt(db string, rgId uint32, newMasterPtId u
 func (s *MockIStore) RecoverMetaData(databases []string, metaData []byte, node map[uint64]uint64) error {
 	return nil
 }
+func (s *MockIStore) GetConfig() *config.Meta {
+	return nil
+}
+
+func (s *MockIStore) RestoreData(metaHost string) error {
+	return nil
+}
+
+func (s *MockIStore) forceMetaData(*meta2.Data) error { return nil }
 
 func TestServeExpandGroups(t *testing.T) {
 	handler := newHttpHandler(&config.Meta{}, &MockIStore{})

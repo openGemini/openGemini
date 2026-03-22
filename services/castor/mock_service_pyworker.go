@@ -143,6 +143,19 @@ func BuildStringRecord() arrow.Record {
 	return rec
 }
 
+func BuildEmptyRecord() arrow.Record {
+	metaKeys := []string{"t", string(AnomalyNum), string(MessageType), string(TaskID)}
+	metaVals := []string{"1", "1", string(DATA), ""}
+	metaData := arrow.NewMetadata(metaKeys, metaVals)
+	var fields []arrow.Field
+	schema := arrow.NewSchema(fields, &metaData)
+	pool := memory.NewGoAllocator()
+	b := array.NewRecordBuilder(pool, schema)
+	defer b.Release()
+	rec := b.NewRecord()
+	return rec
+}
+
 type mockCastorConf struct {
 	Analysis config.Castor `toml:"castor"`
 }

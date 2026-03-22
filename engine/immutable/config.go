@@ -17,29 +17,28 @@ package immutable
 import (
 	"math"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 )
 
 var tsStoreConf = Config{
-	maxSegmentLimit:       math.MaxUint16,
-	maxRowsPerSegment:     util.DefaultMaxRowsPerSegment4TsStore,
-	maxChunkMetaItemSize:  util.DefaultMaxChunkMetaItemSize,
-	maxChunkMetaItemCount: util.DefaultMaxChunkMetaItemCount,
-	fileSizeLimit:         util.DefaultFileSizeLimit,
-	streamingCompact:      util.AutoCompact,
+	maxSegmentLimit:   math.MaxUint16,
+	maxRowsPerSegment: util.DefaultMaxRowsPerSegment4TsStore,
+	fileSizeLimit:     util.DefaultFileSizeLimit,
+	streamingCompact:  util.AutoCompact,
+	CompressChunkMeta: false,
 }
 
 var colStoreConf = Config{
-	maxSegmentLimit:       util.DefaultMaxSegmentLimit4ColStore,
-	maxRowsPerSegment:     util.DefaultMaxRowsPerSegment4ColStore,
-	maxChunkMetaItemSize:  util.DefaultMaxChunkMetaItemSize,
-	maxChunkMetaItemCount: util.DefaultMaxChunkMetaItemCount,
-	fileSizeLimit:         util.DefaultFileSizeLimit,
-	detachedFlushEnabled:  false,
-	compactionEnabled:     false,
-	streamingCompact:      util.AutoCompact,
-	expectedSegmentSize:   util.DefaultExpectedSegmentSize,
+	maxSegmentLimit:     util.DefaultMaxSegmentLimit4ColStore,
+	maxRowsPerSegment:   util.DefaultMaxRowsPerSegment4ColStore,
+	fileSizeLimit:       util.DefaultFileSizeLimit,
+	streamingCompact:    util.AutoCompact,
+	expectedSegmentSize: util.DefaultExpectedSegmentSize,
+
+	// For column engine cannot use the ChunkMeta compression feature due to differences in data organization.
+	CompressChunkMeta: false,
 }
 
 func SetMaxRowsPerSegment4TsStore(maxRowsPerSegmentLimit int) {
@@ -63,17 +62,14 @@ func SetMaxSegmentLimit4TsStore(limit int) {
 }
 
 type Config struct {
-	maxSegmentLimit       int
-	maxRowsPerSegment     int
-	fileSizeLimit         int64
-	maxChunkMetaItemSize  int
-	maxChunkMetaItemCount int
-	SnapshotTblNum        int
-	FragmentsNumPerFlush  int
-	compactionEnabled     bool
-	detachedFlushEnabled  bool
-	streamingCompact      int32
-	expectedSegmentSize   uint32
+	maxSegmentLimit      int
+	maxRowsPerSegment    int
+	fileSizeLimit        int64
+	SnapshotTblNum       int
+	FragmentsNumPerFlush int
+	streamingCompact     int32
+	expectedSegmentSize  uint32
+	CompressChunkMeta    bool
 }
 
 func GetTsStoreConfig() *Config {
@@ -123,7 +119,8 @@ func (c *Config) GetMaxSegmentLimit() int {
 }
 
 func (c *Config) GetCompactionEnabled() bool {
-	return c.compactionEnabled
+	conf := config.GetStoreConfig()
+	return conf.Compact.CsCompactionEnabled || conf.ColumnStore.CompactEnabled
 }
 
 func (c *Config) SetExpectedSegmentSize(n uint32) {
@@ -147,11 +144,7 @@ func SetFragmentsNumPerFlush(fragmentsNumPerFlush int) {
 }
 
 func SetCompactionEnabled(compactionEnabled bool) {
-	colStoreConf.compactionEnabled = compactionEnabled
-}
-
-func SetDetachedFlushEnabled(detachFlushEnabled bool) {
-	colStoreConf.detachedFlushEnabled = detachFlushEnabled
+	config.GetStoreConfig().ColumnStore.CompactEnabled = compactionEnabled
 }
 
 func GetMaxRowsPerSegment4TsStore() int {
@@ -164,8 +157,4 @@ func SetMergeFlag4TsStore(v int32) {
 
 func GetMergeFlag4TsStore() int32 {
 	return tsStoreConf.streamingCompact
-}
-
-func GetDetachedFlushEnabled() bool {
-	return colStoreConf.detachedFlushEnabled
 }

@@ -15,6 +15,9 @@
 package consume
 
 import (
+	"encoding/json"
+	"fmt"
+
 	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/metaclient"
@@ -66,13 +69,14 @@ func (h *FetchHandleV2) Handle(header protocol.RequestHeader, body []byte, onMes
 }
 
 func (h *FetchHandleV2) handle(header protocol.RequestHeader, req *protocol.RequestFetchV2, onMessage handle.OnMessage) error {
-	topic := &Topic{}
 	// Only supports consuming a single topic
-	topic.Query = req.Topics[0]
+	topic := &Topic{}
+	if err := json.Unmarshal([]byte(req.Topics[0]), topic); err != nil {
+		return fmt.Errorf("parse topic config: %w", err)
+	}
 
-	var err error
 	if h.processor.IteratorSize() == 0 {
-		if err = h.processor.Init(topic); err != nil {
+		if err := h.processor.Init(topic); err != nil {
 			return err
 		}
 	}
@@ -88,7 +92,12 @@ func (h *FetchHandleV2) handle(header protocol.RequestHeader, req *protocol.Requ
 		Messages: make(protocol.FetchMessages, 0, MessageCount),
 	}
 
-	if err = h.processor.Process(func(msg protocol.Marshaler) bool {
+	fetchParams := FetchParams{
+		MinRows:   req.MinBytes,
+		TimeoutMs: req.MaxWaitTime,
+	}
+
+	if err := h.processor.Process(fetchParams, func(msg protocol.Marshaler) bool {
 		resp.Messages = append(resp.Messages, protocol.FetchMessage{
 			FirstOffset: h.offset,
 			Message:     msg,
@@ -101,4 +110,8 @@ func (h *FetchHandleV2) handle(header protocol.RequestHeader, req *protocol.Requ
 
 	resp.Header.HighwaterMarkOffset = h.offset + 1
 	return onMessage(resp)
+}
+
+func (h *FetchHandleV2) Release() {
+	h.processor.Release()
 }

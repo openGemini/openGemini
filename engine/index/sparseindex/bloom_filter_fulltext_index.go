@@ -66,6 +66,10 @@ func (r *BloomFilterFullTextIndexReader) MayBeInFragment(fragId uint32) (bool, e
 	return r.sk.IsExist(int64(fragId), r.bf)
 }
 
+func (r *BloomFilterFullTextIndexReader) GetFragmentRowCount(fragId uint32) (int64, error) {
+	return 0, nil
+}
+
 func (r *BloomFilterFullTextIndexReader) StartSpan(span *tracing.Span) {
 	if span == nil {
 		return
@@ -123,7 +127,7 @@ func (r *BloomFilterFullTextIndexReader) ReInit(file interface{}) (err error) {
 		fileName := f1.Path()[index+1:]
 		fileNameSlice := strings.Split(fileName, ".")
 		fileName = fileNameSlice[0] + "." + BloomFilterFilePrefix + FullTextIndex + colstore.BloomFilterIndexFileSuffix
-		r.bf, err = bloomfilter.NewMultiFiledLineFilterReader(path, nil, expr, r.version, splitMap, fileName)
+		r.bf, err = bloomfilter.NewMultiFieldLineFilterReader(path, nil, expr, r.version, splitMap, fileName)
 
 		if err != nil {
 			return err
@@ -151,18 +155,14 @@ type FullTextIdxWriter struct {
 	*skipIndexWriter
 }
 
+func (f *FullTextIdxWriter) Flush() error {
+	return nil
+}
+
 func NewBloomFilterFullTextWriter(dir, msName, dataFilePath, lockPath string, tokens string) *FullTextIdxWriter {
 	return &FullTextIdxWriter{
 		newSkipIndexWriter(dir, msName, dataFilePath, lockPath, tokens),
 	}
-}
-
-func (f *FullTextIdxWriter) Open() error {
-	return nil
-}
-
-func (f *FullTextIdxWriter) Close() error {
-	return nil
 }
 
 func (f *FullTextIdxWriter) getFullTextIdxFilePath(detached bool) string {
@@ -177,7 +177,15 @@ func (f *FullTextIdxWriter) CreateAttachIndex(writeRec *record.Record, schemaIdx
 	defer logstore.PutSkipIndexBuf(indexBuf)
 
 	data, skipIndexFilePaths := f.createSkipIndex(writeRec, schemaIdx, rowsPerSegment, *indexBuf, false)
-	return writeSkipIndexToDisk(data[0], f.lockPath, skipIndexFilePaths[0])
+	if len(skipIndexFilePaths) == 0 || len(data) == 0 {
+		return fmt.Errorf("failed to create skip index")
+	}
+
+	writer, err := f.GetWriter(skipIndexFilePaths[0])
+	if err != nil {
+		return err
+	}
+	return writer.WriteData(data[0])
 }
 
 func (f *FullTextIdxWriter) CreateDetachIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int, dataBuf [][]byte) ([][]byte, []string) {

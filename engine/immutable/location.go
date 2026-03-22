@@ -26,6 +26,35 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 )
 
+const (
+	readIOCount           = "read_io"
+	readIODuration        = "read_io_duration"
+	filterDuration        = "filter_duration"
+	fileLocationDuration  = "file_location_duration"
+	chunkMetaReadDuration = "chunk_meta_read_duration"
+)
+
+func CreateLocIOSpanCounters(span *tracing.Span, isPreAgg bool) {
+	span.CreateCounter(readIOCount, "")
+	span.CreateCounter(readIODuration, "ns")
+	span.CreateCounter(filterDuration, "ns")
+	if isPreAgg {
+		createFileOpenSpanCounters(span)
+	}
+}
+
+func CreateLocFileOpenSpanCounters(span *tracing.Span, isPreAgg bool) {
+	if isPreAgg {
+		return
+	}
+	createFileOpenSpanCounters(span)
+}
+
+func createFileOpenSpanCounters(span *tracing.Span) {
+	span.CreateCounter(fileLocationDuration, "ns")
+	span.CreateCounter(chunkMetaReadDuration, "ns")
+}
+
 type Location struct {
 	ctx     *ReadContext
 	r       TSSPFile
@@ -33,6 +62,7 @@ type Location struct {
 	segPos  int
 	fragPos int // Indicates the sequence number of a fragment range.
 	fragRgs []*fragment.FragmentRange
+	span    *tracing.Span
 }
 
 type ColAux struct {
@@ -109,7 +139,6 @@ func (l *Location) readChunkMeta(id uint64, tr util.TimeRange, ctx *ChunkMetaCon
 		return nil
 	}
 
-	ctx.meta = l.meta
 	meta, err := l.r.ChunkMeta(id, m.offset, m.size, m.count, idx, ctx, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err != nil {
 		return err
@@ -119,7 +148,7 @@ func (l *Location) readChunkMeta(id uint64, tr util.TimeRange, ctx *ChunkMetaCon
 		return nil
 	}
 
-	if !tr.Overlaps(meta.MinMaxTime()) {
+	if !l.ctx.IsCsStore() && !tr.Overlaps(meta.MinMaxTime()) {
 		return nil
 	}
 
@@ -175,6 +204,9 @@ func (l *Location) DescendingDone() {
 }
 
 func (l *Location) Contains(sid uint64, tr util.TimeRange, ctx *ChunkMetaContext) (bool, error) {
+	locationElapsedEnd := tracing.GetElapsedCounter(l.span, fileLocationDuration)
+	defer locationElapsedEnd()
+
 	// use bloom filter and file time range to filter generally
 	contains, err := l.r.ContainsValue(sid, tr)
 	if err != nil {
@@ -185,7 +217,9 @@ func (l *Location) Contains(sid uint64, tr util.TimeRange, ctx *ChunkMetaContext
 	}
 
 	// read file meta to judge whether file has data, chunk meta will also init
+	chunkMetaReadEnd := tracing.GetElapsedCounter(l.span, chunkMetaReadDuration)
 	err = l.readChunkMeta(sid, tr, ctx)
+	chunkMetaReadEnd()
 	if err != nil {
 		return false, err
 	}
@@ -264,7 +298,7 @@ func (l *Location) readData(filterOpts *FilterOptions, dst, filterRec *record.Re
 	var err error
 	var oriRowCount int
 
-	if !l.ctx.tr.Overlaps(l.meta.MinMaxTime()) {
+	if !l.ctx.IsCsStore() && !l.ctx.tr.Overlaps(l.meta.MinMaxTime()) {
 		l.nextSegment(true)
 		return nil, 0, nil
 	}
@@ -280,9 +314,15 @@ func (l *Location) readData(filterOpts *FilterOptions, dst, filterRec *record.Re
 		}
 
 		tracing.StartPP(l.ctx.readSpan)
+		tracing.AddCounter(l.span, readIOCount, 1)
+		readIoEnd := tracing.GetElapsedCounter(l.span, readIODuration)
 		rec, err = l.r.ReadAt(l.meta, l.segPos, dst, l.ctx, fileops.IO_PRIORITY_ULTRA_HIGH)
+		readIoEnd()
 		if err != nil {
 			return nil, 0, err
+		}
+		if rec != nil {
+			oriRowCount += rec.RowNums()
 		}
 		l.nextSegment(false)
 
@@ -295,8 +335,9 @@ func (l *Location) readData(filterOpts *FilterOptions, dst, filterRec *record.Re
 			unnestOperator.Compute(rec)
 		}
 		tracing.SpanElapsed(l.ctx.filterSpan, func() {
-			if rec != nil {
-				oriRowCount += rec.RowNums()
+			filterEnd := tracing.GetElapsedCounter(l.span, filterDuration)
+			defer filterEnd()
+			if rec != nil && !l.ctx.IsTimeDisorder() {
 				if l.ctx.Ascending {
 					rec = FilterByTime(rec, l.ctx.tr)
 				} else {
@@ -332,14 +373,17 @@ func (l *Location) ResetMeta() {
 	}
 }
 
+func (l *Location) SetSpan(span *tracing.Span) {
+	l.span = span
+}
+
 type ChunkMetaContext struct {
 	codecCtx *ChunkMetaCodecCtx
-	meta     *ChunkMeta
 	buf      *pool.Buffer
 	columns  []string
 }
 
-func (ctx *ChunkMetaContext) initColumns(schema record.Schemas) {
+func (ctx *ChunkMetaContext) InitColumns(schema record.Schemas) {
 	ctx.columns = ctx.columns[:0]
 	if len(schema) == 0 {
 		return
@@ -351,10 +395,7 @@ func (ctx *ChunkMetaContext) initColumns(schema record.Schemas) {
 }
 
 func (ctx *ChunkMetaContext) chunkMeta() *ChunkMeta {
-	if ctx.meta == nil {
-		ctx.meta = &ChunkMeta{}
-	}
-	return ctx.meta
+	return &ChunkMeta{}
 }
 
 func (ctx *ChunkMetaContext) CodecCtx() *ChunkMetaCodecCtx {
@@ -374,20 +415,18 @@ func (ctx *ChunkMetaContext) Instance() *ChunkMetaContext {
 
 func (ctx *ChunkMetaContext) Release() {
 	ctx.columns = ctx.columns[:0]
-	ctx.meta = nil
 	chunkMetaContextPool.Put(ctx)
 }
 
 func NewChunkMetaContext(schema record.Schemas) *ChunkMetaContext {
 	ctx := chunkMetaContextPool.Get()
-	ctx.initColumns(schema)
+	ctx.InitColumns(schema)
 	return ctx
 }
 
 func newChunkMetaContext() *ChunkMetaContext {
 	return &ChunkMetaContext{
-		meta: &ChunkMeta{},
-		buf:  &pool.Buffer{},
+		buf: &pool.Buffer{},
 	}
 }
 

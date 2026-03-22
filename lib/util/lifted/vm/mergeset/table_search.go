@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/openGemini/openGemini/lib/logger"
 )
 
 // TableSearch is a reusable cursor used for searching in the Table.
@@ -60,7 +60,7 @@ func (ts *TableSearch) reset() {
 // MustClose must be called when the ts is no longer needed.
 func (ts *TableSearch) Init(tb *Table) {
 	if ts.needClosing {
-		logger.Panicf("BUG: missing MustClose call before the next call to Init")
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: missing MustClose call before the next call to Init"))
 	}
 
 	ts.reset()
@@ -189,7 +189,7 @@ func (ts *TableSearch) Error() error {
 // MustClose closes the ts.
 func (ts *TableSearch) MustClose() {
 	if !ts.needClosing {
-		logger.Panicf("BUG: missing Init call before MustClose call")
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: missing Init call before MustClose call"))
 	}
 	ts.tb.putParts(ts.pws)
 	ts.reset()

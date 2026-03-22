@@ -576,6 +576,10 @@ func (mock *MockShardGroup) SetNeedNodeExchange(enable bool) {
 	mock.needNodeExchange = enable
 }
 
+func (mock *MockShardGroup) GetResource(resource string) map[string]string {
+	return nil
+}
+
 func NewMockShardGroup() *MockShardGroup {
 	return &MockShardGroup{
 		shards: make(map[string]*Table),
@@ -871,6 +875,7 @@ func (r *MemStoreReader) Next() []*Segment {
 }
 
 type Storage struct {
+	hybridqp.StoreEngine
 	catalog   *Catalog
 	directory map[string]*MemStore
 	rwm       sync.RWMutex
