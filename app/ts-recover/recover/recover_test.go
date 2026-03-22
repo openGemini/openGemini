@@ -28,6 +28,36 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+const fixedRecoverBackupDir = "/tmp/openGemini/backup_dir"
+
+func prepareRecoverBackupDir(t *testing.T) {
+	t.Helper()
+
+	target := filepath.Join(t.TempDir(), "backup_dir")
+	if err := os.MkdirAll(target, 0700); err != nil {
+		t.Fatalf("create temp backup dir failed: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(fixedRecoverBackupDir), 0700); err != nil {
+		t.Fatalf("create fixed backup parent dir failed: %v", err)
+	}
+	_ = os.RemoveAll(fixedRecoverBackupDir)
+	if err := os.Symlink(target, fixedRecoverBackupDir); err != nil {
+		t.Fatalf("link fixed backup dir failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(fixedRecoverBackupDir)
+	})
+}
+
+func recoverPath(elem ...string) string {
+	parts := append([]string{fixedRecoverBackupDir}, elem...)
+	return filepath.Join(parts...)
+}
+
+func recoverArchivePath(backupPath, archiveDir, originalPath string) string {
+	return filepath.Join(backupPath, archiveDir, strings.TrimPrefix(originalPath, string(os.PathSeparator)))
+}
+
 func TestRunBackupRecoverConfig(t *testing.T) {
 	t.Run("1", func(t *testing.T) {
 		opt := &RecoverOptions{}
@@ -59,8 +89,9 @@ func TestRunBackupRecoverConfig(t *testing.T) {
 }
 
 func TestRecoverMeta(t *testing.T) {
-	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
-	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
+	prepareRecoverBackupDir(t)
+	fullBackupPath := recoverPath("backup")
+	incBackupPath := recoverPath("backup_inc")
 
 	opt := &RecoverOptions{
 		RecoverMode:        "2",
@@ -70,13 +101,13 @@ func TestRecoverMeta(t *testing.T) {
 
 	t.Run("isInc=true", func(t *testing.T) {
 		content := ""
-		CreateFile("/tmp/openGemini/backup_dir/backup_inc/meta_backup/backup_log/meta_backup_log.json", content)
+		CreateFile(recoverPath("backup_inc", "meta_backup", "backup_log", "meta_backup_log.json"), content)
 		opt.recoverMeta(opt.IncBackupDataPath, nil)
 	})
 
 	t.Run("isInc=false", func(t *testing.T) {
 		content := ""
-		CreateFile("/tmp/openGemini/backup_dir/backup/meta_backup/backup_log/meta_backup_log.json", content)
+		CreateFile(recoverPath("backup", "meta_backup", "backup_log", "meta_backup_log.json"), content)
 		opt.recoverMeta(opt.FullBackupDataPath, nil)
 	})
 
@@ -87,22 +118,23 @@ func TestRecoverMeta(t *testing.T) {
 			IncBackupDataPath:  incBackupPath,
 		}
 		content := `{"databases":{"prom":{}}}`
-		CreateFile("/tmp/openGemini/backup_dir/backup/backup_log/result", content)
+		CreateFile(recoverPath("backup", "backup_log", "result"), content)
 		opt.BackupRecover()
 	})
 
-	os.RemoveAll("/tmp/openGemini/backup_dir")
+	os.RemoveAll(recoverPath())
 }
 
 func TestRecoverError(t *testing.T) {
-	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
-	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
+	prepareRecoverBackupDir(t)
+	fullBackupPath := recoverPath("backup")
+	incBackupPath := recoverPath("backup_inc")
 
 	opt := &RecoverOptions{
 		RecoverMode:        "2",
 		FullBackupDataPath: fullBackupPath,
 		IncBackupDataPath:  incBackupPath,
-		DataDir:            "/tmp/openGemini/backup_dir/data",
+		DataDir:            recoverPath("data"),
 	}
 
 	result := backup.BackupResult{Result: "success"}
@@ -129,8 +161,9 @@ func TestRecoverError(t *testing.T) {
 }
 
 func TestRecoverError2(t *testing.T) {
-	fullBackupPath := "/tmp/openGemini/backup_dir/backup_full"
-	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
+	prepareRecoverBackupDir(t)
+	fullBackupPath := recoverPath("backup_full")
+	incBackupPath := recoverPath("backup_inc")
 	opt := &RecoverOptions{
 		RecoverMode:        "2",
 		FullBackupDataPath: fullBackupPath,
@@ -138,8 +171,8 @@ func TestRecoverError2(t *testing.T) {
 		Host:               "127.0.0.1:8091",
 		SSL:                true,
 		InsecureTLS:        true,
-		DataDir:            "/tmp/openGemini/backup_dir/data",
-		WalDir:             "/tmp/openGemini/backup_dir/wal",
+		DataDir:            recoverPath("data"),
+		WalDir:             recoverPath("wal"),
 	}
 	t.Run("1", func(t *testing.T) {
 		err := opt.runRecover(false, []string{})
@@ -174,8 +207,9 @@ func TestRecoverError2(t *testing.T) {
 }
 
 func Test_TraversalBackupLogFile_Error(t *testing.T) {
-	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
-	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
+	prepareRecoverBackupDir(t)
+	fullBackupPath := recoverPath("backup")
+	incBackupPath := recoverPath("backup_inc")
 
 	opt := &RecoverOptions{
 		RecoverMode:        "2",
@@ -191,8 +225,9 @@ func Test_TraversalBackupLogFile_Error(t *testing.T) {
 }
 
 func Test_traversalIncBackupLogFile_Error(t *testing.T) {
-	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
-	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
+	prepareRecoverBackupDir(t)
+	fullBackupPath := recoverPath("backup")
+	incBackupPath := recoverPath("backup_inc")
 
 	opt := &RecoverOptions{
 		RecoverMode:        "1",
@@ -208,8 +243,9 @@ func Test_traversalIncBackupLogFile_Error(t *testing.T) {
 }
 
 func Test_MergeFileList(t *testing.T) {
-	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
-	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
+	prepareRecoverBackupDir(t)
+	fullBackupPath := recoverPath("backup")
+	incBackupPath := recoverPath("backup_inc")
 
 	opt := &RecoverOptions{
 		RecoverMode:        "2",
@@ -218,22 +254,27 @@ func Test_MergeFileList(t *testing.T) {
 	}
 
 	t.Run("1", func(t *testing.T) {
-		listMap := map[string][][]string{"name1": [][]string{[]string{"/tmp/openGemini/backup_dir/path1.file"}, []string{"/tmp/openGemini/backup_dir/path2.file"}}}
-		deleteListMap := map[string][][]string{"name1": [][]string{[]string{"/tmp/openGemini/backup_dir/path2.file"}}}
+		path1 := recoverPath("path1.file")
+		path2 := recoverPath("path2.file")
+		path3 := recoverPath("path3.file")
+		listMap := map[string][][]string{"name1": [][]string{[]string{path1}, []string{path2}}}
+		deleteListMap := map[string][][]string{"name1": [][]string{[]string{path2}}}
 
-		CreateFile("/tmp/openGemini/backup_dir/backup/data_backup/tmp/openGemini/backup_dir/path1.file", "1")
-		CreateFile("/tmp/openGemini/backup_dir/backup/data_backup/tmp/openGemini/backup_dir/path2.file", "2")
-		CreateFile("/tmp/openGemini/backup_dir/backup_inc/data_backup/tmp/openGemini/backup_dir/path3.file", "3")
+		CreateFile(recoverArchivePath(fullBackupPath, backup.DataBackupDir, path1), "1")
+		CreateFile(recoverArchivePath(fullBackupPath, backup.DataBackupDir, path2), "2")
+		CreateFile(recoverArchivePath(incBackupPath, backup.DataBackupDir, path3), "3")
 
 		err := opt.mergeFileList(listMap, deleteListMap)
 		assert.NoError(t, err)
 
-		os.RemoveAll("/tmp/openGemini/backup_dir")
+		os.RemoveAll(recoverPath())
 	})
 
 	t.Run("2", func(t *testing.T) {
-		listMap := map[string][][]string{"name1": [][]string{[]string{"/tmp/openGemini/backup_dir/path1.file"}, []string{"/tmp/openGemini/backup_dir/path2.file"}}}
-		deleteListMap := map[string][][]string{"name1": [][]string{[]string{"/tmp/openGemini/backup_dir/path2.file"}}}
+		path1 := recoverPath("path1.file")
+		path2 := recoverPath("path2.file")
+		listMap := map[string][][]string{"name1": [][]string{[]string{path1}, []string{path2}}}
+		deleteListMap := map[string][][]string{"name1": [][]string{[]string{path2}}}
 
 		err := opt.mergeFileList(listMap, deleteListMap)
 		if err == nil {
@@ -244,15 +285,17 @@ func Test_MergeFileList(t *testing.T) {
 }
 
 func TestRecoverData(t *testing.T) {
-	fullBackupPath := "/tmp/openGemini/backup_dir/backup_full"
-	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
+	prepareRecoverBackupDir(t)
+	fullBackupPath := recoverPath("backup_full")
+	incBackupPath := recoverPath("backup_inc")
+	dataDir := filepath.Join(t.TempDir(), "openGemini", "data")
 
 	opt := &RecoverOptions{
 		RecoverMode:        "2",
 		FullBackupDataPath: fullBackupPath,
 		IncBackupDataPath:  incBackupPath,
 		Host:               "127.0.0.1:8091",
-		DataDir:            "/tmp/openGemini/data",
+		DataDir:            dataDir,
 	}
 
 	result := backup.BackupResult{Result: "success", Databases: map[string]struct{}{"prom": {}}}
@@ -280,18 +323,20 @@ func TestRecoverData(t *testing.T) {
 
 func TestRewriteRecover(t *testing.T) {
 	t.Skip()
-	fullBackupPath := "/backup_test/tmp/openGemini/backup_full"
+	backupRoot := filepath.Join(t.TempDir(), "backup_test", "tmp", "openGemini")
+	fullBackupPath := filepath.Join(backupRoot, "backup_full")
+	dataDir := filepath.Join(backupRoot, "data")
 
 	opt := &RecoverOptions{
 		RecoverMode:        "2",
 		FullBackupDataPath: fullBackupPath,
-		DataDir:            "/backup_test/tmp/openGemini/data",
+		DataDir:            dataDir,
 	}
 	result := backup.BackupResult{
 		Result:    "success",
 		Databases: map[string]struct{}{"prom": {}},
-		DataDir:   "/backup_test/tmp/openGemini/data",
-		WalDir:    "/backup_test/tmp/openGemini/data",
+		DataDir:   dataDir,
+		WalDir:    dataDir,
 	}
 	b, _ := json.Marshal(result)
 	_ = backup.WriteBackupLogFile(b, fullBackupPath, backup.ResultLog)
@@ -304,25 +349,26 @@ func TestRewriteRecover(t *testing.T) {
 	b, _ = json.Marshal(nodeInfoMap)
 	_ = backup.WriteBackupLogFile(b, fullBackupPath, backup.NodeMapInfo)
 
-	CreateFile("/backup_test/tmp/openGemini/backup_full/data_backup/backup_test/tmp/openGemini/data/data/db1/0/rp1/10_1763337600000000000_1763942400000000000_5/mst_0000/test_file.tssp", "1")
-	CreateFile("/backup_test/tmp/openGemini/backup_full/data_backup/backup_test/tmp/openGemini/data/data/db1/0/rp1/index/5_1763337600000000000_1763942400000000000/mergeset/test_file", "1")
+	CreateFile(recoverArchivePath(fullBackupPath, backup.DataBackupDir, filepath.Join(dataDir, config.DataDirectory, "db1", "0", "rp1", "10_1763337600000000000_1763942400000000000_5", "mst_0000", "test_file.tssp")), "1")
+	CreateFile(recoverArchivePath(fullBackupPath, backup.DataBackupDir, filepath.Join(dataDir, config.DataDirectory, "db1", "0", "rp1", "index", "5_1763337600000000000_1763942400000000000", "mergeset", "test_file")), "1")
 
-	CreateFile("/backup_test/tmp/openGemini/backup_full/wal_backup/backup_test/tmp/openGemini/data/wal/db1/0/rp1/10_1763337600000000000_1763942400000000000_5/0/test_file", "1")
-	CreateFile("/backup_test/tmp/openGemini/backup_full/wal_backup/backup_test/tmp/openGemini/data/wal/db1/0/__raft_entries__/00001.entry", "1")
+	CreateFile(recoverArchivePath(fullBackupPath, backup.WalBackupDir, filepath.Join(dataDir, config.WalDirectory, "db1", "0", "rp1", "10_1763337600000000000_1763942400000000000_5", "0", "test_file")), "1")
+	CreateFile(recoverArchivePath(fullBackupPath, backup.WalBackupDir, filepath.Join(dataDir, config.WalDirectory, "db1", "0", "__raft_entries__", "00001.entry")), "1")
 
 	err := opt.BackupRecover()
 	assert.NoError(t, err)
-	os.RemoveAll("/backup_test")
 }
 
 func TestGenNodeMap(t *testing.T) {
 	t.Skip()
-	fullBackupPath := "/backup_test/tmp/openGemini/backup_full"
+	backupRoot := filepath.Join(t.TempDir(), "backup_test", "tmp", "openGemini")
+	fullBackupPath := filepath.Join(backupRoot, "backup_full")
+	dataDir := filepath.Join(backupRoot, "data")
 
 	opt := &RecoverOptions{
 		RecoverMode:        GenNodeInfoMap,
 		FullBackupDataPath: fullBackupPath,
-		DataDir:            "/backup_test/tmp/openGemini/data",
+		DataDir:            dataDir,
 		SrcNode:            4,
 		DstNode:            5,
 	}
@@ -384,8 +430,6 @@ func TestGenNodeMap(t *testing.T) {
 	_ = fileops.WriteFile(filepath.Join(dstPath, backup.MetaInfo), b, 0640)
 	err = opt.BackupRecover()
 	assert.Error(t, err)
-
-	os.RemoveAll("/backup_test")
 }
 
 func CreateFile(path, content string) {
