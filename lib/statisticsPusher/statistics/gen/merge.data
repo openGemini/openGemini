@@ -1,0 +1,30 @@
+{
+    "Name":"Merge",
+    "Measurement":"merge",
+    "Items":[
+        "CurrentOutOfOrderFile",
+        "SkipTotal",
+        "MergeSelfTotal",
+        "Errors",
+        "Active"
+    ],
+    "SetItems":[
+        "CurrentOutOfOrderFile"
+    ],
+    "EnablePush":"Y",
+    "PushDuration":"Y",
+    "PushItems":[
+        "OutOfOrderFileCount",
+    	"OutOfOrderFileSize",
+    	"OrderFileCount",
+    	"OrderFileSize",
+    	"MergedFileCount",
+    	"MergedFileSize",
+    	"OrderSeriesCount",
+    	"IntersectSeriesCount"
+    ],
+    "PushTags":[
+        "Measurement",
+        "ShardID"
+    ]
+}

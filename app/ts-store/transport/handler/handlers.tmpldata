@@ -1,0 +1,15 @@
+[
+    "SeriesKeys",
+    "SeriesExactCardinality",
+    "SeriesCardinality",
+    "ShowTagValues",
+    "ShowTagValuesCardinality",
+    "GetShardSplitPoints",
+    "Delete",
+    "CreateDataBase",
+    "ShowQueries",
+    "KillQuery",
+    "ShowTagKeys",
+    "RaftMessages",
+    "DropSeries"
+]

@@ -1,0 +1,25 @@
+ignore:
+  - "lib/util/lifted"
+  - "tests"
+  - "main.go"
+  - "app/ts-meta/meta/handler.go"
+  - "lib/netstorage/data"
+
+codecov:
+  notify:
+    wait_for_ci: false
+
+coverage:
+  status:
+    project:
+      default:
+        target: 70%
+        if_ci_failed: success
+    patch:
+      default:
+        target: 80%
+        threshold: 100%
+        if_ci_failed: success
+
+comment:                  # this is a top-level key
+  layout: "diff"
