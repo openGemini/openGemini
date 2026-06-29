@@ -940,12 +940,21 @@ func (e *StatementExecutor) executeExplainStatement(q *influxql.ExplainStatement
 	return nil, meta2.ErrUnsupportCommand
 }
 
+// explainAnalyzeWriter is a no-op point writer used so that EXPLAIN ANALYZE can
+// trace a SELECT ... INTO plan without persisting any rows to the target.
+type explainAnalyzeWriter struct{}
+
+func (w *explainAnalyzeWriter) RetryWritePointRows(database, retentionPolicy string, points []influx.Row) error {
+	return nil
+}
+
 func (e *StatementExecutor) executeExplainAnalyzeStatement(q *influxql.ExplainStatement, ectx *query.ExecutionContext) (models.Rows, error) {
 	stmt := q.Statement
 	trace, span := tracing.NewTrace("SELECT")
 	stmt.OmitTime = true
 	ctx := tracing.NewContextWithTrace(ectx.Context, trace)
 	ctx = tracing.NewContextWithSpan(ctx, span)
+	ctx = context.WithValue(ctx, executor.WRITER_CONTEXT, &explainAnalyzeWriter{})
 	span.AppendNameValue("statement", q.String())
 	span.Finish()
 
