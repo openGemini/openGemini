@@ -57,6 +57,18 @@ func TestBloomFilterWithConflict(t *testing.T) {
 	}
 }
 
+func TestBloomFilterUndersizedNoPanic(t *testing.T) {
+	// version, worst-case max-offset hash: V0/V1 use hash>>49 (max 32767),
+	// V2/V3 use hash>>46 (max 262143). Requesting size 8 is far below the
+	// minimum; the buffer must be clamped so Add/Hit do not panic.
+	cases := [][2]uint64{{0, 0x7fff << 49}, {2, 0x3ffff << 46}, {3, 0x3ffff << 46}}
+	for _, c := range cases {
+		bf := DefaultOneHitBloomFilter(uint32(c[0]), 8)
+		bf.Add(c[1])
+		assert.True(t, bf.Hit(c[1]))
+	}
+}
+
 const (
 	Prime_64 uint64 = 0x9E3779B185EBCA87
 )
