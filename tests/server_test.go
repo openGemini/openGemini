@@ -950,6 +950,11 @@ func TestServer_Query_DefaultDBAndRP(t *testing.T) {
 			exp:     `{"results":[{"statement_id":0,"series":[{"columns":["name","duration","shardGroupDuration","hot duration","warm duration","index duration","replicaN","default"],"values":[["autogen","0s","168h0m0s","0s","0s","168h0m0s",1,false],["rp0","0s","168h0m0s","0s","0s","168h0m0s",1,true]]}]}]}`,
 		},
 		{
+			name:    "show databases detail returns ReplicaN as integer",
+			command: `show databases detail`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"databases","columns":["name","ReplicaN","Tag Attribute"],"values":[["db0",1,"default"]]}]}]}`,
+		},
+		{
 			name:    "default rp",
 			command: `SELECT * FROM db0..cpu GROUP BY *`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2000-01-01T01:00:00Z",1]]}]}]}`,

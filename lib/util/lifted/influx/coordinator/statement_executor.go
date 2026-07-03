@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1297,7 +1296,7 @@ func (e *StatementExecutor) executeShowDatabasesStatement(q *influxql.ShowDataba
 				} else {
 					tagAttr = "default"
 				}
-				row.Values = append(row.Values, []interface{}{di.Name, strconv.Itoa(di.ReplicaN), tagAttr})
+				row.Values = append(row.Values, []interface{}{di.Name, di.ReplicaN, tagAttr})
 			}
 		}
 	}
