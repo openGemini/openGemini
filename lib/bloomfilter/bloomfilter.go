@@ -203,7 +203,24 @@ func NewOneHitBloomFilter(bytes []byte, version uint32) Bloomfilter {
 	}
 }
 
+// Minimum buffer sizes accepted by DefaultOneHitBloomFilter. Add/Hit derive the
+// byte offset from the hash and read an 8-byte word, so the buffer must cover the
+// largest possible offset plus 8. V0/V1 use hash>>49 (max offset 32767), V2/V3 use
+// hash>>46 (max offset 262143). Sizes below these would panic with a slice bounds
+// error, so they are clamped up here.
+const (
+	minBloomFilterSizeV01 = 32775
+	minBloomFilterSizeV2  = 262151
+)
+
 func DefaultOneHitBloomFilter(version uint32, bloomfiterSize int64) Bloomfilter {
+	minSize := int64(minBloomFilterSizeV01)
+	if version >= 2 {
+		minSize = minBloomFilterSizeV2
+	}
+	if bloomfiterSize < minSize {
+		bloomfiterSize = minSize
+	}
 	bytes := make([]byte, bloomfiterSize)
 	return NewOneHitBloomFilter(bytes, version)
 }
