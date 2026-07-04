@@ -75,7 +75,7 @@ require (
 	github.com/VictoriaMetrics/metrics v1.24.0 // indirect
 	github.com/alecthomas/units v0.0.0-20231202071711-9a357b53e9c9 // indirect
 	github.com/andybalholm/brotli v1.0.4 // indirect
-	github.com/apache/thrift v0.16.0 // indirect
+	github.com/apache/thrift v0.23.0 // indirect
 	github.com/aws/aws-sdk-go v1.50.0 // indirect
 	github.com/bboreham/go-loser v0.0.0-20230920113527-fcc2c21820a3 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
