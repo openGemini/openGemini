@@ -53,6 +53,24 @@ func TestInternSafe(t *testing.T) {
 	wg.Wait()
 }
 
+func TestStringDictConcurrentLoad(t *testing.T) {
+	dict := stringinterner.NewStringDict()
+	keyTemp := "tag_value_"
+	var wg sync.WaitGroup
+	for j := 0; j < 8; j++ {
+		wg.Add(1)
+		go func(base int) {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				key := keyTemp + strconv.Itoa(base) + "_" + strconv.Itoa(i)
+				index := dict.LoadIndex(key)
+				assert.Equal(t, key, dict.LoadValue(int(index)))
+			}
+		}(j)
+	}
+	wg.Wait()
+}
+
 var si SingleStringInterner
 
 // Single StringInterner For Inmutable Scenario

@@ -1026,7 +1026,7 @@ func (s *TagTask) WriteRowsToShard(start, end int, ptID uint32, shardID uint64) 
 	return nil
 }
 
-// corpusIndexes array not need lock
+// LoadValue guards the corpusIndexes access with its own lock
 func (s *TagTask) unCompressDictKey(key string) (string, error) {
 	if key == EmptyTagValue {
 		return EmptyTagValue, nil
