@@ -374,6 +374,45 @@ func TestForceDeleteEntryLog(t *testing.T) {
 	require.True(t, flag)
 }
 
+// TestForceDeleteEntryLogStop verifies that forceDeleteEntryLog does not block
+// forever (and does not panic) when the node is being stopped while proposeC is
+// unavailable. Stop() cancels the node context before closing proposeC, so the
+// propose send must observe ctx.Done() instead of blocking on a full/closed
+// channel. Before the fix the send was unconditional and would deadlock here.
+func TestForceDeleteEntryLogStop(t *testing.T) {
+	cctx, cancelFn := context.WithCancel(context.Background())
+	node := &RaftNode{
+		node:       &mockRaftNodeTransfer{},
+		ctx:        cctx,
+		cancelFn:   cancelFn,
+		proposeC:   make(chan []byte, 1),
+		peers:      map[uint32]uint64{0: 3, 1: 3},
+		MetaClient: &MockMetaClient{},
+	}
+	node.WithLogger(logger.NewLogger(errno.ModuleUnknown))
+	config.SetStoreConfig(config.Store{ClearEntryLogTolerateTime: toml.Duration(0)})
+	// Make the tolerate window already elapsed so the propose send is reached.
+	node.tolerateStartTime.Store(1)
+	// Fill the buffered channel so the send would block without a ctx guard.
+	node.proposeC <- []byte("pending")
+	// Simulate the first half of Stop(): cancel the context.
+	cancelFn()
+
+	done := make(chan struct{})
+	go func() {
+		flag, err := node.forceDeleteEntryLog(5)
+		require.False(t, flag)
+		require.NoError(t, err)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("forceDeleteEntryLog blocked on proposeC during shutdown")
+	}
+}
+
 func TestGenProposeData(t *testing.T) {
 	tmpDir := t.TempDir()
 	rds, err := raftlog.Init(tmpDir, 0)
