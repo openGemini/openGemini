@@ -680,6 +680,7 @@ func (csm *ClusterShardMapping) RemoteQueryETraitsAndSrc(ctx context.Context, op
 	eTraits := make([]hybridqp.Trait, 0, len(shardsMapByNode))
 	var muList = sync.Mutex{}
 	var errs error
+	var resultSrc influxql.Sources
 	once := sync.Once{}
 	wg := sync.WaitGroup{}
 	for nodeID, shardsByPtId := range shardsMapByNode {
@@ -709,7 +710,7 @@ func (csm *ClusterShardMapping) RemoteQueryETraitsAndSrc(ctx context.Context, op
 				}
 
 				muList.Lock()
-				opts.Sources = src
+				resultSrc = src
 				eTraits = append(eTraits, rq)
 				muList.Unlock()
 			}(nodeID, pId, sIds)
@@ -719,7 +720,11 @@ func (csm *ClusterShardMapping) RemoteQueryETraitsAndSrc(ctx context.Context, op
 	if errs != nil {
 		return nil, errs
 	}
-	if schema.Options().(*query.ProcessorOptions).Sources == nil {
+	// Assign the resolved sources once the fan-out has completed. Setting
+	// opts.Sources inside the goroutines races the unlocked *opts copy that
+	// each goroutine passes to makeRemoteQuery.
+	opts.Sources = resultSrc
+	if opts.Sources == nil {
 		return nil, nil
 	}
 	return eTraits, nil
