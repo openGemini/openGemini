@@ -3469,8 +3469,9 @@ func TestClient_GetSgEndTimeErr(t *testing.T) {
 	_, err = c.GetSgEndTime("db0", "rp0", time.Unix(1, 0), config.TSSTORE)
 	assert.NotEqual(t, err, nil)
 	c.cacheData.Databases["db0"].RetentionPolicies["rp0"].ShardGroups = append(c.cacheData.Databases["db0"].RetentionPolicies["rp0"].ShardGroups, sg1)
-	endTime, _ := c.GetSgEndTime("db0", "rp0", time.Unix(1, 0), config.TSSTORE)
-	assert.NotEqual(t, endTime, 2000000000)
+	endTime, err := c.GetSgEndTime("db0", "rp0", time.Unix(1, 0), config.TSSTORE)
+	assert.Equal(t, nil, err)
+	assert.Equal(t, int64(2000000000), endTime)
 }
 
 func TestClient_ShowClusterWithCondition(t *testing.T) {
