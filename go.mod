@@ -55,7 +55,7 @@ require (
 	go.opentelemetry.io/collector/pdata v1.14.1
 	go.opentelemetry.io/collector/semconv v0.104.0
 	go.uber.org/zap v1.27.0
-	golang.org/x/crypto v0.51.0
+	golang.org/x/crypto v0.52.0
 	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948
 	golang.org/x/sys v0.45.0
 	golang.org/x/text v0.37.0
