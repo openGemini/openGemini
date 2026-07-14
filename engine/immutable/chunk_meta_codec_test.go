@@ -116,7 +116,8 @@ func TestChunkMetaCodec(t *testing.T) {
 		other.Validation()
 		require.NoError(t, err)
 
-		got, err := marshalChunkMetaNormal(cm)
+		got, err := marshalChunkMetaNormal(other)
+		require.NoError(t, err)
 		require.Equal(t, exp, got)
 	})
 
