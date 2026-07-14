@@ -766,7 +766,10 @@ func (n *RaftNode) deleteEntryLog() error {
 	if !toPropose {
 		return err
 	}
-	n.proposeC <- n.prepareDeleteEntryLogProposeData(index)
+	select {
+	case n.proposeC <- n.prepareDeleteEntryLogProposeData(index):
+	case <-n.ctx.Done():
+	}
 	return nil
 }
 
@@ -797,7 +800,10 @@ func (n *RaftNode) forceDeleteEntryLog(index uint64) (bool, error) {
 				}
 			}
 			data := n.genProposeData(index, minIndex)
-			n.proposeC <- data
+			select {
+			case n.proposeC <- data:
+			case <-n.ctx.Done():
+			}
 			n.tolerateStartTime.Store(0)
 			return false, nil
 		}
