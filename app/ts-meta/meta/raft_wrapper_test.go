@@ -24,10 +24,9 @@ import (
 )
 
 func TestRaftWrapperApply(t *testing.T) {
-	var r *raftWrapper
+	r := &raftWrapper{}
 	err := r.Apply([]byte("raft is not open"))
 	assert.True(t, errno.Equal(err, errno.RaftIsNotOpen), "apply should fail with error raft is not open")
-	r = &raftWrapper{}
 	c := raft.MakeCluster(3, t, nil)
 	follows := c.Followers()
 	assert.Equal(t, 2, len(follows))
