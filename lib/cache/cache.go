@@ -143,6 +143,9 @@ func (c *Cache) Put(key string, value Entry, needUpdate func(old Entry, new Entr
 }
 
 func (c *Cache) Size() int64 {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+
 	return c.usedBytes
 }
 
