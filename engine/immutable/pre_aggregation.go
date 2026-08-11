@@ -599,9 +599,9 @@ func (m *FloatPreAgg) addMax(v float64, tm int64) {
 	if m.maxV < v {
 		m.maxV = v
 		m.maxTime = tm
-	} else if m.minV == v {
-		if tm < m.minTime {
-			m.minTime = tm
+	} else if m.maxV == v {
+		if tm < m.maxTime {
+			m.maxTime = tm
 		}
 	}
 }
@@ -786,9 +786,9 @@ func (m *BooleanPreAgg) addMax(v float64, tm int64) {
 	if bv > m.maxV {
 		m.maxV = bv
 		m.maxTime = tm
-	} else if m.minV == bv {
-		if tm < m.minTime {
-			m.minTime = tm
+	} else if m.maxV == bv {
+		if tm < m.maxTime {
+			m.maxTime = tm
 		}
 	}
 }

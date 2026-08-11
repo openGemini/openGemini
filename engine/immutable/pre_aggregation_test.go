@@ -139,6 +139,54 @@ func TestFloatPreAgg_add(t *testing.T) {
 	assertMax(2.0, 30)
 }
 
+// TestFloatPreAgg_addMax_minTimeNotCorrupted is a regression test for a bug where
+// FloatPreAgg.addMax compared the incoming value against minV instead of maxV,
+// and on a coincidental tie overwrote minTime with an unrelated timestamp. That
+// decoupled the min value from its recorded time, which surfaced as first()
+// returning a correct value paired with a wrong time when the pre-aggregated
+// min/max metadata was merged across chunks.
+func TestFloatPreAgg_addMax_minTimeNotCorrupted(t *testing.T) {
+	agg := NewFloatPreAgg()
+
+	agg.addMin(1, 100)
+	agg.addMax(5, 50)
+
+	// v equals the current minV (1), not maxV (5). This must not touch min at all.
+	agg.addMax(1, 5)
+	require.Equal(t, 1.0, agg.minV)
+	require.Equal(t, int64(100), agg.minTime)
+	require.Equal(t, 5.0, agg.maxV)
+	require.Equal(t, int64(50), agg.maxTime)
+
+	// A genuine max-value tie with an earlier time must update maxTime.
+	agg.addMax(5, 10)
+	require.Equal(t, 5.0, agg.maxV)
+	require.Equal(t, int64(10), agg.maxTime)
+}
+
+// TestBooleanPreAgg_addMax_minTimeNotCorrupted mirrors
+// TestFloatPreAgg_addMax_minTimeNotCorrupted for BooleanPreAgg, which had the
+// same addMin/addMax copy-paste bug.
+func TestBooleanPreAgg_addMax_minTimeNotCorrupted(t *testing.T) {
+	agg := NewBooleanPreAgg()
+	agg.reset()
+
+	agg.addMin(0, 100)
+	agg.addMax(1, 50)
+
+	// v equals the current minV (0), not maxV (1). This must not touch min at all.
+	agg.addMax(0, 5)
+	require.EqualValues(t, 0, agg.minV)
+	require.Equal(t, int64(100), agg.minTime)
+	require.EqualValues(t, 1, agg.maxV)
+	require.Equal(t, int64(50), agg.maxTime)
+
+	// A genuine max-value tie with an earlier time must update maxTime.
+	agg.addMax(1, 10)
+	require.EqualValues(t, 1, agg.maxV)
+	require.Equal(t, int64(10), agg.maxTime)
+}
+
 func TestFloatPreAggVLC(t *testing.T) {
 	var assert = func(agg *FloatPreAgg) {
 		buf := agg.marshal(nil)
