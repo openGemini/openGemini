@@ -39,7 +39,7 @@ type MockSubscriberClient struct {
 	dest string
 }
 
-func (c *MockSubscriberClient) Send(db, rp string, lineProtocol []byte) error {
+func (c *MockSubscriberClient) Send(db, rp, precision string, lineProtocol []byte) error {
 	return nil
 }
 
@@ -59,10 +59,11 @@ func TestAllWriter(t *testing.T) {
 	w.ch = ch
 
 	line := "cpu_load,host=\"server-01\",region=\"west_cn\" value=75.31"
-	w.Write([]byte(line))
+	w.Write("ms", []byte(line))
 	for i := 0; i < 3; i++ {
 		wr := <-ch
 		assert2.Equal(t, wr.Client, i)
+		assert2.Equal(t, wr.Precision, "ms")
 		assert2.Equal(t, string(wr.LineProtocol), line)
 	}
 
@@ -87,9 +88,10 @@ func TestAnyWriter(t *testing.T) {
 
 	line := "cpu_load,host=\"server-01\",region=\"west_cn\" value=75.31"
 	for i := 0; i < 6; i++ {
-		w.Write([]byte(line))
+		w.Write("ms", []byte(line))
 		wr := <-ch
 		assert2.Equal(t, wr.Client, (i+1)%3)
+		assert2.Equal(t, wr.Precision, "ms")
 		assert2.Equal(t, string(wr.LineProtocol), line)
 		select {
 		case <-ch:
@@ -303,12 +305,13 @@ func TestSendWriteRequest(t *testing.T) {
 	type Request struct {
 		db           string
 		rp           string
+		precision    string
 		lineProtocol []byte
 	}
 	ch := make(chan Request, 10)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/write", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		wr := Request{db: r.URL.Query().Get("db"), rp: r.URL.Query().Get("rp")}
+		wr := Request{db: r.URL.Query().Get("db"), rp: r.URL.Query().Get("rp"), precision: r.URL.Query().Get("precision")}
 		wr.lineProtocol, _ = io.ReadAll(r.Body)
 		ch <- wr
 		w.WriteHeader(http.StatusNoContent)
@@ -334,13 +337,14 @@ func TestSendWriteRequest(t *testing.T) {
 
 	// test ALL mode
 	for i := 0; i < 5; i++ {
-		s.Send("db0", "rp0", []byte(line))
+		s.Send("db0", "rp0", "ns", []byte(line))
 	}
 
 	for i := 0; i < 10; i++ {
 		r := <-ch
 		assert2.Equal(t, r.db, "db0")
 		assert2.Equal(t, r.rp, "rp0")
+		assert2.Equal(t, r.precision, "ns")
 		assert2.Equal(t, string(r.lineProtocol), line)
 	}
 
@@ -358,13 +362,14 @@ func TestSendWriteRequest(t *testing.T) {
 	}
 	dbi.DefaultRetentionPolicy = "rp1"
 	for i := 0; i < 5; i++ {
-		s.Send("db1", "", []byte(line))
+		s.Send("db1", "", "s", []byte(line))
 	}
 
 	for i := 0; i < 5; i++ {
 		r := <-ch
 		assert2.Equal(t, r.db, "db1")
 		assert2.Equal(t, r.rp, "rp1")
+		assert2.Equal(t, r.precision, "s")
 		assert2.Equal(t, string(r.lineProtocol), line)
 	}
 
