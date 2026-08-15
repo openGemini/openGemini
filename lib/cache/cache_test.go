@@ -15,6 +15,8 @@
 package cache_test
 
 import (
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -118,4 +120,32 @@ func testIncIterNumCacheGetPutFunc(t *testing.T) {
 		t.Fatalf("can not get the global iter num ")
 	}
 	assert.Equal(t, iterNum, int32(4))
+}
+
+// TestCacheSizeConcurrent runs Size concurrently with Put to ensure the read of
+// usedBytes is synchronized. Run with -race to detect the data race.
+func TestCacheSizeConcurrent(t *testing.T) {
+	c := cache.NewCache(cache.IncIterNumCacheSize, cache.IncIterNumCacheTTL)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			queryID := strconv.Itoa(i)
+			entry := cache.NewIncIterNumEntry(queryID)
+			entry.SetValue(int32(i))
+			c.Put(queryID, entry, cache.UpdateIterNumFunc)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			_ = c.Size()
+		}
+	}()
+
+	wg.Wait()
 }
