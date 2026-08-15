@@ -33,7 +33,7 @@ import (
 )
 
 type Client interface {
-	Send(db, rp string, lineProtocol []byte) error
+	Send(db, rp, precision string, lineProtocol []byte) error
 	Destination() string
 }
 
@@ -42,7 +42,7 @@ type HTTPClient struct {
 	url    *url.URL
 }
 
-func (c *HTTPClient) Send(db, rp string, lineProtocol []byte) error {
+func (c *HTTPClient) Send(db, rp, precision string, lineProtocol []byte) error {
 	r := bytes.NewReader(lineProtocol)
 	req, err := http.NewRequest("POST", c.url.String()+"/write", r)
 	if err != nil {
@@ -52,6 +52,9 @@ func (c *HTTPClient) Send(db, rp string, lineProtocol []byte) error {
 	params := req.URL.Query()
 	params.Set("db", db)
 	params.Set("rp", rp)
+	if precision != "" {
+		params.Set("precision", precision)
+	}
 	req.URL.RawQuery = params.Encode()
 
 	resp, err := c.client.Do(req)
@@ -102,6 +105,7 @@ func NewHTTPSClient(url *url.URL, timeout time.Duration, skipVerify bool, certs 
 
 type WriteRequest struct {
 	Client       int
+	Precision    string
 	LineProtocol []byte
 }
 
@@ -129,7 +133,7 @@ func (w *BaseWriter) Send(wr *WriteRequest) {
 
 func (w *BaseWriter) Run() {
 	for wr := range w.ch {
-		err := w.clients[wr.Client].Send(w.db, w.rp, wr.LineProtocol)
+		err := w.clients[wr.Client].Send(w.db, w.rp, wr.Precision, wr.LineProtocol)
 		if err != nil {
 			w.logger.Error("failed to forward write request", zap.String("dest", w.clients[wr.Client].Destination()),
 				zap.String("db", w.db), zap.String("rp", w.rp), zap.Error(err))
@@ -157,7 +161,7 @@ func (w *BaseWriter) Stop() {
 }
 
 type SubscriberWriter interface {
-	Write(lineProtocol []byte)
+	Write(precision string, lineProtocol []byte)
 	Name() string
 	Run()
 	Start(concurrency, buffersize int)
@@ -169,10 +173,11 @@ type AllWriter struct {
 	BaseWriter
 }
 
-func (w *AllWriter) Write(lineProtocol []byte) {
+func (w *AllWriter) Write(precision string, lineProtocol []byte) {
 	for i := 0; i < len(w.clients); i++ {
 		wr := &WriteRequest{}
 		wr.Client = i
+		wr.Precision = precision
 		wr.LineProtocol = make([]byte, len(lineProtocol))
 		copy(wr.LineProtocol, lineProtocol)
 		w.Send(wr)
@@ -184,9 +189,9 @@ type RoundRobinWriter struct {
 	i int32
 }
 
-func (w *RoundRobinWriter) Write(lineProtocol []byte) {
+func (w *RoundRobinWriter) Write(precision string, lineProtocol []byte) {
 	i := atomic.AddInt32(&w.i, 1) % int32(len(w.clients))
-	wr := &WriteRequest{Client: int(i), LineProtocol: lineProtocol}
+	wr := &WriteRequest{Client: int(i), Precision: precision, LineProtocol: lineProtocol}
 	w.Send(wr)
 }
 
@@ -332,7 +337,7 @@ func (s *SubscriberManager) UpdateWriters() {
 	})
 }
 
-func (s *SubscriberManager) Send(db, rp string, lineProtocol []byte) {
+func (s *SubscriberManager) Send(db, rp, precision string, lineProtocol []byte) {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 
@@ -352,7 +357,7 @@ func (s *SubscriberManager) Send(db, rp string, lineProtocol []byte) {
 
 	if writer, ok := s.writers[db][rp]; ok {
 		for _, w := range writer {
-			w.Write(lineProtocol)
+			w.Write(precision, lineProtocol)
 		}
 	}
 }

@@ -116,7 +116,7 @@ type Route struct {
 }
 
 type SubscriberManager interface {
-	Send(db, rp string, lineProtocol []byte)
+	Send(db, rp, precision string, lineProtocol []byte)
 }
 
 type PointsWriter interface {
@@ -1618,7 +1618,7 @@ func (h *Handler) serveWrite(database string, rp string, w http.ResponseWriter, 
 			} else {
 				if h.SubscriberManager != nil {
 					// uw.ReqBuf is the line protocol
-					h.SubscriberManager.Send(db, rp, uw.ReqBuf)
+					h.SubscriberManager.Send(db, rp, precision, uw.ReqBuf)
 				}
 				handlerStat.PointsWrittenOK.Add(int64(len(rows)))
 			}
