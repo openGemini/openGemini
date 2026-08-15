@@ -1,12 +1,14 @@
 package coordinator
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/errno"
 	Logger "github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
@@ -15,6 +17,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )
@@ -35,6 +38,22 @@ func TestLimitStringSlice(t *testing.T) {
 	copy(series, originSeries)
 	res = limitStringSlice(series, 7, 0)
 	assert.Equal(t, true, res == nil)
+}
+
+// TestExplainAnalyzeWriter verifies that the writer attached by
+// executeExplainAnalyzeStatement satisfies the point writer contract that
+// TargetTransform looks up via executor.WRITER_CONTEXT, so EXPLAIN ANALYZE of a
+// SELECT ... INTO statement traces the plan without failing, and that it writes
+// nothing (an analyze must not persist rows). Regression test for #309.
+func TestExplainAnalyzeWriter(t *testing.T) {
+	w := &explainAnalyzeWriter{}
+	assert.NoError(t, w.RetryWritePointRows("db0", "rp0", []influx.Row{{Name: "mst0"}}))
+
+	ctx := context.WithValue(context.Background(), executor.WRITER_CONTEXT, w)
+	_, ok := ctx.Value(executor.WRITER_CONTEXT).(interface {
+		RetryWritePointRows(database, retentionPolicy string, points []influx.Row) error
+	})
+	assert.True(t, ok)
 }
 
 type MockMetaClient struct {
