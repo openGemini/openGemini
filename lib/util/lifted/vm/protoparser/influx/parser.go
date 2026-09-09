@@ -1484,8 +1484,12 @@ func (f *Field) unmarshal(s string, noEscapeChars, hasQuotedFields bool) error {
 func unmarshalRows(dst []Row, s string, tagsPool []Tag, fieldsPool []Field, enableTagArray bool) ([]Row, []Tag, []Field, error) {
 	var err error
 	noEscapeChars := strings.IndexByte(s, '\\') < 0
+	// A quoted string field value may legitimately contain a literal '\n'. Quotes are only
+	// meaningful within a line's fields section, so hasQuotedFields is checked once here
+	// purely as a cheap skip for the common case where no line in the batch has any.
+	hasQuotedFields := strings.IndexByte(s, '"') >= 0
 	for len(s) > 0 {
-		n := strings.IndexByte(s, '\n')
+		n := nextRowEnd(s, noEscapeChars, hasQuotedFields, enableTagArray)
 		if n < 0 {
 			// The last line.
 			return unmarshalRow(dst, s, tagsPool, fieldsPool, noEscapeChars, enableTagArray)
@@ -1494,6 +1498,29 @@ func unmarshalRows(dst []Row, s string, tagsPool []Tag, fieldsPool []Field, enab
 		s = s[n+1:]
 	}
 	return dst, tagsPool, fieldsPool, err
+}
+
+// nextRowEnd returns the index of the '\n' terminating the line starting at s, or -1 if s
+// contains no more terminated lines. Measurement names and tag values never quote a '"'
+// (only comma/equals/space/backslash are escaped there), so quoting only ever delimits a
+// string field value. Quote-tracking is therefore scoped to each line's fields section
+// (everything after its first unescaped space) so a stray '"' in tags/measurement of one
+// line can't desync the quoting state used to find the next line's terminator.
+func nextRowEnd(s string, noEscapeChars, hasQuotedFields, enableTagArray bool) int {
+	// Row.unmarshal skips leading whitespace before locating this same boundary space;
+	// mirror that here so a line's leading whitespace isn't mistaken for its fields section.
+	start := checkWhitespace(s, 0)
+	sp := nextUnescapedChar(s[start:], ' ', noEscapeChars, enableTagArray, false)
+	if sp < 0 {
+		// No fields section; let per-row parsing report the error.
+		return nextUnescapedChar(s, '\n', noEscapeChars, false, false)
+	}
+	sp += start
+	n := nextUnquotedChar(s[sp+1:], '\n', noEscapeChars, hasQuotedFields)
+	if n < 0 {
+		return -1
+	}
+	return sp + 1 + n
 }
 
 func unmarshalRow(dst []Row, s string, tagsPool []Tag, fieldsPool []Field, noEscapeChars, enableTagArray bool) ([]Row, []Tag, []Field, error) {

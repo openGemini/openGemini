@@ -53,6 +53,50 @@ func TestUnmarshalRows(t *testing.T) {
 	rows, tagsPool, fieldsPool = f(rows[:0], req, tagsPool[:0], fieldsPool[:0], 0)
 }
 
+// TestUnmarshalRows_NewlineInQuotedStringField verifies that a literal newline byte
+// embedded in a quoted string field value does not get mistaken for a line separator.
+// See https://github.com/openGemini/openGemini/issues/746.
+func TestUnmarshalRows_NewlineInQuotedStringField(t *testing.T) {
+	enableTagArray := false
+	var rows []Row
+	var tagsPool []Tag
+	var fieldsPool []Field
+
+	req := "json1,a=1,b=2 data=\"{\n\t\\\"a\\\": 1,\n\t\\\"b\\\": \\\"s\\\"\n}\" 1622851200000000000\n"
+	rows, tagsPool, fieldsPool, err := unmarshalRows(rows[:0], req, tagsPool[:0], fieldsPool[:0], enableTagArray)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Len(t, rows[0].Fields, 1)
+	require.Equal(t, "{\n\t\"a\": 1,\n\t\"b\": \"s\"\n}", rows[0].Fields[0].StrValue)
+
+	// A quoted field containing a newline followed by another line must still split correctly.
+	req = "json1,a=1,b=2 data=\"line1\nline2\" 1622851200000000000\ncpu,host=h value=1i 1622851200000000000\n"
+	rows, _, _, err = unmarshalRows(rows[:0], req, tagsPool[:0], fieldsPool[:0], enableTagArray)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.Equal(t, "line1\nline2", rows[0].Fields[0].StrValue)
+	require.Equal(t, "cpu", rows[1].Name)
+
+	// A stray, unescaped '"' in a tag value (legal, since tags never quote) must not be
+	// mistaken for the start of a string field value and desync line splitting for the
+	// rest of the batch.
+	req = "cpu,host=serv\"er value=1 1622851200000000000\ncpu2,host=h2 value=2 1622851200000000000\n"
+	rows, _, _, err = unmarshalRows(rows[:0], req, tagsPool[:0], fieldsPool[:0], enableTagArray)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.Equal(t, "cpu", rows[0].Name)
+	require.Equal(t, "cpu2", rows[1].Name)
+
+	// Leading whitespace on a line (tolerated elsewhere via checkWhitespace) combined with
+	// a stray tag quote must not misidentify the line's fields-section boundary either.
+	req = " cpu,host=h\"x value=1 1622851200000000000\ncpu2,host=h2 value=2 1622851200000000000\n"
+	rows, _, _, err = unmarshalRows(rows[:0], req, tagsPool[:0], fieldsPool[:0], enableTagArray)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.Equal(t, "cpu", rows[0].Name)
+	require.Equal(t, "cpu2", rows[1].Name)
+}
+
 func TestUnmarshalRows_error(t *testing.T) {
 	enableTagArray := false
 	f := func(dst []Row, s string, tagsPool []Tag, fieldsPool []Field, expectedErr string) {
