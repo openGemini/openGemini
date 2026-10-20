@@ -31,7 +31,7 @@ require (
 	github.com/influxdata/influxdb-observability/otel2influx v0.5.6
 	github.com/influxdata/influxql v1.2.0
 	github.com/json-iterator/go v1.1.13-0.20220915233716-71ac16282d12
-	github.com/klauspost/compress v1.17.11
+	github.com/klauspost/compress v1.18.7
 	github.com/nxadm/tail v1.4.11
 	github.com/openGemini/opengemini-client-go v0.8.1
 	github.com/panjf2000/ants/v2 v2.9.0
