@@ -17,6 +17,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -60,8 +61,10 @@ type TargetTransform struct {
 
 	writeWorker int
 	writeChan   chan Chunk
-	signalChan  chan struct{}
-	chunkPool   *BlockChunkPool
+	// stopChan is closed by the first consumer that fails to write, telling the producer to stop
+	stopChan  chan struct{}
+	stopOnce  sync.Once
+	chunkPool *BlockChunkPool
 
 	ppTargetCost *tracing.Span
 
@@ -97,7 +100,7 @@ func NewTargetTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybri
 	}
 	trans.writeWorker = worker
 	trans.writeChan = make(chan Chunk, worker)
-	trans.signalChan = make(chan struct{}, worker)
+	trans.stopChan = make(chan struct{})
 	trans.chunkPool = NewBlockChunkPool(2*worker, NewChunkBuilder(inRowDataType))
 
 	return trans, nil
@@ -147,11 +150,16 @@ func (trans *TargetTransform) CloseWriteChan() {
 	})
 }
 
+func (trans *TargetTransform) stop() {
+	trans.stopOnce.Do(func() {
+		close(trans.stopChan)
+	})
+}
+
 func (trans *TargetTransform) Work(ctx context.Context) error {
 	span := trans.StartSpan("[Target]TotalWorkCost", false)
 	trans.ppTargetCost = tracing.Start(span, "target_cost", false)
 	defer func() {
-		close(trans.signalChan)
 		trans.chunkPool.Release()
 		trans.Close()
 		tracing.Finish(span)
@@ -185,33 +193,47 @@ func (trans *TargetTransform) Work(ctx context.Context) error {
 
 func (trans *TargetTransform) produce(ctx context.Context, span *tracing.Span, errs *errno.Errs) {
 	defer func() {
+		trans.CloseWriteChan()
 		errs.Dispatch(nil)
 	}()
 	for {
 		select {
 		case chunk, ok := <-trans.input.State:
 			if !ok {
-				trans.CloseWriteChan()
 				return
 			}
 			tracing.StartPP(span)
 
+			var sent bool
 			tracing.SpanElapsed(trans.ppTargetCost, func() {
-				select {
-				case <-trans.signalChan:
-					trans.CloseWriteChan()
-					return
-				default:
-					newChunk := trans.chunkPool.Get()
-					chunk.CopyTo(newChunk)
-					trans.writeChan <- newChunk
-				}
+				sent = trans.send(ctx, chunk)
 			})
 			tracing.EndPP(span)
+			if !sent {
+				return
+			}
+		case <-trans.stopChan:
+			return
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+// send copies the chunk and hands it over to the consumers. It returns false if a
+// consumer has failed or the query is canceled, so the producer never blocks on
+// a write channel that nobody reads anymore.
+func (trans *TargetTransform) send(ctx context.Context, chunk Chunk) bool {
+	newChunk := trans.chunkPool.Get()
+	chunk.CopyTo(newChunk)
+	select {
+	case trans.writeChan <- newChunk:
+		return true
+	case <-trans.stopChan:
+	case <-ctx.Done():
+	}
+	trans.chunkPool.Put(newChunk)
+	return false
 }
 
 func (trans *TargetTransform) consume(ctx context.Context, errs *errno.Errs) {
@@ -230,8 +252,8 @@ func (trans *TargetTransform) consume(ctx context.Context, errs *errno.Errs) {
 			err = trans.writeTarget(inChunk)
 			trans.chunkPool.Put(inChunk)
 			if err != nil {
+				trans.stop()
 				errs.Dispatch(err)
-				trans.signalChan <- struct{}{}
 				return
 			}
 		case <-ctx.Done():
