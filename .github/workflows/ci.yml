@@ -73,20 +73,19 @@ jobs:
       fail-fast: true
       matrix:
         os: ["ubuntu-latest"] # "macOS-latest"
-        go: ["1.24"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go }}
+          go-version-file: "go.mod"
       - name: Run gotest
         run: |
           go mod tidy
           make gotest
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
 
@@ -97,14 +96,13 @@ jobs:
       fail-fast: true
       matrix:
         os: ["ubuntu-latest"] # "macOS-latest"
-        go: ["1.24"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go }}
+          go-version-file: "go.mod"
       - name: Run build and serve
         run: |
           make build-check
