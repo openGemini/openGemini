@@ -41,7 +41,7 @@ PROTOC_ZIP_MACOS=protoc-3.14.0-osx-x86_64.zip
 PROTOC_ZIP_WINDOWS=protoc-3.14.0-win64.zip
 
 install-goimports-reviser:
-	@$(GO) install github.com/incu6us/goimports-reviser/v3@v3.8.2
+	@$(GO) install github.com/incu6us/goimports-reviser/v3@v3.13.2
 
 install-staticcheck:
 	@$(GO) install honnef.co/go/tools/cmd/staticcheck@v0.6.0
@@ -101,7 +101,7 @@ install-protoc-gen-go:
 	@$(GO) install github.com/golang/protobuf/protoc-gen-go@latest
 
 install-msgp:
-	@$(GO) install github.com/tinylib/msgp@latest
+	@$(GO) install github.com/tinylib/msgp@v1.6.5
 
 failpoint-enable:
 	@$(FAILPOINT_ENABLE)
