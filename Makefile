@@ -73,13 +73,11 @@ gotest:
 		if ! TMPDIR="$$pkg_tmp_root" $(GOTEST) -tags "failpoint" -short -v -count 1 -p 1 -parallel 1 -timeout $(GOTEST_TIMEOUT) -coverprofile coverage_$$index.txt -coverpkg ./... $$s; then \
 			rm -rf /tmp/openGemini "$$pkg_tmp_root"; \
 			$(MAKE) clean-test-env >/dev/null; \
-			$(FAILPOINT_DISABLE); \
 			exit 1; \
 		fi; \
 		rm -rf /tmp/openGemini "$$pkg_tmp_root"; \
 	done
 	@$(MAKE) clean-test-env >/dev/null
-	@$(FAILPOINT_DISABLE)
 
 clean-test-env:
 	@rm -rf /tmp/openGemini /backup_test/tmp/openGemini /tmp/gemini
@@ -98,15 +96,7 @@ build-check:
 
 integration-test:
 	@echo "running integration test begin."
-	@$(MAKE) clean-test-env >/dev/null
-	@it_tmp_root=$$(mktemp -d /tmp/openGemini-it-XXXXXX); \
-		rm -rf /tmp/openGemini; \
-		ln -s "$$it_tmp_root" /tmp/openGemini; \
-		URL=http://127.0.0.1:8086 TMPDIR="$$it_tmp_root" $(GOTEST) -mod=mod -test.parallel 1 -timeout 10m ./tests -v GOCACHE=off -args "normal"; \
-		status=$$?; \
-		rm -rf /tmp/openGemini "$$it_tmp_root"; \
-		$(MAKE) clean-test-env >/dev/null; \
-		exit $$status
+	@URL=http://127.0.0.1:8086 $(GOTEST) -mod=mod -test.parallel 1 -timeout 10m ./tests -v -args "normal"
 
 start-subscriber:
 	sed -i '/\[subscriber\]/{n;s/.*/enabled = true/;}' config/openGemini.conf

@@ -191,7 +191,11 @@ func (ts *TaskScheduler) execute(task Task, signal chan struct{}) {
 			return
 		}
 
+		// Group completion can run before the remaining Finish callbacks.
+		// Keep Wait blocked until all task cleanup and limiter release finish.
+		ts.wg.Add(1)
 		go func() {
+			defer ts.wg.Done()
 			defer func() {
 				task.Finish()
 				ts.limiter.Release()

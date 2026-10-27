@@ -147,3 +147,51 @@ func TestCompactTask(t *testing.T) {
 
 	ts.CloseAll()
 }
+
+// A group's completion notification must not let Wait return while the task's
+// remaining cleanup callbacks are still running.
+func TestTaskGroupWaitsForCleanup(t *testing.T) {
+	sch := scheduler.NewTaskScheduler(func(chan struct{}, func()) {}, limiter.NewFixed(1))
+	cleanupStarted := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	task := &cleanupTask{started: cleanupStarted, release: releaseCleanup}
+	task.Init("cleanup")
+	group := scheduler.NewTaskGroup("cleanup")
+	group.Add(task)
+	sch.ExecuteTaskGroup(group, make(chan struct{}))
+	<-cleanupStarted
+
+	done := make(chan struct{})
+	go func() {
+		sch.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Error("Wait returned before task cleanup completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseCleanup)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Wait did not return after task cleanup")
+	}
+	require.False(t, sch.IsRunning("cleanup"))
+}
+
+type cleanupTask struct {
+	scheduler.BaseTask
+	started chan struct{}
+	release chan struct{}
+}
+
+func (t *cleanupTask) BeforeExecute() bool {
+	t.OnFinish(func() {
+		close(t.started)
+		<-t.release
+	})
+	return true
+}
+
+func (t *cleanupTask) Execute() {}

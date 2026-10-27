@@ -23,8 +23,6 @@ GOTEST      := $(GO) test -gcflags "all=-N -l"
 PYTHON      := python
 STATICCHECK := staticcheck
 
-FAILPOINT_ENABLE  := find $$PWD/ -type d | grep -vE "(\.git|\.github|\.tests)" | xargs failpoint-ctl enable
-FAILPOINT_DISABLE := find $$PWD/ -type d | grep -vE "(\.git|\.github|\.tests)" | xargs failpoint-ctl disable
 
 PACKAGE_LIST_OPEN_GEMINI_TESTS  := $(GO) list ./... | grep -vE "tests|lifted\/hashicorp"
 PACKAGES_OPEN_GEMINI_TESTS ?= $$($(PACKAGE_LIST_OPEN_GEMINI_TESTS))
@@ -101,9 +99,3 @@ install-protoc-gen-go:
 
 install-msgp:
 	@$(GO) install github.com/tinylib/msgp@v1.6.5
-
-failpoint-enable:
-	@$(FAILPOINT_ENABLE)
-
-failpoint-disable:
-	@$(FAILPOINT_DISABLE)

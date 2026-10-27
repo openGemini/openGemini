@@ -27,7 +27,6 @@ jobs:
       - name: Run gotest
         run: |
           go mod tidy
-          go install github.com/pingcap/failpoint/failpoint-ctl@latest
           make gotest
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
