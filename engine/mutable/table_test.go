@@ -104,6 +104,43 @@ func TestMemTables_Values_Empty(t *testing.T) {
 	run(false)
 }
 
+// For example: SELECT count(time) FROM mst WHERE a > 0 AND z > 0
+func TestMemTables_Values_TimeBeforeOtherColumns(t *testing.T) {
+	tb := mutable.NewMemTable(config.TSSTORE)
+	row := &influx.Row{}
+	msInfo := tb.CreateMsInfo("mst", row, nil)
+	chunk, _ := msInfo.CreateChunk(100)
+
+	rec := &record.Record{}
+	rec.ResetWithSchema(record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "a"},
+		record.Field{Type: influx.Field_Type_Float, Name: "z"},
+		record.Field{Type: influx.Field_Type_Int, Name: record.TimeField},
+	})
+	rec.Column(0).AppendIntegers(1, 2, 3)
+	rec.Column(1).AppendFloats(1.1, 2.1, 3.1)
+	rec.Column(2).AppendIntegers(10, 20, 30)
+	chunk.WriteRec.SetWriteRec(rec)
+	chunk.WriteRec.SetLastAppendTime(30)
+
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "a"},
+		record.Field{Type: influx.Field_Type_Int, Name: record.TimeField},
+		record.Field{Type: influx.Field_Type_Float, Name: "z"},
+		record.Field{Type: influx.Field_Type_Int, Name: record.TimeField},
+	}
+	tbs := mutable.NewMemTables(true)
+	tbs.Init(tb, nil)
+	got := tbs.Values("mst", 100, util.TimeRange{Min: 0, Max: 100}, schema, true)
+
+	require.NotNil(t, got)
+	require.Equal(t, schema, got.Schema)
+	require.Equal(t, []int64{1, 2, 3}, got.Column(0).IntegerValues())
+	require.Equal(t, []int64{10, 20, 30}, got.Column(1).IntegerValues())
+	require.Equal(t, []float64{1.1, 2.1, 3.1}, got.Column(2).FloatValues())
+	require.Equal(t, []int64{10, 20, 30}, got.Column(3).IntegerValues())
+}
+
 func TestSplitRecordByTime(t *testing.T) {
 	var order, unOrder *record.Record
 	schema := record.Schemas{
