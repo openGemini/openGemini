@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSetIndexReader(t *testing.T) {
@@ -55,18 +56,26 @@ func TestSetIndexWriter(t *testing.T) {
 	_ = fileops.RemoveAll(testCompDir)
 
 	msName := "cpu"
-	setWriter := index.NewIndexWriter(testCompDir, msName, "", "", indextype.Set, tokenizer.CONTENT_SPLITTER)
-	err := setWriter.Open()
-	if err != nil {
-		t.Fatal(err)
+
+	ir := &influxql.IndexRelation{
+		IndexNames:   []string{indextype.SetIndex},
+		Oids:         []uint32{uint32(indextype.Set)},
+		IndexList:    []*influxql.IndexList{&influxql.IndexList{IList: []string{"field1"}}},
+		IndexOptions: []*influxql.IndexOptions{},
 	}
 
-	err = setWriter.CreateAttachIndex(nil, nil, nil)
+	setWriter := index.NewIndexWriter(testCompDir, msName, "", "", *ir, 0, tokenizer.CONTENT_SPLITTER)
+	setWriter.Open()
+
+	err := setWriter.CreateAttachIndex(nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	_, _ = setWriter.CreateDetachIndex(nil, nil, nil, nil)
+
+	err = setWriter.Flush()
+	require.NoError(t, err)
 
 	err = setWriter.Close()
 	if err != nil {

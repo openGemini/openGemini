@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -50,8 +51,12 @@ func TestResourceAllocator(t *testing.T) {
 func TestShardPipelineManager(t *testing.T) {
 	_, err := NewShardsParallelismAllocator(0, 0, 0, 0)
 	assert.NoError(t, err)
+	_, err = NewShardsParallelismAllocator(0, -1, 0, 0)
+	assert.NoError(t, err)
+
 	a1, _ := NewShardsParallelismAllocator(time.Second, 10, 1, 0)
 	NewSeriesParallelismAllocator(0, 0)
+	NewSeriesParallelismAllocator(0, -1)
 	a2 := NewSeriesParallelismAllocator(time.Second, 20)
 	if num, _, _ := a1.Alloc(10); num != 1 {
 		t.Fatal()
@@ -120,4 +125,29 @@ func TestSeriesResAllocator(t *testing.T) {
 		t.Error("seriesResAlloc alloc parallelism error")
 	}
 	series.FreeParallelism(1, 1)
+}
+
+func TestNewChunkReaderResAllocator(t *testing.T) {
+
+	for _, testcase := range []struct {
+		cpuNum int
+		ratio  int
+		exp    int64
+	}{
+		{2, 1, 2},
+		{4, 1, 2},
+		{8, 1, 2},
+		{16, 1, 2},
+		{32, 1, 4},
+		{2, 2, 2},
+		{4, 2, 2},
+		{8, 2, 2},
+		{16, 2, 2},
+		{32, 2, 4},
+	} {
+		cpu.SetCpuNum(testcase.cpuNum, testcase.ratio)
+		allocator, err := NewChunkReaderResAllocator(0, 0, GradientDesc)
+		assert.NoError(t, err)
+		assert.Equal(t, testcase.exp, allocator.allocator.minAllocNum)
+	}
 }

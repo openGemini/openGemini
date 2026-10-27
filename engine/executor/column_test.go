@@ -15,109 +15,14 @@
 package executor_test
 
 import (
+	"math/rand/v2"
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/executor"
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/stretchr/testify/assert"
 )
-
-/*func TestColumn_Append(t *testing.T) {
-	c1 := executor.NewColumnImpl(influxql.Float)
-	c1.AppendFloatValues([]float64{1, 2, 3, 4, 5}...)
-	c1.AppendColumnTimes([]int64{0, 0, 0, 0, 0}...)
-	c1.AppendNils([]uint32{1, 3, 5, 7, 11}) // 10101010 00100000
-
-	c2 := executor.NewColumnImpl(influxql.Float)
-	c2.AppendFloatValues([]float64{6, 7, 8, 9, 10}...)
-	c2.AppendColumnTimes([]int64{0, 0, 0, 0, 0}...)
-	c2.AppendNils([]uint32{1, 3, 5, 7, 9}) // 10101010 10000000
-
-	c3 := executor.NewColumnImpl(influxql.Float)
-	c3.AppendFloatValues([]float64{11, 12, 13, 14, 15, 16, 17, 18, 19, 20}...)
-	c3.AppendColumnTimes([]int64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}...)
-	c3.AppendNils([]uint32{1, 2, 9, 10, 11, 12, 13, 14, 15, 16}) // 11000000 11111111
-
-	c1 = c1.AppendColumn(16, c2, executor.AppendFloatColumn).(*executor.ColumnImpl)
-	c1 = c1.AppendColumn(32, c3, executor.AppendFloatColumn).(*executor.ColumnImpl)
-	assert.Equal(t, c1.FloatValues(), []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
-	assert.Equal(t, c1.Nils().ToArray(), []uint32{1, 3, 5, 7, 11, 17, 19, 21, 23, 25, 33, 34, 41, 42, 43, 44, 45, 46, 47, 48})
-}*/
-
-/*func TestColumns_UnionWith(t *testing.T) {
-	c1 := executor.NewColumnImpl(influxql.Float)
-	c1.AppendFloatValues([]float64{1, 2, 3, 4, 5}...)
-	c1.AppendColumnTimes([]int64{0, 0, 0, 0, 0}...)
-	c1.AppendNils([]uint32{1, 3, 5, 7, 11}) // 10101010 00100000
-
-	c2 := executor.NewColumnImpl(influxql.Integer)
-	c2.AppendFloatValues([]float64{6, 7, 8, 9, 10}...)
-	c2.AppendColumnTimes([]int64{0, 0, 0, 0, 0}...)
-	c2.AppendNils([]uint32{1, 3, 5, 7, 9}) // 10101010 10000000
-
-	buf := executor.UnionWith(c1, c2)
-	assert.Equal(t, c1.Nils().ToArray(), []uint32{1, 2, 3, 4, 6})
-	assert.Equal(t, c2.Nils().ToArray(), []uint32{1, 2, 3, 4, 5})
-	assert.Equal(t, buf.ToArray(), []uint32{1, 3, 5, 7, 9, 11})
-}*/
-
-/*func TestGetRangeFloatColumn(t *testing.T) {
-	// first test
-	c1 := executor.NewColumnImpl(influxql.Float)
-	c1.AppendFloatValues([]float64{1, 2, 3, 4, 5}...)
-	c1.AppendColumnTimes([]int64{1, 2, 3, 4, 5}...)
-	c1.AppendNilsV2(true, false, true, false, true, false, true, false, false, false, true) // 10101010 00100000
-
-	var v executor.Column
-	v = c1.GetRangeColumn(0, 8, executor.AppendFloatSlice)
-	assert.Equal(t, v.DataType(), influxql.Float)
-	assert.Equal(t, v.ColumnTimes(), []int64{1, 2, 3, 4})
-	assert.Equal(t, v.FloatValues(), []float64{1, 2, 3, 4})
-	assert.Equal(t, v.NilsV2().ToArray(), []uint16{1, 3, 5, 7})
-
-	v = c1.GetRangeColumn(1, 8, executor.AppendFloatSlice)
-	assert.Equal(t, v.ColumnTimes(), []int64{2, 3, 4})
-	assert.Equal(t, v.FloatValues(), []float64{2, 3, 4})
-	assert.Equal(t, v.NilsV2().ToArray(), []uint16{2, 4, 6})
-
-	v = c1.GetRangeColumn(2, 8, executor.AppendFloatSlice)
-	assert.Equal(t, v.ColumnTimes(), []int64{2, 3, 4})
-	assert.Equal(t, v.FloatValues(), []float64{2, 3, 4})
-	assert.Equal(t, v.NilsV2().ToArray(), []uint16{1, 3, 5})
-
-	v = c1.GetRangeColumn(2, 11, executor.AppendFloatSlice)
-	assert.Equal(t, v.ColumnTimes(), []int64{2, 3, 4, 5})
-	assert.Equal(t, v.FloatValues(), []float64{2, 3, 4, 5})
-	assert.Equal(t, v.NilsV2().ToArray(), []uint16{1, 3, 5, 9})
-
-	// second test
-	c2 := executor.NewColumnImpl(influxql.Float)
-	c2.AppendFloatValues([]float64{1, 2, 3, 4, 5}...)
-	c2.AppendColumnTimes([]int64{1, 2, 3, 4, 5}...)
-	c2.AppendNilsV2(false, true, false, true, false, true, false, true, false, false, true) // 01010101 00100000
-
-	v = c2.GetRangeColumn(0, 8, executor.AppendFloatSlice)
-	assert.Equal(t, v.ColumnTimes(), []int64{1, 2, 3, 4})
-	assert.Equal(t, v.FloatValues(), []float64{1, 2, 3, 4})
-	assert.Equal(t, v.NilsV2().ToArray(), []uint16{2, 4, 6, 8})
-
-	v = c2.GetRangeColumn(1, 8, executor.AppendFloatSlice)
-	assert.Equal(t, v.ColumnTimes(), []int64{1, 2, 3, 4})
-	assert.Equal(t, v.FloatValues(), []float64{1, 2, 3, 4})
-	assert.Equal(t, v.NilsV2().ToArray(), []uint16{1, 3, 5, 7})
-
-	v = c2.GetRangeColumn(0, 7, executor.AppendFloatSlice)
-	assert.Equal(t, v.ColumnTimes(), []int64{1, 2, 3})
-	assert.Equal(t, v.FloatValues(), []float64{1, 2, 3})
-	assert.Equal(t, v.NilsV2().ToArray(), []uint16{2, 4, 6})
-}*/
-
-// TODO 即测试rank函数
-func TestColumnImpl_GetValueIndex(t *testing.T) {
-
-}
 
 func TestGetRangeValueIndex(t *testing.T) {
 	// first test
@@ -149,7 +54,7 @@ func ColumnImplGetRangeValueIndex() executor.Column {
 	c1.AppendColumnTimes(make([]int64, 1024))
 	nils := make([]bool, 0, 1024)
 	for i := 0; i < 1024; i++ {
-		notNil := rand.Intn(2) == 1
+		notNil := rand.IntN(2) == 1
 		nils = append(nils, notNil)
 	}
 	c1.AppendNilsV2(nils...)
@@ -162,7 +67,7 @@ func BenchmarkColumnImpl_GetRangeValueIndexV2(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		start := rand.Intn(900)
+		start := rand.IntN(900)
 		c1.GetRangeValueIndexV2(start, start+100)
 	}
 }
@@ -198,7 +103,7 @@ func TestColumnImpl_AppendNils(t *testing.T) {
 func BenchmarkColumnImpl_AppendNils(b *testing.B) {
 	nils := make([]bool, 0)
 	for j := 0; j < 1000; j++ {
-		notNil := rand.Intn(2) == 1
+		notNil := rand.IntN(2) == 1
 		nils = append(nils, notNil)
 	}
 	c1 := executor.NewColumnImpl(influxql.Integer)

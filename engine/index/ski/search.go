@@ -17,7 +17,7 @@ package ski
 import (
 	"io"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 )
 

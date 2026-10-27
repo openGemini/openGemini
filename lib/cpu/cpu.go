@@ -20,8 +20,14 @@ import (
 
 var cpuNum = runtime.NumCPU()
 
+var cpuNumWithoutRatio = runtime.NumCPU()
+
 func GetCpuNum() int {
 	return cpuNum
+}
+
+func GetCpuNumWithoutRatio() int {
+	return cpuNumWithoutRatio
 }
 
 func SetCpuNum(n, ratio int) {
@@ -33,6 +39,7 @@ func SetCpuNum(n, ratio int) {
 		ratio = 1
 	}
 
+	cpuNumWithoutRatio = cpuNum
 	cpuNum = cpuNum * ratio
 	if cpuNum >= 64 {
 		cpuNum = 64

@@ -17,12 +17,11 @@ package executor
 import (
 	"bytes"
 	"container/heap"
+	"math/rand/v2"
 	"sort"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -110,6 +109,11 @@ func (f *HeapItem[T]) append(input Chunk, start, end, ordinal int, values []T) {
 
 func (f *HeapItem[T]) appendForAuxFast(input Chunk, start, end, maxIndex int, values []T) {
 	// fast path
+	sortByTime := f.sortByTime
+	f.sortByTime = false
+	defer func() {
+		f.sortByTime = sortByTime
+	}()
 	for i := start; i < end; i++ {
 		p := NewPointItem(
 			input.TimeByIndex(i),
@@ -136,6 +140,11 @@ func (f *HeapItem[T]) appendForAuxFast(input Chunk, start, end, maxIndex int, va
 
 func (f *HeapItem[T]) appendForAuxSlow(input Chunk, start, end, ordinal, maxIndex int, values []T) {
 	// slow path
+	sortByTime := f.sortByTime
+	f.sortByTime = false
+	defer func() {
+		f.sortByTime = sortByTime
+	}()
 	for i := start; i < end; i++ {
 		if input.Column(ordinal).IsNilV2(i) {
 			continue
@@ -263,7 +272,7 @@ func (f *SampleItem[T]) appendForFast(input Chunk, start, end, maxIndex int, val
 		j++
 		p.index = maxIndex + i - start
 		if f.Len() == cap(f.items) {
-			rnd := rand.Intn(p.index)
+			rnd := rand.IntN(p.index)
 			if rnd >= cap(f.items) {
 				continue
 			}
@@ -3143,7 +3152,7 @@ func (r *GraphFilterIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 
 	if len(r.bufChunks) == 0 {
 		colMap := make(map[string]int)
-		for i := 1; i < inChunk.RowDataType().NumColumn(); i++ {
+		for i := 0; i < inChunk.RowDataType().NumColumn(); i++ {
 			valName := inChunk.RowDataType().Field(i).Name()
 			for k, v := range p.colMapping {
 				if v.Val != valName {
@@ -3162,10 +3171,6 @@ func (r *GraphFilterIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	r.bufChunks = append(r.bufChunks, c)
 
 	if p.lastChunk {
-		if !checkColumnAligned(r.bufChunks) {
-			p.err = errno.NewError(errno.ColumnsNotAligned)
-			return
-		}
 		result, err := r.fn(r.bufChunks, r.graph, r.algoParams, r.colMap)
 		if err != nil {
 			logger.GetLogger().Error(err.Error())
@@ -3186,39 +3191,4 @@ func (r *GraphFilterIterator) appendChunkWithColumnsAligned(in, out Chunk) {
 	out.SetTime(in.Time())
 	out.AppendTagsAndIndexes(in.Tags(), in.TagIndex())
 	out.AppendIntervalIndexes(in.IntervalIndex())
-}
-
-func checkColumnAligned(chunks []Chunk) bool {
-
-	for _, chunk := range chunks {
-		rowsNum := -1
-		for _, column := range chunk.Columns() {
-			newNum := getValsLen(column)
-			if rowsNum == -1 {
-				rowsNum = newNum
-				continue
-			}
-			if rowsNum != newNum {
-				return false
-			}
-		}
-	}
-
-	return true
-}
-
-func getValsLen(column Column) int {
-	switch column.DataType() {
-	case influxql.String, influxql.Tag:
-		_, offset := column.GetStringBytes()
-		return len(offset)
-	case influxql.Integer:
-		return len(column.IntegerValues())
-	case influxql.Float:
-		return len(column.FloatValues())
-	case influxql.Boolean:
-		return len(column.BooleanValues())
-	default:
-		return 0
-	}
 }

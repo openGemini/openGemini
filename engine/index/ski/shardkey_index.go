@@ -21,17 +21,16 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
-	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/workingsetcache"
 	"github.com/VictoriaMetrics/fastcache"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/memory"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/workingsetcache"
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 	"go.uber.org/zap"
 )
@@ -60,7 +59,7 @@ func NewShardKeyIndex(dataPath string, lockPath *string) (*ShardKeyIndex, error)
 	}
 	mem := memory.Allowed()
 	cachePath := filepath.Join(dataPath, ShardKeyCache)
-	index.cache = workingsetcache.Load(cachePath, mem/32, time.Hour)
+	index.cache = workingsetcache.Load(cachePath, mem/32)
 	var cs fastcache.Stats
 	index.cache.UpdateStats(&cs)
 	return index, nil

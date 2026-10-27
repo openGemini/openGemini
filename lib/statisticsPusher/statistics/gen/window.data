@@ -15,7 +15,12 @@
         "WindowOutMaxTime",
         "WindowStartTime",
         "WindowEndTime",
-        "WindowGroupKeyCount"
+        "WindowGroupKeyCount",
+        "ReplayIn",
+        "ReplayProcess",
+        "ReplaySkip",
+        "ReplayCacheIn",
+        "ConsumeCacheIn",
     ],
     "PushTags":[
         "StreamID"

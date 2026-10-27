@@ -15,6 +15,7 @@
 package fileops
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -31,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/request"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/util"
 )
 
 const (
@@ -38,6 +40,16 @@ const (
 
 	ObsPrefixTS        = "obs:/"
 	ObsPrefixLogKeeper = "obs://"
+)
+
+const (
+	// ReliabilityLogFilePerm is the file permission for reliability log files.
+	// Only the owner can read and write; group and others have no access.
+	ReliabilityLogFilePerm = 0600
+
+	// ReliabilityLogDirPerm is the directory permission for reliability log directories.
+	// Only the owner can read, write, and traverse the directory.
+	ReliabilityLogDirPerm = 0700
 )
 
 var ObsPrefix = ObsPrefixTS
@@ -190,6 +202,12 @@ type VFS interface {
 
 	// DecodeRemotePathToLocal return remote key path
 	DecodeRemotePathToLocal(path string) (string, error)
+
+	// UpdateObsAkSk updates the cold storage ak and sk
+	UpdateObsAkSk(ak, sk string) error
+
+	// StreamConfUpdate
+	StreamConfUpdate(propertyName, propertyValue string) error
 }
 
 // Open opens the named file with specified options.
@@ -506,7 +524,7 @@ func GetRemoteDataPath(obsOpt *obs.ObsOptions, dataPath string) string {
 	}
 	dataPrefix := dataPath[len(obs.GetPrefixDataPath()):]
 	basePath := path.Join(obsOpt.BasePath, dataPrefix)
-	dir = fmt.Sprintf("%s%s/%s/%s/%s/%s", ObsPrefix, obsOpt.Endpoint, obsOpt.Ak, DecryptObsSk(obsOpt.Sk), obsOpt.BucketName, basePath)
+	dir = fmt.Sprintf("%s%s/%s/%s/%s/%s", ObsPrefix, obsOpt.Endpoint, crypto.Decrypt(obsOpt.Ak), DecryptObsSk(obsOpt.Sk), obsOpt.BucketName, basePath)
 	return dir
 }
 
@@ -551,6 +569,14 @@ func GetSubDirFiles(fis []fs.FileInfo, prefixPath string) []fs.FileInfo {
 		}
 	}
 	return subDirFiles
+}
+
+func UpdateObsAkSk(ak, sk string) error {
+	return GetFs(Local).UpdateObsAkSk(ak, sk)
+}
+
+func StreamConfUpdate(propertyName, propertyValue string) error {
+	return GetFs(Local).StreamConfUpdate(propertyName, propertyValue)
 }
 
 type FsType uint32
@@ -627,4 +653,71 @@ func FindDir(dirs []fs.FileInfo, dirName string) fs.FileInfo {
 
 func DirNotExists(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "no such file or directory")
+}
+
+// SaveReliabilityLog saves data as a JSON file in the given directory.
+// It uses file locking via lockFile and ensures data is synced to disk.
+// Returns the full path of the saved file or an error.
+func SaveReliabilityLog(data interface{}, dir string, lockFile string, nameGenerator func() string) (string, error) {
+	buf, err := json.Marshal(data)
+	if err != nil {
+		return "", fmt.Errorf("marshal data to JSON: %w", err)
+	}
+
+	// Ensure directory exists
+	lockDir := FileLockOption(lockFile)
+	if err := MkdirAll(dir, ReliabilityLogDirPerm, lockDir); err != nil {
+		return "", fmt.Errorf("create directory %q: %w", dir, err)
+	}
+
+	// Generate full file path
+	fileName := filepath.Join(dir, nameGenerator())
+
+	// Open file with lock and normal I/O priority
+	pri := FilePriorityOption(IO_PRIORITY_NORMAL)
+	fd, err := OpenFile(fileName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600, lockDir, pri)
+	if err != nil {
+		return "", fmt.Errorf("open file %q: %w", fileName, err)
+	}
+	defer util.MustClose(fd) // Ensure file is closed even on error
+
+	// Write entire buffer
+	n, err := fd.Write(buf)
+	if err != nil {
+		return "", fmt.Errorf("write to file %q: %w", fileName, err)
+	}
+	if n != len(buf) {
+		return "", fmt.Errorf("partial write to %q: wrote %d bytes, expected %d", fileName, n, len(buf))
+	}
+
+	// Sync to disk
+	if err := fd.Sync(); err != nil {
+		return "", fmt.Errorf("sync file %q to disk: %w", fileName, err)
+	}
+
+	return fileName, nil
+}
+
+// ReadReliabilityLog reads a JSON file and unmarshals its content into dst.
+// The dst must be a pointer to a valid Go type.
+// Returns an error if the file doesn't exist, cannot be read, or JSON is invalid.
+func ReadReliabilityLog(file string, dst interface{}) error {
+	lock := FileLockOption("")
+	pri := FilePriorityOption(IO_PRIORITY_NORMAL)
+	fd, err := OpenFile(file, os.O_RDONLY, ReliabilityLogFilePerm, lock, pri)
+	if err != nil {
+		return fmt.Errorf("open file %q for reading: %w", file, err)
+	}
+	defer util.MustClose(fd)
+
+	buf, err := io.ReadAll(fd)
+	if err != nil {
+		return fmt.Errorf("read file %q: %w", file, err)
+	}
+
+	if err := json.Unmarshal(buf, dst); err != nil {
+		return fmt.Errorf("unmarshal JSON from file %q: %w", file, err)
+	}
+
+	return nil
 }

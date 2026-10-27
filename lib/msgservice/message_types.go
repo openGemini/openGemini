@@ -59,6 +59,21 @@ const (
 
 	DropSeriesRequestMessage
 	DropSeriesResponseMessage
+
+	ShowLastIndexRequestMessage
+	ShowLastIndexResponseMessage
+
+	SmarterQueryRequestMessage
+	SmarterQueryResponseMessage
+
+	PullRPPTWriteStatusRequestMessage
+	PullRPPTWriteStatusResponseMessage
+
+	GetTaskRequestMessage
+	GetTaskResponseMessage
+
+	SendTaskResultRequestMessage
+	SendTaskResultResponseMessage
 )
 
 var MessageBinaryCodec = make(map[uint8]func() codec.BinaryCodec, 20)
@@ -93,6 +108,16 @@ func init() {
 	MessageBinaryCodec[ShowTagKeysResponseMessage] = func() codec.BinaryCodec { return &ShowTagKeysResponse{} }
 	MessageBinaryCodec[RaftMessagesRequestMessage] = func() codec.BinaryCodec { return &RaftMessagesRequest{} }
 	MessageBinaryCodec[RaftMessagesResponseMessage] = func() codec.BinaryCodec { return &RaftMessagesResponse{} }
+	MessageBinaryCodec[ShowLastIndexRequestMessage] = func() codec.BinaryCodec { return &ShowLastIndexRequest{} }
+	MessageBinaryCodec[ShowLastIndexResponseMessage] = func() codec.BinaryCodec { return &ShowLastIndexResponse{} }
+	MessageBinaryCodec[SmarterQueryRequestMessage] = func() codec.BinaryCodec { return &SmarterQueryRequest{} }
+	MessageBinaryCodec[SmarterQueryResponseMessage] = func() codec.BinaryCodec { return &SmarterQueryResponse{} }
+	MessageBinaryCodec[PullRPPTWriteStatusRequestMessage] = func() codec.BinaryCodec { return &PullRPPTWriteStatusRequest{} }
+	MessageBinaryCodec[PullRPPTWriteStatusResponseMessage] = func() codec.BinaryCodec { return &PullRPPTWriteStatusResponse{} }
+	MessageBinaryCodec[GetTaskRequestMessage] = func() codec.BinaryCodec { return &GetTaskRequest{} }
+	MessageBinaryCodec[GetTaskResponseMessage] = func() codec.BinaryCodec { return &GetTaskResponse{} }
+	MessageBinaryCodec[SendTaskResultRequestMessage] = func() codec.BinaryCodec { return &SendTaskResultRequest{} }
+	MessageBinaryCodec[SendTaskResultResponseMessage] = func() codec.BinaryCodec { return &SendTaskResultResponse{} }
 
 	MessageResponseTyp = map[uint8]uint8{
 		SeriesKeysRequestMessage:               SeriesKeysResponseMessage,
@@ -108,5 +133,10 @@ func init() {
 		KillQueryRequestMessage:                KillQueryResponseMessage,
 		ShowTagKeysRequestMessage:              ShowTagKeysResponseMessage,
 		RaftMessagesRequestMessage:             RaftMessagesResponseMessage,
+		ShowLastIndexRequestMessage:            ShowLastIndexResponseMessage,
+		SmarterQueryRequestMessage:             SmarterQueryResponseMessage,
+		PullRPPTWriteStatusRequestMessage:      PullRPPTWriteStatusResponseMessage,
+		GetTaskRequestMessage:                  GetTaskResponseMessage,
+		SendTaskResultRequestMessage:           SendTaskResultResponseMessage,
 	}
 }

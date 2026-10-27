@@ -262,4 +262,5 @@ enum LogicPlanType
     LogicalCTE = 42;
     LogicalGraph = 43;
     LogicalTableFunction = 44;
+    LogicalLLMSemantic = 45;
 }

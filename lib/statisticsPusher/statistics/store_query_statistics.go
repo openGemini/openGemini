@@ -52,6 +52,21 @@ type StoreQuery struct {
 	ChunkReaderDagBuildTimeTotal *ItemInt64 `name:"ChunkReaderDagBuildTimeTotal"`
 	// use with StoreQueryRequests and QueryShardNumTotal
 	ChunkReaderDagRunTimeTotal *ItemInt64 `name:"ChunkReaderDagRunTimeTotal"`
+
+	ShardResourceHook  func() int64
+	SeriesResourceHook func() int64
+
+	ShardResourceIdle  *ItemInt64
+	SeriesResourceIdle *ItemInt64
+}
+
+func (s *StoreQuery) BeforeCollect() {
+	if s.ShardResourceHook != nil {
+		s.ShardResourceIdle.Store(s.ShardResourceHook())
+	}
+	if s.SeriesResourceHook != nil {
+		s.SeriesResourceIdle.Store(s.SeriesResourceHook())
+	}
 }
 
 func (s *StoreQuery) MeasurementName() string {

@@ -420,7 +420,7 @@ func DoRequests(reqInfo *RequestInfo, cmds []*promql2influxql.PromCommand) ([]pr
 	for i, cmd := range cmds {
 		go func(cmd *promql2influxql.PromCommand, i int) {
 			defer wg.Done()
-			res, apiErr, _ := reqInfo.h.execQuery(rw, reqInfo.r, reqInfo.u, start, *cmd, false, false)
+			res, apiErr, _ := reqInfo.h.execQuery(rw, reqInfo.r, reqInfo.ctx, reqInfo.u, start, *cmd, false, false)
 			if apiErr != nil {
 				mu.Lock()
 				if queryErr == nil {

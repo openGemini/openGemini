@@ -50,10 +50,10 @@ type EngineOptions struct {
 	FullCompactColdDuration      time.Duration
 	MaxConcurrentCompactions     int
 	MaxFullCompactions           int
+	CompactMemUsageLimit         int64
 	CompactThroughput            int64
 	CompactThroughputBurst       int64
 	CompactRecovery              bool
-	CsCompactionEnabled          bool
 	CsDetachedFlushEnabled       bool
 	ShardMoveLayoutSwitchEnabled bool
 	SnapshotThroughput           int64
@@ -63,7 +63,6 @@ type EngineOptions struct {
 	BackgroundReadThroughput     int
 
 	// WalSyncInterval is the interval of wal file sync
-	WalEnabled         bool
 	WalSyncInterval    time.Duration
 	WalReplayParallel  bool
 	WalReplayAsync     bool

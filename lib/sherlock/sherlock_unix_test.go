@@ -24,8 +24,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
 	"github.com/agiledragon/gomonkey/v2"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
 	cgroup2 "github.com/openGemini/openGemini/lib/cpu/cgroup"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"

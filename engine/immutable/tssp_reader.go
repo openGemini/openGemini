@@ -21,26 +21,30 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
+	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
-	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
+	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"go.uber.org/zap"
 )
 
 const (
 	unorderedDir   = "out-of-order"
-	tsspFileSuffix = ".tssp"
+	TsspFileSuffix = ".tssp"
 
 	tmpFileSuffix     = ".init"
 	tmpSuffixNameLen  = len(tmpFileSuffix)
-	tsspFileSuffixLen = len(tsspFileSuffix)
+	tsspFileSuffixLen = len(TsspFileSuffix)
 	compactLogDir     = "compact_log"
 	DownSampleLogDir  = "downsample_log"
 	ShardMoveLogDir   = "shard_move_log"
@@ -55,7 +59,15 @@ const (
 
 func RenameMergeFiles(srcName TSSPFileName, addSeq uint64) string {
 	srcName.AddSeq(addSeq)
-	return srcName.String() + tsspFileSuffix
+	return srcName.String() + TsspFileSuffix
+}
+
+func RemoveTmpSuffix(s string) string {
+	if len(s) < tmpSuffixNameLen {
+		return s
+	}
+
+	return s[:len(s)-tmpSuffixNameLen]
 }
 
 func RemoveTsspSuffix(dataPath string) string {
@@ -98,7 +110,15 @@ type TSSPInfo interface {
 	FileNameExtend() uint16
 }
 
+type CSTSSPFile interface {
+	SetPkInfo(pkInfo *colstore.PKInfo)
+	GetPkInfo() *colstore.PKInfo
+	SetSkipIndexInfo(info []*colstore.SkipIndexInfo)
+	GetSkipIndexInfo() []*colstore.SkipIndexInfo
+}
+
 type TSSPFile interface {
+	CSTSSPFile
 	Path() string
 	Name() string
 	FileName() TSSPFileName
@@ -147,9 +167,7 @@ type TSSPFile interface {
 	RenameOnObs(obsName string, tmp bool, opt *obs.ObsOptions) error
 
 	ChunkMetaCompressMode() uint8
-
-	SetPkInfo(pkInfo *colstore.PKInfo)
-	GetPkInfo() *colstore.PKInfo
+	GetLock() *string
 }
 
 type TSSPFiles struct {
@@ -285,6 +303,14 @@ func (f *TSSPFiles) Files() []TSSPFile {
 	return f.files
 }
 
+func (f *TSSPFiles) Copy() []TSSPFile {
+	f.lock.RLock()
+	defer f.lock.RUnlock()
+	ret := make([]TSSPFile, len(f.files))
+	copy(ret, f.files)
+	return ret
+}
+
 func (f *TSSPFiles) GetFilesAndUnref() []TSSPFile {
 	allFiles := make([]TSSPFile, 0)
 	if f == nil {
@@ -373,7 +399,7 @@ type tsspFile struct {
 	lock *string
 
 	pkInfo    *colstore.PKInfo
-	pkColumns map[string]int
+	skipIndex []*colstore.SkipIndexInfo
 	reader    FileReader
 }
 
@@ -603,12 +629,11 @@ func (f *tsspFile) ReadAt(cm *ChunkMeta, segment int, dst *record.Record, decs *
 		if pkMark == nil {
 			return nil, errors.New("there`s no mark info in pkInfo")
 		}
-		if _, ok := pkMark.(*fragment.IndexFragmentVariableImpl); ok {
+		if f.pkInfo.IsClusterIndex() {
 			decs.hasPrimaryKey = true
 			// FilterColMeta should be deleted when there`s no primary key column in the tssp file
-			cm.FilterColMeta(f.pkColumns)
+			cm.FilterColMeta(f.pkInfo.GetColumnMap())
 		}
-
 	}
 
 	dst, err := f.reader.ReadData(cm, segment, dst, decs, ioPriority)
@@ -654,10 +679,11 @@ func (f *tsspFile) AddPKInfos(segment int, dst *record.Record) (*record.Record, 
 		return nil, errors.New("there`s no record info in pkInfo")
 	}
 
+	pkColumns := f.pkInfo.GetColumnMap()
 	for i := range schema[:len(schema)-1] {
 		ref := &schema[i]
 		dstCol := dst.Column(i)
-		if pkIndex, ok := f.pkColumns[ref.Name]; ok {
+		if pkIndex, ok := pkColumns[ref.Name]; ok {
 			pkCol := pkRecord.Column(pkIndex)
 			err := record.AppendPKColumns(pkCol, dstCol, fragIndex, rows, ref.Type)
 			if err != nil {
@@ -735,17 +761,40 @@ func (f *tsspFile) Rename(newName string) error {
 	if f.pkInfo != nil {
 		lock := fileops.FileLockOption(*f.lock)
 		oldPKName := BuildPKFilePathFromTSSP(f.reader.FileName())
-		newPKName := BuildPKFilePathFromTSSP(newName)
 		if IsTempleFile(f.reader.FileName()) {
 			oldPKName += GetTmpFileSuffix()
 		}
+
+		newPKName := RenameIndexFilePathFromTSSP(oldPKName, newName)
 		err := fileops.RenameFile(oldPKName, newPKName, lock)
 		if err != nil {
 			return err
 		}
 	}
 
+	err := f.renameSkipIndex(newName)
+	if err != nil {
+		return err
+	}
+
 	return f.reader.Rename(newName)
+}
+
+func (f *tsspFile) renameSkipIndex(newName string) error {
+	if len(f.skipIndex) == 0 {
+		return nil
+	}
+	lock := fileops.FileLockOption(*f.lock)
+
+	for _, idx := range f.skipIndex {
+		newIdxName := RenameIndexFilePathFromTSSP(idx.Name(), newName)
+		err := idx.Rename(newIdxName, lock)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (f *tsspFile) UpdateLevel(level uint16) {
@@ -767,9 +816,19 @@ func (f *tsspFile) Remove() error {
 
 		lock := fileops.FileLockOption(*f.lock)
 		if f.pkInfo != nil {
+			pkFile := BuildPKFilePathFromTSSP(name)
+			if IsTempleFile(name) {
+				pkFile += GetTmpFileSuffix()
+			}
 			util.MustRun(func() error {
-				return fileops.Remove(BuildPKFilePathFromTSSP(name), lock)
+				return fileops.Remove(pkFile, lock)
 			})
+		}
+
+		if f.skipIndex != nil {
+			for _, idx := range f.skipIndex {
+				idx.MustRemove(lock)
+			}
 		}
 
 		util.MustClose(f.reader)
@@ -788,13 +847,26 @@ func (f *tsspFile) Remove() error {
 func (f *tsspFile) Close() error {
 	f.Stop()
 	f.Unref()
-	f.wg.Wait()
+
+	timeout := time.Duration(config.GetStoreConfig().TsspUnrefTimeout)
+	if timeout > 0 {
+		// Set a waiting timeout period to prevent the TSSP file from being unable to close due to a reference count bug.
+		// This leads to the database being unable to be deleted, and background tasks cannot be executed, etc.
+		util.WaitTimeOut(f.wg.Wait, f.ForceDone, timeout)
+	} else {
+		f.wg.Wait()
+	}
 
 	f.mu.Lock()
 	err := f.reader.Close()
 	f.mu.Unlock()
 
 	return err
+}
+
+func (f *tsspFile) ForceDone() {
+	stat.RuntimeIns().TSSPForceDoneTotal.Incr()
+	f.wg.Done()
 }
 
 func (f *tsspFile) Open() error {
@@ -934,11 +1006,15 @@ func (f *tsspFile) SetPkInfo(pkInfo *colstore.PKInfo) {
 		return
 	}
 	f.pkInfo = pkInfo
-	f.pkColumns = make(map[string]int)
-	pkRecord := pkInfo.GetRec()
-	for i, field := range pkRecord.Schema {
-		if field.Name != "time" {
-			f.pkColumns[field.Name] = i
+
+	if f.pkInfo.IsClusterIndex() {
+		pkRecord := pkInfo.GetRec()
+		ci := sparseindex.NewClusterIndex()
+		err := ci.WritePkRecAndMark(pkRecord, pkInfo.GetMark())
+		if err == nil {
+			f.pkInfo.SetClusterIndex(ci)
+		} else {
+			logger.GetLogger().Error("failed to build cluster index", zap.Error(err))
 		}
 	}
 }
@@ -947,8 +1023,20 @@ func (f *tsspFile) GetPkInfo() *colstore.PKInfo {
 	return f.pkInfo
 }
 
+func (f *tsspFile) SetSkipIndexInfo(info []*colstore.SkipIndexInfo) {
+	f.skipIndex = info
+}
+
+func (f *tsspFile) GetSkipIndexInfo() []*colstore.SkipIndexInfo {
+	return f.skipIndex
+}
+
 func (f *tsspFile) ChunkMetaCompressMode() uint8 {
 	return f.reader.ChunkMetaCompressMode()
+}
+
+func (f *tsspFile) GetLock() *string {
+	return f.lock
 }
 
 var (
@@ -958,18 +1046,20 @@ var (
 var compactGroupPool = sync.Pool{New: func() interface{} { return &CompactGroup{group: make([]string, 0, 8)} }}
 
 type CompactGroup struct {
-	name    string
-	shardId uint64
-	toLevel uint16
-	group   []string
-
+	name     string
+	shardId  uint64
+	toLevel  uint16
+	group    []string
+	path     string
+	lock     *string
 	dropping *int64
 }
 
-func NewCompactGroup(name string, toLevle uint16, count int) *CompactGroup {
+func NewCompactGroup(name, path string, toLevel uint16, count int) *CompactGroup {
 	g := compactGroupPool.Get().(*CompactGroup)
 	g.name = name
-	g.toLevel = toLevle
+	g.path = path
+	g.toLevel = toLevel
 	g.group = g.group[:count]
 	return g
 }
@@ -980,6 +1070,7 @@ func (g *CompactGroup) reset() {
 	g.toLevel = 0
 	g.group = g.group[:0]
 	g.dropping = nil
+	g.lock = nil
 }
 
 func (g *CompactGroup) release() {
@@ -1001,8 +1092,110 @@ func (g *CompactGroup) UpdateLevel(lv uint16) {
 	}
 }
 
+func (g *CompactGroup) MarshalBinary(buf []byte) ([]byte, error) {
+	// name
+	buf = encoding.MarshalUint16(buf, uint16(len(g.name)))
+	buf = append(buf, g.name...)
+	// shardId
+	buf = encoding.MarshalUint64(buf, g.shardId)
+	//toLevel
+	buf = encoding.MarshalUint16(buf, g.toLevel)
+	// group
+	buf = encoding.MarshalUint16(buf, uint16(len(g.group)))
+	for _, gr := range g.group {
+		buf = encoding.MarshalUint16(buf, uint16(len(gr)))
+		buf = append(buf, gr...)
+	}
+	// path
+	buf = encoding.MarshalUint16(buf, uint16(len(g.path)))
+	buf = append(buf, g.path...)
+	// lock
+	if g.lock != nil {
+		buf = encoding.MarshalBool(buf, true)
+		buf = encoding.MarshalUint16(buf, uint16(len(*g.lock)))
+		buf = append(buf, *g.lock...)
+	} else {
+		buf = encoding.MarshalBool(buf, false)
+	}
+	// dropping
+	if g.dropping != nil {
+		buf = encoding.MarshalBool(buf, true)
+		buf = encoding.MarshalInt64(buf, *g.dropping)
+	} else {
+		buf = encoding.MarshalBool(buf, false)
+	}
+
+	return buf, nil
+}
+
+func (g *CompactGroup) UnmarshalBinary(buf []byte) ([]byte, error) {
+	var err error
+	if len(buf) < 2 {
+		return buf, errno.NewError(errno.ShortBufferSize, 2, len(buf))
+	}
+	// name
+	buf, g.name, err = UnmarshalString16(buf)
+	if err != nil {
+		return buf, err
+	}
+
+	if len(buf) < 8 {
+		return buf, errno.NewError(errno.ShortBufferSize, 8, len(buf))
+	}
+	// shardId
+	g.shardId = encoding.UnmarshalUint64(buf[:8])
+	buf = buf[8:]
+
+	if len(buf) < 2 {
+		return buf, errno.NewError(errno.ShortBufferSize, 2, len(buf))
+	}
+	// toLevel
+	g.toLevel = encoding.UnmarshalUint16(buf[:2])
+	buf = buf[2:]
+
+	if len(buf) < 2 {
+		return buf, errno.NewError(errno.ShortBufferSize, 2, len(buf))
+	}
+	// group
+	groupLen := encoding.UnmarshalUint16(buf[:2])
+	buf = buf[2:]
+	g.group = make([]string, groupLen)
+	for i := 0; i < len(g.group); i++ {
+		buf, g.group[i], err = UnmarshalString16(buf)
+		if err != nil {
+			return buf, err
+		}
+	}
+	// path
+	buf, g.path, err = UnmarshalString16(buf)
+	if err != nil {
+		return buf, err
+	}
+	// lock
+	isNotNil, buf := encoding.UnmarshalBool(buf), buf[1:]
+	if isNotNil {
+		var lock string
+		buf, lock, err = UnmarshalString16(buf)
+		if err != nil {
+			return buf, err
+		}
+		g.lock = &lock
+	}
+
+	// dropping
+	isNotNil, buf = encoding.UnmarshalBool(buf), buf[1:]
+	if isNotNil {
+		dropping := encoding.UnmarshalInt64(buf)
+		g.dropping = &dropping
+	}
+
+	return buf, nil
+}
+
 type FilesInfo struct {
 	name              string // measurement name with version
+	path              string
+	lock              *string
 	shId              uint64
 	totalSegmentCount uint64
 	dropping          *int64
@@ -1039,6 +1232,8 @@ func (fi *FilesInfo) updateFinalFilesInfo(group *CompactGroup) {
 	fi.avgChunkRows /= len(fi.compIts)
 	fi.dropping = group.dropping
 	fi.name = group.name
+	fi.path = group.path
+	fi.lock = group.lock
 	fi.shId = group.shardId
 	fi.toLevel = group.toLevel
 	fi.oldFids = group.group

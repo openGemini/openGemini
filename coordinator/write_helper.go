@@ -21,23 +21,21 @@ import (
 	"sync"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
-	strings2 "github.com/openGemini/openGemini/lib/strings"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 const NotInShardDuration = -1
@@ -194,9 +192,6 @@ func (wh *writeHelper) updateCleanSchemaTagsCheck(r *influx.Row, dropTagIndex *[
 			*err = errno.NewError(errno.InvalidTagKey, originName)
 			continue
 		}
-		if err := r.CheckDuplicateTag(i); err != nil {
-			return fieldToUpdateEndTime, fieldToCreatePool, true, err
-		}
 		if schemaVal, ok := (*cleanSchema)[tag.Key]; !ok {
 			fieldToCreatePool = appendField(fieldToCreatePool, tag.Key, influx.Field_Type_Tag)
 			setLastFieldEndTime(meta2.TimeReserveHigh32(sgEndTime), fieldToCreatePool)
@@ -232,11 +227,6 @@ func (wh *writeHelper) updateCleanSchemaFieldsCheck(r *influx.Row, dropFieldInde
 		schemaVal, ok := (*cleanSchema)[field.Key]
 		if ok {
 			if int32(schemaVal.Typ) != field.Type {
-				failpoint.Inject("skip-field-type-conflict", func(val failpoint.Value) {
-					if strings2.EqualInterface(val, field.Key) {
-						failpoint.Continue()
-					}
-				})
 				if mst.EngineType == config.COLUMNSTORE && schemaVal.Typ == influx.Field_Type_Tag {
 					return fieldToUpdateEndTime, fieldToCreatePool, true, errno.NewError(errno.WritePointHasInvalidField, field.Key)
 				}
@@ -331,9 +321,6 @@ func (wh *writeHelper) updateSchemaCheck(database, rp string, r *influx.Row, mst
 			err = errno.NewError(errno.InvalidTagKey, originName)
 			continue
 		}
-		if err := r.CheckDuplicateTag(i); err != nil {
-			return fieldToCreatePool, true, err
-		}
 
 		if _, ok := schemaMap.GetTyp(tag.Key); !ok {
 			fieldToCreatePool = appendField(fieldToCreatePool, tag.Key, influx.Field_Type_Tag)
@@ -369,11 +356,6 @@ func (wh *writeHelper) updateSchemaCheck(database, rp string, r *influx.Row, mst
 		fieldType, ok := schemaMap.GetTyp(field.Key)
 		if ok {
 			if fieldType != field.Type {
-				failpoint.Inject("skip-field-type-conflict", func(val failpoint.Value) {
-					if strings2.EqualInterface(val, field.Key) {
-						failpoint.Continue()
-					}
-				})
 				if mst.EngineType == config.COLUMNSTORE && fieldType == influx.Field_Type_Tag {
 					return fieldToCreatePool, true, errno.NewError(errno.WritePointHasInvalidField, field.Key)
 				}

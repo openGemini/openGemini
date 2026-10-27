@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"time"
@@ -57,16 +58,23 @@ const (
 	WalDirectory       = "wal"
 	MetaDirectory      = "meta"
 	FenceDirectory     = "fence"
+
+	DefaultTsspUnrefTimeout      = time.Second * 60 * 10
+	DefaultDbptUnrefTimeout      = time.Second * 15
+	DefaultMaxChunkMetaItemSize  = 256 * 1024
+	DefaultMaxChunkMetaItemCount = 512
 )
 
 var storeConfig = Store{
-	Merge:       defaultMerge(),
+	Merge:       NewMergeConfig(),
 	MemTable:    NewMemTableConfig(),
 	Wal:         NewWalConfig(),
 	ReadCache:   NewReadCacheConfig(),
 	ParquetTask: NewParquetTaskConfig(),
 	Consume:     NewConsumeConfig(),
 	Fence:       NewFenceConfig(),
+	Compact:     NewCompactConfig(),
+	DataExport:  NewDataExportConfig(),
 }
 
 func SetStoreConfig(conf Store) {
@@ -108,6 +116,9 @@ type TSStore struct {
 	// index
 	Index *Index `toml:"index"`
 
+	// last row cache
+	LastRowCache *LastRowCacheConfig `toml:"last_row_cache"`
+
 	// logkeeper config
 	LogStore *LogStoreConfig `toml:"logstore"`
 
@@ -145,6 +156,8 @@ func NewTSStore(enableGossip bool) *TSStore {
 
 	c.ShardMerge = NewShardMergeConfig()
 	c.ObsMode = NewObs()
+
+	c.LastRowCache = NewLastRowCacheConfig()
 	return c
 }
 
@@ -196,6 +209,10 @@ func (c *TSStore) GetCommon() *Common {
 	return c.Common
 }
 
+func (c *TSStore) GetData() *Store {
+	return &c.Data
+}
+
 func (c *TSStore) ShowConfigs() map[string]interface{} {
 	return nil
 }
@@ -222,8 +239,34 @@ func (c *TSStore) GetLogStoreConfig() *LogStoreConfig {
 	{384, 384, 384, 384, 512},}     // 64U
 */
 
+type StoreComp struct {
+	// configs for compact
+	Compact
+
+	// configs for memTable
+	MemTable
+
+	// configs for wal
+	Wal
+
+	// configs for readCache
+	ReadCache
+
+	// configs for merge
+	Merge
+}
+
+func (s *StoreComp) init() {
+	s.Compact = *NewCompactConfig()
+	s.MemTable = *NewMemTableConfig()
+	s.Wal = *NewWalConfig()
+	s.ReadCache = *NewReadCacheConfig()
+	s.Merge = *NewMergeConfig()
+}
+
 // Store is the configuration for the engine.
 type Store struct {
+	StoreComp
 	IngesterAddress string      `toml:"store-ingest-addr"`
 	SelectAddress   string      `toml:"store-select-addr"`
 	Domain          string      `toml:"domain"`
@@ -236,29 +279,34 @@ type Store struct {
 	OpsMonitor      *OpsMonitor `toml:"ops-monitor"`
 
 	// configs for compact
-	Compact Compact `toml:"compact"`
+	Compact *Compact `toml:"compact"`
 
 	// configs for memTable
-	MemTable MemTable `toml:"memtable"`
+	MemTable *MemTable `toml:"memtable"`
 
 	// configs for wal
-	Wal Wal `toml:"wal"`
+	Wal *Wal `toml:"wal"`
 
 	// configs for raftStorage
 	RaftStorage RaftStorage `toml:"raft-storage"`
 
 	// configs for readCache
-	ReadCache ReadCache `toml:"readcache"`
+	ReadCache *ReadCache `toml:"readcache"`
 
-	EnableMmapRead bool `toml:"enable-mmap-read"`
-	Readonly       bool `toml:"readonly"`
+	// configs for dataExport
+	DataExport DataExport `toml:"data-export"`
+
+	EnableMmapRead      bool `toml:"enable-mmap-read"`
+	Readonly            bool `toml:"readonly"`
+	EnableReadonlyWrite bool `toml:"enable-readonly-write"`
 
 	WriteConcurrentLimit int `toml:"write-concurrent-limit"`
 	OpenShardLimit       int `toml:"open-shard-limit"`
 	MaxSeriesPerDatabase int `toml:"max-series-per-database"`
 
-	DownSampleWriteDrop          bool `toml:"downsample-write-drop"`
-	ShardMoveLayoutSwitchEnabled bool `toml:"shard-move-layout-switch"`
+	DownSampleWriteDrop          bool          `toml:"downsample-write-drop"`
+	ShardMoveLayoutSwitchEnabled bool          `toml:"shard-move-layout-switch"`
+	ForceFlushDuration           toml.Duration `toml:"force-flush-duration"`
 
 	//parallelism allocator
 	MaxWaitResourceTime          toml.Duration `toml:"max-wait-resource-time"`
@@ -291,7 +339,7 @@ type Store struct {
 	// Ordered data and unordered data are not distinguished. All data is processed as unordered data.
 	UnorderedOnly bool `toml:"unordered-only"`
 
-	Merge Merge `toml:"merge"`
+	Merge *Merge `toml:"merge"`
 
 	MaxRowsPerSegment int `toml:"max-rows-per-segment"`
 
@@ -326,12 +374,20 @@ type Store struct {
 	RetryPtCheckTime  int           `toml:"retry-pt-check-time"`
 	EntryFileRWType   int           `toml:"entry-file-rw-type"`
 
-	NagtPoolCap int `toml:"nagt-pool-cap"`
+	NagtPoolCap      int           `toml:"nagt-pool-cap"`
+	DropSeriesPeriod toml.Duration `toml:"drop-series-period"`
+
+	OffloadWait      bool          `toml:"offload-wait"`
+	TsspUnrefTimeout toml.Duration `toml:"tssp-unref-timeout"`
+	DbptUnrefTimeout toml.Duration `toml:"dbpt-unref-timeout"`
+
+	MaxChunkMetaItemCount int       `toml:"max-chunk-meta-item-count"`
+	MaxChunkMetaItemSize  toml.Size `toml:"max-chunk-meta-item-size"`
 }
 
 // NewStore returns the default configuration for tsdb.
 func NewStore() Store {
-	return Store{
+	s := Store{
 		IngesterAddress:              DefaultIngesterAddress,
 		SelectAddress:                DefaultSelectAddress,
 		DataDir:                      filepath.Join(openGeminiDir(), DataDirectory),
@@ -342,6 +398,7 @@ func NewStore() Store {
 		MemTable:                     NewMemTableConfig(),
 		Wal:                          NewWalConfig(),
 		ReadCache:                    NewReadCacheConfig(),
+		Merge:                        NewMergeConfig(),
 		RaftStorage:                  NewRaftStorageConfig(),
 		EnableMmapRead:               false,
 		WriteConcurrentLimit:         0,
@@ -354,7 +411,6 @@ func NewStore() Store {
 		InterruptSqlMemPct:           DefaultInterruptSqlMemPct,
 		IndexReadCachePersistent:     false,
 		StringCompressAlgo:           CompressAlgoSnappy,
-		Merge:                        defaultMerge(),
 		MaxRowsPerSegment:            util.DefaultMaxRowsPerSegment4TsStore,
 		ShardMoveLayoutSwitchEnabled: false,
 		SkipRegisterColdShard:        true,
@@ -370,9 +426,43 @@ func NewStore() Store {
 		FileWrapSize:                 DefaultFileWrapSize,
 		WaitCommitTimeout:            toml.Duration(DefaultWaitCommitTimeout),
 		RetryPtCheckTime:             10,
-		ColumnStore:                  ColumnStore{MergesetEnabled: true},
+		ColumnStore:                  NewDefaultColumnStore(),
 		Fence:                        NewFenceConfig(),
 		EntryFileRWType:              DefaultEntryFileRWType,
+		DataExport:                   NewDataExportConfig(),
+		OffloadWait:                  true,
+		TsspUnrefTimeout:             toml.Duration(DefaultTsspUnrefTimeout),
+		DbptUnrefTimeout:             toml.Duration(DefaultDbptUnrefTimeout),
+		MaxChunkMetaItemCount:        DefaultMaxChunkMetaItemCount,
+		MaxChunkMetaItemSize:         DefaultMaxChunkMetaItemSize,
+	}
+	s.StoreComp.init()
+	return s
+}
+
+func (c *Store) InitFields() {
+	c.Compact = NewCompactConfig()
+	c.Wal = NewWalConfig()
+	c.ReadCache = NewReadCacheConfig()
+	c.MemTable = NewMemTableConfig()
+	c.Merge = NewMergeConfig()
+}
+
+func (c *Store) RewriteDataConf() {
+	if reflect.DeepEqual(*c.Wal, *NewWalConfig()) {
+		c.Wal = &c.StoreComp.Wal
+	}
+	if reflect.DeepEqual(*c.MemTable, *NewMemTableConfig()) {
+		c.MemTable = &c.StoreComp.MemTable
+	}
+	if reflect.DeepEqual(*c.ReadCache, *NewReadCacheConfig()) {
+		c.ReadCache = &c.StoreComp.ReadCache
+	}
+	if reflect.DeepEqual(*c.Compact, *NewCompactConfig()) {
+		c.Compact = &c.StoreComp.Compact
+	}
+	if reflect.DeepEqual(*c.Merge, *NewMergeConfig()) {
+		c.Merge = &c.StoreComp.Merge
 	}
 }
 
@@ -413,6 +503,11 @@ func (c *Store) Corrector(cpuNum int, memorySize toml.Size) {
 
 	c.StringCompressAlgo = strings.ToLower(c.StringCompressAlgo)
 	c.CorrectorThroughput(cpuNum)
+
+	LimitRange(&c.MaxChunkMetaItemCount, DefaultMaxChunkMetaItemCount/2, DefaultMaxChunkMetaItemCount*2, DefaultMaxChunkMetaItemCount)
+	size := int(c.MaxChunkMetaItemSize)
+	LimitRange(&size, DefaultMaxChunkMetaItemSize/2, DefaultMaxChunkMetaItemSize*4, DefaultMaxChunkMetaItemSize)
+	c.MaxChunkMetaItemSize = toml.Size(size)
 }
 
 func (c *Store) CorrectorThroughput(cpuNum int) {
@@ -433,7 +528,7 @@ func (c Store) Validate() error {
 		{"data store-data-dir", c.DataDir},
 		{"data store-meta-dir", c.MetaDir},
 	}
-	if c.Wal.WalEnabled {
+	if c.Wal != nil && c.Wal.WalEnabled {
 		svItems = append(svItems, stringValidatorItem{"data store-wal-dir", c.WALDir})
 	}
 	if err := (stringValidator{}).Validate(svItems); err != nil {
@@ -507,11 +602,6 @@ func NewClvConfig() *ClvConfig {
 }
 
 const (
-	defaultMaxUnorderedFileSize        = 8 * GB
-	defaultMaxUnorderedFileNumber      = 64
-	defaultMaxMergeSelfLevel           = 0
-	defaultMinInterval                 = 300 * time.Second
-	defaultStreamMergeModeLevel        = 2
 	DefaultHotModeMemoryAllowedPercent = 5
 	DefaultHotModeTimeWindow           = time.Minute
 	DefaultHotDuration                 = time.Hour
@@ -520,33 +610,6 @@ const (
 	DefaultHotModePoolObjectCnt        = 2
 	DefaultHotModeMaxCacheSize         = 1 * GB
 )
-
-type Merge struct {
-	// merge only unordered data
-	MergeSelfOnly bool `toml:"merge-self-only"`
-
-	// The total size of unordered files to be merged each time cannot exceed MaxUnorderedFileSize
-	MaxUnorderedFileSize toml.Size `toml:"max-unordered-file-size"`
-	// The number of unordered files to be merged each time cannot exceed MaxUnorderedFileNumber
-	MaxUnorderedFileNumber int `toml:"max-unordered-file-number"`
-
-	MaxMergeSelfLevel uint16 `toml:"max-merge-self-level"`
-
-	MinInterval toml.Duration `toml:"min-interval"`
-
-	StreamMergeModeLevel int `toml:"stream-merge-mode-level"`
-}
-
-func defaultMerge() Merge {
-	return Merge{
-		MergeSelfOnly:          false,
-		MaxUnorderedFileSize:   defaultMaxUnorderedFileSize,
-		MaxUnorderedFileNumber: defaultMaxUnorderedFileNumber,
-		MinInterval:            toml.Duration(defaultMinInterval),
-		MaxMergeSelfLevel:      defaultMaxMergeSelfLevel,
-		StreamMergeModeLevel:   defaultStreamMergeModeLevel,
-	}
-}
 
 type HotMode struct {
 	Enabled              bool          `toml:"enabled"`
@@ -605,5 +668,24 @@ func ShelfHotModeEnabled() bool {
 }
 
 type ColumnStore struct {
-	MergesetEnabled bool `toml:"mergeset-enabled"`
+	CompactEnabled bool `toml:"compact-enabled"`
+}
+
+func NewDefaultColumnStore() ColumnStore {
+	return ColumnStore{
+		CompactEnabled: true,
+	}
+}
+
+func ChunkMetaLimited(size int, count int) bool {
+	maxCount := GetStoreConfig().MaxChunkMetaItemCount
+	maxSize := int(GetStoreConfig().MaxChunkMetaItemSize)
+	if maxCount <= 0 {
+		maxCount = DefaultMaxChunkMetaItemCount
+	}
+	if maxSize <= 0 {
+		maxSize = DefaultMaxChunkMetaItemSize
+	}
+
+	return count >= maxCount || size >= maxSize
 }

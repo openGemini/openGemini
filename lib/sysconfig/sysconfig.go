@@ -16,8 +16,12 @@ package sysconfig
 
 import (
 	"sync/atomic"
+	"time"
 
+	"github.com/influxdata/influxdb/toml"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
+	httpconfig "github.com/openGemini/openGemini/lib/util/lifted/influx/httpd/config"
 	"go.uber.org/zap"
 )
 
@@ -77,8 +81,8 @@ func GetQuerySchemaLimit() int {
 }
 
 func SetInterruptQuery(interrupt bool) {
-	logger.GetLogger().Info("SetInterruptQuery:", zap.Bool("InterruptQuery", interrupt))
 	InterruptQuery = interrupt
+	logger.GetLogger().Info("SetInterruptQuery:", zap.Bool("InterruptQuery", interrupt))
 }
 
 func GetInterruptQuery() bool {
@@ -86,13 +90,25 @@ func GetInterruptQuery() bool {
 }
 
 func SetUpperMemPct(memPct int64) {
-	logger.GetLogger().Info("SetUpperMemPct:", zap.Int64("UpperMemPct", memPct))
 	if memPct <= 0 || memPct > 100 {
 		return
 	}
 	atomic.StoreInt64(&UpperMemPct, memPct)
+	logger.GetLogger().Info("SetUpperMemPct:", zap.Int64("UpperMemPct", memPct))
 }
 
 func GetUpperMemPct() int64 {
 	return atomic.LoadInt64(&UpperMemPct)
+}
+
+func SetSlowQuery(upper time.Duration) {
+	logger.GetLogger().Info("begin set SlowQuery:", zap.Int64("origin", int64(httpconfig.GetHttpConfig().SlowQueryTime)))
+	httpconfig.GetHttpConfig().SlowQueryTime = toml.Duration(upper)
+	logger.GetLogger().Info("end set SlowQuery", zap.Int64("modify", int64(httpconfig.GetHttpConfig().SlowQueryTime)))
+}
+
+func SetQueryTimeOut(upper time.Duration) {
+	logger.GetLogger().Info("begin set QueryTimeOut:", zap.Any("origin", int64(config.GetCoordinatorConfig().QueryTimeout)))
+	config.GetCoordinatorConfig().QueryTimeout = toml.Duration(upper)
+	logger.GetLogger().Info("end set QueryTimeOut:", zap.Any("modify", int64(config.GetCoordinatorConfig().QueryTimeout)))
 }

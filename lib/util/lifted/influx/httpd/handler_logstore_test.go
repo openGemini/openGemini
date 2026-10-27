@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bytedance/sonic"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
@@ -308,7 +307,7 @@ func TestParseJsonArray(t *testing.T) {
 	jsonArray := `[{"field1":"aa","field2":"bb"},{"field1":"cc","field2":"dd"}]`
 	var jsonMapSlice []map[string]interface{}
 
-	err := sonic.UnmarshalString(jsonArray, &jsonMapSlice)
+	err := json2.UnmarshalFromString(jsonArray, &jsonMapSlice)
 	if err != nil {
 		t.Fatal("unmarshal string err")
 	}
@@ -318,7 +317,7 @@ func TestParseJsonArray(t *testing.T) {
 	jsonCompact := `{"int_v":15,"float_v":15.1,"bool_v":true,"string_v":"this is string","nest_json":{"v":"ii"}}`
 	var jsonMap map[string]interface{}
 	var r = strings.NewReader(jsonCompact)
-	var dec = sonic.ConfigDefault.NewDecoder(r)
+	var dec = json2.NewDecoder(r)
 
 	for {
 		err = dec.Decode(&jsonMap)
@@ -342,7 +341,7 @@ func TestInterface2str(t *testing.T) {
 	assert.Equal(t, string(b), s)
 
 	m := map[string]interface{}{}
-	b, err := sonic.Marshal(m)
+	b, err := json2.Marshal(m)
 	assert.Equal(t, nil, err)
 	assert.Equal(t, string(b), `{}`)
 

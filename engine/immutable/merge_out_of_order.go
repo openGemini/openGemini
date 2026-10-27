@@ -21,8 +21,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/influxdata/influxdb/logger"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"go.uber.org/zap"
 )
@@ -42,11 +42,11 @@ func (m *MmsTables) MergeOutOfOrder(shId uint64, full bool, force bool) error {
 		case <-m.stopCompMerge:
 			log.Warn("stopped", zap.Uint64("id", shId))
 			return nil
-		case compLimiter <- struct{}{}:
+		case CompLimiter <- struct{}{}:
 			m.wg.Add(1)
 			go func(mst string) {
 				defer func() {
-					compLimiter.Release()
+					CompLimiter.Release()
 					m.wg.Done()
 				}()
 				m.mergeOutOfOrder(mst, shId, full, force)
@@ -99,7 +99,7 @@ func (m *MmsTables) getEventContext() *EventContext {
 func (m *MmsTables) execMergeContext(ctx *MergeContext) {
 	stat := statistics.NewMergeStatistics()
 	stat.AddActive(1)
-	cLog, logEnd := logger.NewOperation(log, "MergeOutOfOrder", ctx.mst)
+	cLog, logEnd := logger.GetCompactLogger("MergeOutOfOrder", ctx.mst, zap.Uint64("shId", ctx.shId))
 	tool := newMergeTool(m, m.getEventContext(), cLog)
 
 	defer func() {
@@ -180,7 +180,7 @@ func (m *MmsTables) getFilesByPath(mst string, path []string, order bool) (*TSSP
 }
 
 func (m *MmsTables) getMstToMerge(limit int, full bool, force bool) []string {
-	conf := &config.GetStoreConfig().Merge
+	conf := config.GetStoreConfig().Merge
 	ret := make([]string, 0, limit)
 	m.mu.RLock()
 	defer m.mu.RUnlock()

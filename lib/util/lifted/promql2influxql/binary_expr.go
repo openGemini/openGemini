@@ -35,10 +35,11 @@ const (
 // NewBinaryExpr creates a pointer to influxql.BinaryExpr
 func (t *Transpiler) NewBinaryExpr(op influxql.Token, lhs, rhs influxql.Expr, returnBool bool) influxql.Expr {
 	expr := &influxql.BinaryExpr{
-		Op:         op,
-		LHS:        lhs,
-		RHS:        rhs,
-		ReturnBool: returnBool,
+		Op:          op,
+		LHS:         lhs,
+		RHS:         rhs,
+		ReturnBool:  returnBool,
+		IsPromQuery: true,
 	}
 	if t.parenExprCount > 0 {
 		defer func() {
@@ -149,9 +150,9 @@ func (t *Transpiler) transpileCompBinOps(b *parser.BinaryExpr, op influxql.Token
 				fieldExpr := &influxql.VarRef{Val: field.Name()}
 				selectStatement.Fields = append(selectStatement.Fields, &influxql.Field{Expr: fieldExpr, Alias: DefaultFieldKey})
 				if !swap {
-					selectStatement.Condition = &influxql.BinaryExpr{Op: op, LHS: fieldExpr, RHS: scalar}
+					selectStatement.Condition = &influxql.BinaryExpr{Op: op, LHS: fieldExpr, RHS: scalar, IsPromQuery: true}
 				} else {
-					selectStatement.Condition = &influxql.BinaryExpr{Op: op, LHS: scalar, RHS: fieldExpr}
+					selectStatement.Condition = &influxql.BinaryExpr{Op: op, LHS: scalar, RHS: fieldExpr, IsPromQuery: true}
 				}
 				// Save the original time range
 				originalMinT, originalMaxT := t.minT, t.maxT
@@ -176,9 +177,9 @@ func (t *Transpiler) transpileCompBinOps(b *parser.BinaryExpr, op influxql.Token
 				field, idx := getSelectFieldIdx(statement)
 				var selectField influxql.Expr
 				if !swap {
-					selectField = &influxql.BinaryExpr{Op: op, LHS: field.Expr, RHS: scalar, ReturnBool: b.ReturnBool}
+					selectField = &influxql.BinaryExpr{Op: op, LHS: field.Expr, RHS: scalar, ReturnBool: b.ReturnBool, IsPromQuery: true}
 				} else {
-					selectField = &influxql.BinaryExpr{Op: op, LHS: scalar, RHS: field.Expr, ReturnBool: b.ReturnBool}
+					selectField = &influxql.BinaryExpr{Op: op, LHS: scalar, RHS: field.Expr, ReturnBool: b.ReturnBool, IsPromQuery: true}
 				}
 				statement.Fields[idx] = &influxql.Field{
 					Expr:  selectField,
@@ -188,7 +189,7 @@ func (t *Transpiler) transpileCompBinOps(b *parser.BinaryExpr, op influxql.Token
 			}
 			// for the comparison operation of the source-table query, add the operation to the condition.
 			fieldVar := &influxql.VarRef{Val: DefaultFieldKey}
-			comBin := &influxql.BinaryExpr{Op: op, ReturnBool: false}
+			comBin := &influxql.BinaryExpr{Op: op, ReturnBool: false, IsPromQuery: true}
 			if !swap {
 				comBin.LHS, comBin.RHS = fieldVar, scalar
 			} else {

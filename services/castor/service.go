@@ -23,7 +23,9 @@ import (
 	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/opentelemetry"
 	"github.com/openGemini/openGemini/services"
+	"go.opentelemetry.io/otel/sdk/trace"
 	"go.uber.org/zap"
 )
 
@@ -45,6 +47,7 @@ type Service struct {
 	dataFailureChan chan *data
 	resultChan      chan arrow.Record
 	responseChanMap sync.Map
+	traceProvider   *trace.TracerProvider
 
 	alive bool
 }
@@ -101,6 +104,13 @@ func (s *Service) Open() error {
 	go s.recordFailure()
 	s.alive = true
 	service = s
+	if s.Config.TracingEnabled {
+		if tp, err := opentelemetry.InitTrace(s.Config.TracingEndpoint, s.Config.TracingHttpsEnabled, s.Config.TracingStorePath, s.Config.TracingRatio, "ts-sql"); err != nil {
+			return err
+		} else {
+			s.traceProvider = tp
+		}
+	}
 	return nil
 }
 
@@ -319,6 +329,11 @@ func (s *Service) Close() error {
 	close(s.dataFailureChan)
 
 	s.responseChanMap = sync.Map{}
+	if s.traceProvider != nil {
+		if err := s.traceProvider.Shutdown(context.Background()); err != nil {
+			s.Logger.Error("failed to shutdown trace provider", zap.Error(err))
+		}
+	}
 	if err := s.Base.Close(); err != nil {
 		return err
 	}

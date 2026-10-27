@@ -13,8 +13,8 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/bytedance/sonic"
 	"github.com/cespare/xxhash/v2"
+	"github.com/openGemini/openGemini/lib/encoding"
 	strings2 "github.com/openGemini/openGemini/lib/strings"
 )
 
@@ -103,7 +103,7 @@ func (ls Labels) MarshalJSON() ([]byte, error) {
 func (ls *Labels) UnmarshalJSON(b []byte) error {
 	var m map[string]string
 
-	if err := sonic.Unmarshal(b, &m); err != nil {
+	if err := encoding.JSONConfig.Unmarshal(b, &m); err != nil {
 		return err
 	}
 

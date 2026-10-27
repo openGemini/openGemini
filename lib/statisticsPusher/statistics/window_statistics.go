@@ -68,6 +68,26 @@ func (s *StreamWindowStatItem) StatWindowEndTime(t int64) {
 	atomic.StoreInt64(&s.WindowEndTime, t)
 }
 
+func (s *StreamWindowStatItem) AddReplayIn(i int64) {
+	atomic.AddInt64(&s.ReplayIn, i)
+}
+
+func (s *StreamWindowStatItem) AddReplayProcess(i int64) {
+	atomic.AddInt64(&s.ReplayProcess, i)
+}
+
+func (s *StreamWindowStatItem) AddReplaySkip(i int64) {
+	atomic.AddInt64(&s.ReplaySkip, i)
+}
+
+func (s *StreamWindowStatItem) AddReplayCacheIn(i int64) {
+	atomic.AddInt64(&s.ReplayCacheIn, i)
+}
+
+func (s *StreamWindowStatItem) AddConsumeCacheIn(i int64) {
+	atomic.AddInt64(&s.ConsumeCacheIn, i)
+}
+
 func (s *StreamWindowStatItem) Reset() {
 	atomic.StoreInt64(&s.WindowIn, 0)
 	atomic.StoreInt64(&s.WindowProcess, 0)
@@ -81,6 +101,11 @@ func (s *StreamWindowStatItem) Reset() {
 	atomic.StoreInt64(&s.WindowStartTime, 0)
 	atomic.StoreInt64(&s.WindowEndTime, 0)
 	atomic.StoreInt64(&s.WindowGroupKeyCount, 0)
+	atomic.StoreInt64(&s.ReplayIn, 0)
+	atomic.StoreInt64(&s.ReplayProcess, 0)
+	atomic.StoreInt64(&s.ReplaySkip, 0)
+	atomic.StoreInt64(&s.ReplayCacheIn, 0)
+	atomic.StoreInt64(&s.ConsumeCacheIn, 0)
 }
 
 func NewStreamWindowStatItem(streamID uint64) *StreamWindowStatItem {

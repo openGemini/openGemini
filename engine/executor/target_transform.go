@@ -101,7 +101,7 @@ func NewTargetTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybri
 	trans.writeWorker = worker
 	trans.writeChan = make(chan Chunk, worker)
 	trans.stopChan = make(chan struct{})
-	trans.chunkPool = NewBlockChunkPool(2*worker, NewChunkBuilder(inRowDataType))
+	trans.chunkPool = NewBlockChunkPool(2*worker+1, NewChunkBuilder(inRowDataType))
 
 	return trans, nil
 }

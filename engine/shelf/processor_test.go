@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
@@ -112,6 +113,7 @@ func TestWalReader(t *testing.T) {
 	}
 
 	reader := shelf.NewWalReader(shardID, "foo_0", tr)
+	defer reader.UnRef()
 	reader.Exclude(&MockTSSP{sequence: 1})
 
 	rec := reader.Values("foo_0", shardID, *tr, schema, true)
@@ -140,7 +142,6 @@ func TestBlobGroup(t *testing.T) {
 
 	group, _ = shelf.NewBlobGroup(1)
 	assertCodec(t, group, true, false)
-
 }
 
 func newNilRunner() *shelf.Runner {
@@ -156,7 +157,7 @@ func newRunner(shardID uint64, dir string) *shelf.Runner {
 		OwnerDb: "db0",
 		OwnerPt: 1,
 	}
-	shardInfo := shelf.NewShardInfo(ident, dir, dir, &lock, &MockTbStore{}, &EmptyIndex{sidCache: 10, sidCreate: 100}, nil)
+	shardInfo := shelf.NewShardInfo(ident, dir, dir, &lock, &MockTbStore{dir: dir}, &EmptyIndex{sidCache: 10, sidCreate: 100}, nil)
 
 	runner := shelf.NewRunner()
 	runner.RegisterShard(shardID, shardInfo)
@@ -172,7 +173,7 @@ func newShard(shardID uint64, dir string) (*shelf.Shard, *EmptyIndex, *MockTbSto
 		OwnerDb: "db0",
 		OwnerPt: 1,
 	}
-	store := &MockTbStore{}
+	store := &MockTbStore{dir: dir}
 	idx := &EmptyIndex{sidCache: 10, sidCreate: 100}
 	shardInfo := shelf.NewShardInfo(ident, dir, dir, &lock, store, idx, nil)
 
@@ -278,9 +279,14 @@ func (i *EmptyIndex) CreateIndexIfNotExistsBySeries([]byte, []byte, influx.Point
 	return i.sidCreate, nil
 }
 
+func (i *EmptyIndex) GetSeries(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
+	return nil
+}
+
 type MockTbStore struct {
 	immutable.TablesStore
 
+	dir   string
 	files []immutable.TSSPFile
 	seq   uint64
 }
@@ -312,6 +318,21 @@ func (s *MockTbStore) GetShardID() uint64 {
 	return 10
 }
 
+func (s *MockTbStore) NewStreamWriteFile(mst string) *immutable.StreamWriteFile {
+	sw := immutable.NewStreamWriteFile(mst, immutable.NewTsStoreConfig(), s.dir, make(chan struct{}), &s.dir)
+
+	return sw
+}
+func (s *MockTbStore) Close() error {
+	for _, file := range s.files {
+		err := file.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func itrTSSPFile(f immutable.TSSPFile, hook func(sid uint64, rec *record.Record)) {
 	fi := immutable.NewFileIterator(f, immutable.CLog)
 	itr := immutable.NewChunkIterator(fi)
@@ -341,6 +362,25 @@ func TestIsUniqueSorted(t *testing.T) {
 	list = append(list, 3, 2, 1)
 	sorted = shelf.IsUniqueSorted(list)
 	require.Equal(t, false, sorted)
+}
+
+func TestWriteLimited(t *testing.T) {
+	var assert = func(want bool) {
+		for range 100 {
+			shelf.IncrInuseWalCount()
+		}
+		shelf.UpdateWriteLimited()
+		require.Equal(t, want, shelf.IsWriteLimited())
+	}
+
+	conf := config.GetShelfMode()
+	conf.MaxNumOfWal = -1
+	initConfig(8)
+	assert(false)
+
+	conf.MaxNumOfWal = 10
+	initConfig(8)
+	assert(true)
 }
 
 type MockTSSP struct {

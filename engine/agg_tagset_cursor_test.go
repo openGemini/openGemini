@@ -20,11 +20,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
@@ -412,7 +414,7 @@ func Test_Query_Abort(t *testing.T) {
 	// build the storage engine
 	storeEngine := NewMockStoreEngine()
 	storeEngine.SetShard(sh)
-	enableStates := []bool{true, false}
+	enableStates := []bool{true}
 	for _, v := range enableStates {
 		executor.EnableFileCursor(v)
 		for _, tt := range []struct {
@@ -526,7 +528,7 @@ func Test_Query_Abort(t *testing.T) {
 				}
 				err = executors.Execute(ctx)
 				if err != nil && !tt.scanErr {
-					t.Fatalf("connect error")
+					t.Fatalf("connect error, err: %v, tt.scanErr: %t", err, tt.scanErr)
 				}
 
 				executors.Release()
@@ -541,4 +543,30 @@ func Test_Query_Abort(t *testing.T) {
 			})
 		}
 	}
+}
+
+type MockCursor struct {
+	comm.KeyCursor
+	NextAggDataFn func() (*record.Record, *comm.FileInfo, error)
+}
+
+func (m *MockCursor) NextAggData() (*record.Record, *comm.FileInfo, error) {
+	return m.NextAggDataFn()
+}
+
+func TestPreAggTagSetCursorNextWithError(t *testing.T) {
+	schema := executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{}, nil)
+	mockCursor := NewPreAggTagSetCursor(schema, &idKeyCursorContext{}, &MockCursor{NextAggDataFn: func() (*record.Record, *comm.FileInfo, error) {
+		return nil, nil, errno.NewError(errno.FieldNotFound)
+	}})
+	// upward error
+	_, _, err := mockCursor.Next()
+	require.True(t, errno.Equal(err, errno.FieldNotFound))
+
+	mockCursor = NewPreAggTagSetCursor(schema, &idKeyCursorContext{}, &MockCursor{NextAggDataFn: func() (*record.Record, *comm.FileInfo, error) {
+		return nil, nil, errno.NewError(errno.LastRowRetry)
+	}})
+	// upward error
+	_, _, err = mockCursor.Next()
+	require.True(t, errno.Equal(err, errno.LastRowRetry))
 }

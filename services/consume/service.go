@@ -25,10 +25,15 @@ import (
 	"github.com/openGemini/openGemini/services/consume/kafka/handle"
 )
 
+const (
+	HistoryMode uint64 = iota
+	RealTimeMode
+)
+
 type Topic struct {
-	Mode  int
-	Uuid  string
-	Query string
+	Mode  uint64 `json:"mode"`
+	Uuid  string `json:"uuid"`
+	Query string `json:"query"`
 }
 
 type Service struct {

@@ -33,7 +33,7 @@ import (
 )
 
 func Test_Time_ConsumeData(t *testing.T) {
-	l := &MockLogger{t}
+	l := &MockLogger{}
 	m := &MockStorage{}
 	metaClient := &MockMetaclient{}
 
@@ -47,7 +47,7 @@ func Test_Time_ConsumeData(t *testing.T) {
 		Database:        "test",
 		RetentionPolicy: "auto",
 	}
-	interval := 2 * time.Second
+	interval := 5 * time.Second
 	start := time.Now().Truncate(interval).Add(-interval)
 	fieldCalls := []*streamLib.FieldCall{}
 	calls := []string{"sum", "min", "max", "count"}
@@ -88,8 +88,8 @@ func Test_Time_ConsumeData(t *testing.T) {
 	if task.stats.WindowProcess != int64(allRows) {
 		t.Fatal("unexpect process", task.stats.WindowProcess)
 	}
-	time.Sleep(interval)
-	time.Sleep(interval)
+	time.Sleep(2 * interval)
+	time.Sleep(2 * time.Second)
 	if task.stats.WindowIn != 0 {
 		t.Fatal("unexpect in", task.stats.WindowIn)
 	}
@@ -113,7 +113,7 @@ type invalidChanData struct {
 }
 
 func Test_Time_ConsumeRecDataNil(t *testing.T) {
-	l := &MockLogger{t}
+	l := &MockLogger{}
 	m := &MockStorage{}
 	metaClient := &MockMetaclient{}
 
@@ -127,7 +127,7 @@ func Test_Time_ConsumeRecDataNil(t *testing.T) {
 		Database:        "test",
 		RetentionPolicy: "test",
 	}
-	interval := 5 * time.Second
+	interval := 7 * time.Second
 	start := time.Now().Truncate(interval).Add(-interval)
 	fieldCalls := []*streamLib.FieldCall{}
 	calls := []string{"sum", "min", "max", "count"}
@@ -222,7 +222,7 @@ func Test_Time_ConsumeRecDataNil(t *testing.T) {
 }
 
 func Test_Time_ConsumeRecData(t *testing.T) {
-	l := &MockLogger{t}
+	l := &MockLogger{}
 	m := &MockStorage{}
 	metaClient := &MockMetaclient{}
 
@@ -236,7 +236,7 @@ func Test_Time_ConsumeRecData(t *testing.T) {
 		Database:        "test",
 		RetentionPolicy: "test",
 	}
-	interval := 2 * time.Second
+	interval := 5 * time.Second
 	start := time.Now().Truncate(interval).Add(-interval)
 	fieldCalls := []*streamLib.FieldCall{}
 	calls := []string{"sum", "min", "max", "count"}
@@ -340,28 +340,6 @@ func TestTimeTask_run_consumeDataFilterOnly(t *testing.T) {
 	err := task.run()
 	require.NoError(t, err)
 
-}
-
-func BenchmarkXX(b *testing.B) {
-	a := make([]bool, 10)
-	a[5] = true
-	for i := 0; i < b.N; i++ {
-		for j := 0; j < 100000000; j++ {
-			a[5] = true
-		}
-	}
-}
-
-func BenchmarkXX1(b *testing.B) {
-	a := make([]bool, 10)
-	a[5] = true
-	for i := 0; i < b.N; i++ {
-		for j := 0; j < 100000000; j++ {
-			if !a[5] {
-				a[5] = true
-			}
-		}
-	}
 }
 
 func TestTimeTask_filterRowsByExprTestTimeTask_filterRowsByExpr(t *testing.T) {
@@ -845,4 +823,32 @@ func TestTimeTask_FilterRowsByCond_FilterAgg(t *testing.T) {
 	require.Equal(t, true, res)
 	require.Equal(t, 0, len(streamRows))
 	require.Equal(t, int64(1), task.TaskDataPool.Len())
+}
+
+func TestTimeTask_NoWindow(t *testing.T) {
+	t.Parallel()
+	metaClient := &MockMetaclient{}
+
+	src := &meta.StreamMeasurementInfo{
+		Name:            "flow",
+		Database:        "test",
+		RetentionPolicy: "auto",
+	}
+	des := &meta.StreamMeasurementInfo{
+		Name:            "flow1",
+		Database:        "test",
+		RetentionPolicy: "auto",
+	}
+	task := &TimeTask{
+		BaseTask: &BaseTask{
+			src: src,
+			des: des,
+			cli: metaClient,
+		},
+	}
+	task.run()
+	time.Sleep(12 * time.Second)
+	if task.curFlushTime == 0 {
+		t.Fatal("curFlushTime should be updated")
+	}
 }

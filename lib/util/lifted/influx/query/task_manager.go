@@ -15,11 +15,13 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/models"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/failpoint"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
-	"github.com/pingcap/failpoint"
+	"github.com/openGemini/openGemini/lib/util/lifted/smart_query"
 	"go.uber.org/zap"
 )
 
@@ -104,6 +106,11 @@ type TaskManager struct {
 
 	mu       sync.RWMutex
 	shutdown bool
+}
+
+func (t *TaskManager) ExecuteSmartStatement(stmt *smart_query.SmartSelectStatement, results chan *Result) error {
+	//TODO implement me
+	panic("implement me")
 }
 
 // NewTaskManager creates a new TaskManager.
@@ -341,8 +348,8 @@ func (t *TaskManager) Queries() []QueryInfo {
 
 func (t *TaskManager) waitForQuery(qid uint64, interrupt <-chan struct{}, closing <-chan struct{}, monitorCh <-chan error) {
 	var timerCh <-chan time.Time
-	if t.QueryTimeout != 0 {
-		timer := time.NewTimer(t.QueryTimeout)
+	if config.GetCoordinatorConfig().QueryTimeout != 0 {
+		timer := time.NewTimer(time.Duration(config.GetCoordinatorConfig().QueryTimeout))
 		timerCh = timer.C
 		defer timer.Stop()
 	}
@@ -392,14 +399,18 @@ func (t *TaskManager) InitQueryIDByOffset(offset uint64) {
 // AssignQueryID assign a query id for a sql
 func (t *TaskManager) AssignQueryID() uint64 {
 	// set-query-id: The qid can be controlled for easy testing.
-	failpoint.Inject("set-query-id", func(val failpoint.Value) {
-		if n, ok := val.(int); ok {
+	failpoint.Call(failpoint.SetQueryId, func(val *failpoint.Value) {
+		if n := val.Int(); n > 0 {
 			n = n % queryIdSpan
 			n += int(t.queryIDOffset)
-			atomic.StoreUint64(&t.nextID, uint64(n))
-			failpoint.Return(uint64(n))
+			atomic.StoreUint64(&t.nextID, max(1, uint64(n))-1)
 		}
 	})
+
+	return t.assignQueryID()
+}
+
+func (t *TaskManager) assignQueryID() uint64 {
 	atomic.CompareAndSwapUint64(&t.nextID, t.queryIDUpperLimit, t.queryIDOffset)
 	return atomic.AddUint64(&t.nextID, 1)
 }

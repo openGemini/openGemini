@@ -16,6 +16,10 @@ package colstore
 
 import (
 	"testing"
+
+	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPkMetaBlockMarshal(t *testing.T) {
@@ -29,4 +33,21 @@ func TestPkMetaBlockMarshal(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected unmarshal success: %+v", err)
 	}
+}
+
+func TestBuildColumnMap(t *testing.T) {
+	rec := &record.Record{}
+	rec.Schema = append(rec.Schema, record.Field{
+		Type: 1,
+		Name: "foo",
+	})
+
+	pkInfo := NewPKInfo(rec, nil, meta.PrimaryKeyTypeCluster, -1)
+	require.Equal(t, 1, len(pkInfo.GetColumnMap()))
+
+	pkInfo.SetRec(nil)
+	require.Equal(t, 0, len(pkInfo.GetColumnMap()))
+
+	pkInfo.SetRec(rec)
+	require.Equal(t, 1, len(pkInfo.GetColumnMap()))
 }

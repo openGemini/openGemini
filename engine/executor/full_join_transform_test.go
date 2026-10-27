@@ -402,3 +402,37 @@ func TestFullJoinTransformDemo4(t *testing.T) {
 	_, err := executor.NewFullJoinTransform(inRowDataTypes, outputRowDataType, joinCase, schema)
 	assert.NotEqual(t, err, nil)
 }
+
+func TestFullJoinTransformErr(t *testing.T) {
+	chunk1 := BuildInChunk1("m1")
+	chunk2 := BuildInChunk4("m2")
+	ctx := context.Background()
+	outputRowDataType := buildOutputRowDataType()
+	f1 := func() {}
+	source1 := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1})
+	source1.CallFn = f1
+	source2 := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk2})
+	source2.CallFn = f1
+	var inRowDataTypes []hybridqp.RowDataType
+	inRowDataTypes = append(inRowDataTypes, source1.Output.RowDataType)
+	inRowDataTypes = append(inRowDataTypes, source2.Output.RowDataType)
+	joinCase := buildJoinCase()
+	schema := buildFullJoinSchema()
+	trans, _ := executor.NewFullJoinTransform(inRowDataTypes, outputRowDataType, joinCase, schema)
+	sink := NewSinkFromFunction(outputRowDataType, nil)
+	executor.Connect(source1.Output, trans.GetInputs()[0])
+	executor.Connect(source2.Output, trans.GetInputs()[1])
+	executor.Connect(trans.GetOutputs()[0], sink.Input)
+	var processors executor.Processors
+	processors = append(processors, source1)
+	processors = append(processors, source2)
+	processors = append(processors, trans)
+	processors = append(processors, sink)
+	executors := executor.NewPipelineExecutor(processors)
+	sink.Function = func(chunk executor.Chunk) error {
+		executors.Crash()
+		return nil
+	}
+	executors.Execute(ctx)
+	executors.Release()
+}

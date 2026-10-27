@@ -26,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logstore"
+	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/stretchr/testify/assert"
@@ -336,5 +337,21 @@ func TestReadFilter(t *testing.T) {
 	_, err = NewFilterReader(nil, falseExpr, splitMap, false, true, 4, tmpDir+"test", tmpDir+"test", logstore.FilterLogName, "test")
 	if err == nil {
 		t.Error("get wrong reader")
+	}
+}
+
+func TestGetRowCount(t *testing.T) {
+	readers := []rpn.SKBaseReader{
+		&VerticalFilterReader{},
+		&LineFilterReader{},
+		&FilterReader{},
+		&MultiFieldFilterReader{},
+		&MultiFieldVerticalFilterReader{},
+		&MultiFieldLineFilterReader{},
+	}
+	for _, reader := range readers {
+		count, err := reader.GetRowCount(0, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(0), count)
 	}
 }

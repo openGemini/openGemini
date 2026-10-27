@@ -7,9 +7,9 @@ import (
 	"os"
 	"sync"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/memory"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/logger"
 )
 
 const dontNeedBlockSize = 16 * 1024 * 1024
@@ -94,10 +94,10 @@ func Open(path string, nocache bool) (*Reader, error) {
 // MustClose closes the underlying file passed to Open.
 func (r *Reader) MustClose() {
 	if err := r.st.close(); err != nil {
-		logger.Panicf("FATAL: cannot close streamTracker for file %q: %s", r.f.Name(), err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot close streamTracker for file %q: %s", r.f.Name(), err))
 	}
 	if err := r.f.Close(); err != nil {
-		logger.Panicf("FATAL: cannot close file %q: %s", r.f.Name(), err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot close file %q: %s", r.f.Name(), err))
 	}
 	r.f = nil
 
@@ -178,7 +178,15 @@ func OpenWriterAt(path string, lockPath *string, offset int64, nocache bool) (*W
 // If nocache is set, the writer doesn't pollute OS page cache.
 func Create(path string, lockPath *string, nocache bool) (*Writer, error) {
 	lock := fileops.FileLockOption(*lockPath)
-	f, err := fileops.CreateV2(path, lock)
+	// Compatible with streamfs
+	var f fileops.File
+	var err error
+	switch fileops.GetFsType(path) {
+	case fileops.Local:
+		f, err = fileops.Create(path, lock)
+	default:
+		f, err = fileops.CreateV2(path, lock)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("cannot create file %q: %w", path, err)
 	}
@@ -200,19 +208,19 @@ func newWriter(f fileops.File, nocache bool) *Writer {
 // MustClose syncs the underlying file to storage and then closes it.
 func (w *Writer) MustClose() {
 	if err := w.bw.Flush(); err != nil {
-		logger.Panicf("FATAL: cannot flush buffered data to file %q: %s", w.f.Name(), err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot flush buffered data to file %q: %s", w.f.Name(), err))
 	}
 	putBufioWriter(w.bw)
 	w.bw = nil
 
 	if err := w.f.Sync(); err != nil {
-		logger.Panicf("FATAL: cannot sync file %q: %d", w.f.Name(), err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot sync file %q: %d", w.f.Name(), err))
 	}
 	if err := w.st.close(); err != nil {
-		logger.Panicf("FATAL: cannot close streamTracker for file %q: %s", w.f.Name(), err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot close streamTracker for file %q: %s", w.f.Name(), err))
 	}
 	if err := w.f.Close(); err != nil {
-		logger.Panicf("FATAL: cannot close file %q: %s", w.f.Name(), err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot close file %q: %s", w.f.Name(), err))
 	}
 	w.f = nil
 }
@@ -234,11 +242,11 @@ func (w *Writer) Write(p []byte) (int, error) {
 // if isSync is true, then the flushed data is fsynced to the underlying storage.
 func (w *Writer) MustFlush(isSync bool) {
 	if err := w.bw.Flush(); err != nil {
-		logger.Panicf("FATAL: cannot flush buffered data to file %q: %s", w.f.Name(), err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot flush buffered data to file %q: %s", w.f.Name(), err))
 	}
 	if isSync {
 		if err := w.f.Sync(); err != nil {
-			logger.Panicf("FATAL: cannot fsync data to the underlying storage for file %q: %s", w.f.Name(), err)
+			logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot fsync data to the underlying storage for file %q: %s", w.f.Name(), err))
 		}
 	}
 }

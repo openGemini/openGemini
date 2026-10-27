@@ -62,6 +62,25 @@ func TestMarshalAndUnmarshalInvert(t *testing.T) {
 	}
 }
 
+func TestUnMarshalInvert(t *testing.T) {
+	dst := []byte{}
+	// prefixMeta + meta
+	dst = marshalMeta(dst, len(dst), []uint16{11}, 1)
+
+	newInvert := NewInvertIndex()
+	unmarshal(dst, &newInvert, 0)
+	if len(newInvert.invertStates) > 0 {
+		t.Fatalf("unexpected")
+	}
+
+	// corrupted meta
+	dst[0] = 0
+	sidLens, idsLen := unmarshalMeta(dst)
+	if sidLens != nil || idsLen != 0 {
+		t.Fatalf("unexpected")
+	}
+}
+
 func genDocIdxItemsForTest() (*InvertIndex, *InvertIndex, *InvertIndex, *InvertIndex) {
 	invert0 := &InvertIndex{
 		invertStates: map[uint64]*InvertStates{

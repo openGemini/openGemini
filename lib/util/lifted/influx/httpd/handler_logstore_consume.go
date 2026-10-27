@@ -18,6 +18,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,7 +29,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bytedance/sonic"
 	"github.com/gorilla/mux"
 	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/executor"
@@ -38,7 +38,6 @@ import (
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/obs"
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/coordinator"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd/consume"
@@ -219,7 +218,7 @@ func (h *Handler) serveConsumeLogs(w http.ResponseWriter, r *http.Request, user 
 		return
 	}
 	if !isNeedConsume {
-		taskID = rand.Intn(len(consumeInfo.GetFromCursor().Tasks))
+		taskID = rand.IntN(len(consumeInfo.GetFromCursor().Tasks))
 	}
 
 	isLastShard := false
@@ -323,7 +322,7 @@ func (h *Handler) serveConsumeLogs(w http.ResponseWriter, r *http.Request, user 
 		EndCursor:  base64.StdEncoding.EncodeToString(endCursorEncode),
 	}
 
-	results, err := sonic.Marshal(&resp)
+	results, err := json2.Marshal(&resp)
 	if err != nil {
 		h.Logger.Error("consume logs get results request error! ", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -409,7 +408,7 @@ func (h *Handler) getEmptyCursor(consumeInfo *consume.ConsumeInfo, w http.Respon
 		EndCursor:  base64.StdEncoding.EncodeToString(endCursorEncode),
 	}
 
-	results, err := sonic.Marshal(&resp)
+	results, err := json2.Marshal(&resp)
 	if err != nil {
 		h.Logger.Error("consume logs get results request error! ", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -451,7 +450,7 @@ func (h *Handler) getErrConsumeResponse(consumeInfo *consume.ConsumeInfo, t time
 				TookMs:     time.Since(t).Milliseconds(),
 			}
 		}
-		results, err := sonic.Marshal(&resp)
+		results, err := json2.Marshal(&resp)
 		if err != nil {
 			h.Logger.Error("consume logs get results request error! ", zap.Error(err))
 			h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)

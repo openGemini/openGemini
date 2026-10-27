@@ -31,6 +31,7 @@ func TestConsumeRecord_Marshal(t *testing.T) {
 	}
 	var tagsMarshal []byte
 	for i := range tags {
+		tagsMarshal = codec.AppendUint32(tagsMarshal, uint32(tags[i].Size()))
 		tagsMarshal = tags[i].Marshal(tagsMarshal)
 	}
 
@@ -80,6 +81,45 @@ func TestConsumeRecord_Marshal(t *testing.T) {
 			var buf []byte
 			result := tt.record.Marshal(buf)
 			require.Equal(t, tt.wantBuffer, result)
+		})
+	}
+}
+
+func TestConsumeRecord_Unmarshal(t *testing.T) {
+	tags := []*record.Tag{
+		{Key: "tag1", Value: "val1"},
+		{Key: "tag2", Value: "val2"},
+	}
+	recSchema := record.Schemas{
+		record.Field{Type: 0, Name: "schema1"},
+	}
+	rec := record.NewRecord(recSchema, false)
+	tests := []struct {
+		name   string
+		record *record.ConsumeRecord
+	}{
+		{
+			name: "no tags, non-nil record",
+			record: &record.ConsumeRecord{
+				Tags: []*record.Tag{},
+				Rec:  rec,
+			},
+		},
+		{
+			name: "with tags and record",
+			record: &record.ConsumeRecord{
+				Tags: tags,
+				Rec:  rec,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf []byte
+			result := tt.record.Marshal(buf)
+			output := &record.ConsumeRecord{Rec: &record.Record{}}
+			output.Unmarshal(result)
+			require.Equal(t, tt.record, output)
 		})
 	}
 }

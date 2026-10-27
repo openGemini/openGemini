@@ -61,6 +61,11 @@ func (m *NodeManager) SetJob(job *statistics.SpdyJob) {
 }
 
 func (m *NodeManager) Add(nodeID uint64, address string) {
+	node := m.Get(nodeID)
+	if node != nil && node.address == address {
+		return
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

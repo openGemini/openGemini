@@ -394,20 +394,25 @@ func (trans *FullJoinTransform) fullJoinHelper(ctx context.Context, errs *errno.
 	<-trans.inputChunks[0]
 	<-trans.inputChunks[1]
 	for {
-		if trans.chunkClose(0) {
-			trans.fullJoinLastChunkHelper(ctx, 1)
+		select {
+		case <-ctx.Done():
 			return
+		default:
+			if trans.chunkClose(0) {
+				trans.fullJoinLastChunkHelper(ctx, 1)
+				return
+			}
+			if trans.chunkClose(1) {
+				trans.fullJoinLastChunkHelper(ctx, 0)
+				return
+			}
+			if trans.chunkDown(0) || trans.chunkDown(1) {
+				continue
+			}
+			trans.fullJoinAlgorithm()
+			trans.SendChunk()
+			trans.nextChunkHelpr()
 		}
-		if trans.chunkClose(1) {
-			trans.fullJoinLastChunkHelper(ctx, 0)
-			return
-		}
-		if trans.chunkDown(0) || trans.chunkDown(1) {
-			continue
-		}
-		trans.fullJoinAlgorithm()
-		trans.SendChunk()
-		trans.nextChunkHelpr()
 	}
 }
 

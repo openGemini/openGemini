@@ -19,6 +19,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index"
+	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -34,31 +35,49 @@ type ColumnStoreWriteResult struct {
 
 type ColumnStoreTSSPWriter struct {
 	sw  *StreamWriteFile
+	mst *colstore.Measurement
 	pkf colstore.PrimaryKeyFetcher
 
 	timeCol record.ColVal
-	dataCol record.ColVal
 	oks     colstore.OffsetKeySorter
+
+	iw *ColStoreIndexWriter
 }
 
-func NewColumnStoreTSSPWriter(sw *StreamWriteFile) *ColumnStoreTSSPWriter {
+func NewColumnStoreTSSPWriter(sw *StreamWriteFile, mst *colstore.Measurement) *ColumnStoreTSSPWriter {
 	return &ColumnStoreTSSPWriter{
-		sw: sw,
+		sw:  sw,
+		mst: mst,
 	}
 }
 
-func (b *ColumnStoreTSSPWriter) WriteRecord(rec *record.Record, pk, sk record.Schemas, ir *influxql.IndexRelation) (*ColumnStoreWriteResult, error) {
+func (b *ColumnStoreTSSPWriter) WriteRecord(rec *record.Record) (*ColumnStoreWriteResult, error) {
 	record.CheckRecord(rec)
+
+	ir := b.mst.IndexRelation()
+	pkMap := b.mst.BuildPKMap()
+
+	b.iw = NewColStoreIndexWriter(b.sw.dir, b.sw.name, b.sw.fileName, b.sw.lock, ir, rec.Schema, pkMap)
+	defer b.iw.MustClose()
 
 	var ret = &ColumnStoreWriteResult{}
 	var oks *colstore.OffsetKeySorter
 
-	// 1. group by primary key
-	// 2. sort groups by primary key
-	// 3. sort within groups by sort key or time
-	ret.PKRecord, ret.Fragments, oks = b.sortRecord(rec, pk, sk)
+	if b.mst.IsClusterPKIndex() {
+		// 1. group by primary key
+		// 2. sort groups by primary key
+		// 3. sort within groups by sort key or time
+		ret.PKRecord, ret.Fragments, oks = b.sortRecordCluster(rec)
+	} else {
+		ret.PKRecord, ret.Fragments, oks = b.sortRecordSparse(rec)
+	}
 
 	err := b.writeRecord(rec, oks)
+	if err != nil {
+		return nil, err
+	}
+
+	err = b.iw.Flush()
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +87,7 @@ func (b *ColumnStoreTSSPWriter) WriteRecord(rec *record.Record, pk, sk record.Sc
 		return nil, err
 	}
 
+	file.SetSkipIndexInfo(b.iw.BuildSkipIndexInfo())
 	ret.File = file
 
 	err = b.writePrimaryIndex(ret)
@@ -75,19 +95,22 @@ func (b *ColumnStoreTSSPWriter) WriteRecord(rec *record.Record, pk, sk record.Sc
 		return nil, err
 	}
 
-	err = b.writeSkipIndex(rec, oks, file, ir)
 	return ret, err
 }
 
-func (b *ColumnStoreTSSPWriter) sortRecord(rec *record.Record, pk, sk record.Schemas) (*record.Record, []int64, *colstore.OffsetKeySorter) {
-	pkRec, offsetsMap, pkSlice := b.pkf.Fetch(rec, pk)
+func (b *ColumnStoreTSSPWriter) sortRecordCluster(rec *record.Record) (*record.Record, []int64, *colstore.OffsetKeySorter) {
+	pk := b.mst.PrimaryKey()
+	sk := b.mst.SortKey()
+
+	pkRec, offsetsMap, pkSlice := b.pkf.Fetch(rec, pk, b.mst.TCDuration())
 
 	timeCol := &b.timeCol
 	oks := &b.oks
 	oksSwap := &colstore.OffsetKeySorter{}
 
 	var fragments []int64
-	var segCount int32 = 0
+	var segCount int64 = 0
+	var rowCount int64 = 0
 	var buf []byte
 
 	skCols := record.FetchColVals(rec, sk)
@@ -99,70 +122,109 @@ func (b *ColumnStoreTSSPWriter) sortRecord(rec *record.Record, pk, sk record.Sch
 
 		oksSwap.Offsets = offsetsMap.AppendToIfExists(util.Bytes2str(pkSlice[i]), oksSwap.Offsets[:0])
 		pickColVal(rec.TimeColumn(), timeCol, oksSwap.Offsets, influx.Field_Type_Int)
-		oksSwap.Times = timeCol.IntegerValues()
+		oksSwap.Times = append(oksSwap.Times[:0], timeCol.IntegerValues()...)
 
 		// If the sort key contains only a time column, sort by time
-		if sk.Len() != 1 || sk[0].Name != record.TimeField {
-			buf = buf[:0]
+		if len(sk) != 1 || sk[0].Name != record.TimeField {
 			for _, n := range oksSwap.Offsets {
-				ofs := len(buf)
-				buf = colstore.FetchKeyAtRow(buf, skCols, sk, int(n))
-				oksSwap.Add(buf[ofs:])
+				buf = colstore.FetchKeyAtRow(buf, skCols, sk, int(n), 0)
+				oksSwap.Add(buf)
+				buf = buf[len(buf):]
 			}
 		}
 
-		sort.Sort(oksSwap)
-		n := oks.Append(oksSwap, GetColStoreConfig().GetMaxRowsPerSegment()) & 0xFFFF
+		sort.Stable(oksSwap)
+		oks.Append(oksSwap)
+		segCount += int64(util.DivisionCeil(oksSwap.Len(), GetColStoreConfig().GetMaxRowsPerSegment()))
+		rowCount += int64(oksSwap.Len())
 
-		// A fragment corresponds to one or more segments
-		// The high 32 bits record the segment offset, and the low 32 bits record the number of segments
-		fragments = append(fragments, int64(segCount)<<32|int64(n))
-		segCount += int32(n)
+		// A fragment contains one or more segments, record the offset of the last segment.
+		fragments = append(fragments, util.MergeToInt64(uint32(segCount), uint32(rowCount)))
 	}
 
 	return pkRec, fragments, oks
 }
 
+func (b *ColumnStoreTSSPWriter) sortRecordSparse(rec *record.Record) (*record.Record, []int64, *colstore.OffsetKeySorter) {
+	oks := &b.oks
+	var buf []byte
+
+	sk := b.mst.SortKey()
+	skCols := record.FetchColVals(rec, sk)
+
+	oks.Times = append(oks.Times[:0], rec.Times()...)
+
+	for i := range rec.RowNums() {
+		buf = colstore.FetchKeyAtRow(buf, skCols, sk, i, 0)
+		oks.Add(buf)
+		oks.Offsets = append(oks.Offsets, int64(i))
+		buf = buf[len(buf):]
+	}
+
+	sort.Stable(oks)
+
+	maxRowsPreSeg := GetColStoreConfig().GetMaxRowsPerSegment()
+	pkRec := &record.Record{}
+	pkRec.ResetWithSchema(b.mst.PrimaryKey())
+	dec := &codec.BinaryDecoder{}
+
+	var fragments []int64
+	var segCount int64 = 0
+
+	total := oks.Len()
+	for i := 0; i < oks.Len(); i += maxRowsPreSeg {
+		oks.AddFragmentOffset(min(total, i+maxRowsPreSeg))
+		colstore.AppendKeyToRecord(dec, pkRec, oks.Keys[i])
+		segCount++
+		fragments = append(fragments, segCount)
+	}
+	colstore.AppendKeyToRecord(dec, pkRec, oks.Keys[oks.Len()-1])
+	fragments = append(fragments, segCount)
+
+	return pkRec, fragments, oks
+}
+
 func (b *ColumnStoreTSSPWriter) writeRecord(rec *record.Record, oks *colstore.OffsetKeySorter) error {
-	timeCol := &b.timeCol
-	dataCol := &b.dataCol
 	sw := b.sw
-	sw.ChangeSid(colstore.SeriesID)
 	var err error
 
-	for i := range rec.Schema.Len() - 1 { // skip time column
-		column := rec.Column(i)
-		ref := rec.Schema[i]
-		if err = sw.AppendColumn(&ref); err != nil {
-			return err
-		}
+	if len(b.mst.SortKey()) > 0 {
+		sw.MarkTimeDisorder()
+	}
 
-		oks.IteratorSegment(func(times []int64, offsets []int64) bool {
-			timeCol.Init()
-			dataCol.Init()
+	pkMap := b.mst.BuildPKMap()
+	picker := colstore.NewColValPicker(oks, b.mst.IsUniqueEnabled())
+	maxRowsPreSeg := GetColStoreConfig().GetMaxRowsPerSegment()
 
-			timeCol.AppendTimes(times)
-			pickColVal(column, dataCol, offsets, ref.Type)
+	sw.Init(colstore.SeriesID, rec.Schema)
 
+	picker.IteratorSegment(maxRowsPreSeg, func(start, end int) bool {
+		for i := range rec.Schema.Len() {
+			ref := rec.Schema[i]
+			if b.mst.IsClusterPKIndex() {
+				// In cluster mode, the primary key column does not need to be written to the file
+				if _, ok := pkMap[ref.Name]; ok {
+					continue
+				}
+			}
+
+			column := rec.Column(i)
+			if err = sw.ChangeColumn(ref); err != nil {
+				return false
+			}
+
+			dataCol, timeCol := picker.Pick(column, ref.Type, start, end)
 			err = sw.WriteData(colstore.SeriesID, ref, *dataCol, timeCol)
-			return err == nil
-		})
+			if err != nil {
+				return false
+			}
 
-		if err != nil {
-			return err
+			err = b.iw.Write(ref, dataCol)
+			if err != nil {
+				return false
+			}
 		}
-	}
-
-	ref := rec.LastSchema()
-	if err = sw.AppendColumn(&ref); err != nil {
-		return err
-	}
-	oks.IteratorSegment(func(times []int64, _ []int64) bool {
-		timeCol.Init()
-		timeCol.AppendTimes(times)
-
-		err = sw.WriteData(colstore.SeriesID, ref, *timeCol, timeCol)
-
+		err = b.iw.FlushSegment()
 		return err == nil
 	})
 
@@ -174,27 +236,89 @@ func (b *ColumnStoreTSSPWriter) writeRecord(rec *record.Record, oks *colstore.Of
 }
 
 func (b *ColumnStoreTSSPWriter) writePrimaryIndex(ret *ColumnStoreWriteResult) error {
+	if ret.PKRecord == nil {
+		// no primary key
+		return nil
+	}
+
 	indexFilePath := BuildPKFilePathFromTSSP(ret.File.Path())
 	indexBuilder := colstore.NewIndexBuilder(b.sw.lock, indexFilePath+GetTmpFileSuffix())
 	ret.IndexFilePath = indexFilePath
 
 	defer indexBuilder.Reset()
 	AppendFragmentsToPKRecord(ret.PKRecord, ret.Fragments)
-	return indexBuilder.WriteData(ret.PKRecord, -1)
+	return indexBuilder.WriteData(ret.PKRecord, b.mst.TCLocation())
 }
 
-func (b *ColumnStoreTSSPWriter) writeSkipIndex(rec *record.Record, oks *colstore.OffsetKeySorter, file TSSPFile, indexRelation *influxql.IndexRelation) error {
-	idxRec, segmentsOffset := b.fetchSkipIndexRecord(rec, oks, indexRelation)
+type ColStoreIndexWriter struct {
+	ir           *influxql.IndexRelation
+	indexBuilder *index.IndexWriterBuilder
+	indexWriters map[string][]index.IndexWriter
+}
 
-	indexWriterBuilder := index.NewIndexWriterBuilder()
-	tsspFileName := file.FileName()
-	indexWriterBuilder.NewIndexWriters(b.sw.dir, b.sw.name, tsspFileName.String(), *b.sw.lock, idxRec.Schema, *indexRelation)
+func NewColStoreIndexWriter(dir, mst string, fileName TSSPFileName, lock *string,
+	ir *influxql.IndexRelation, schema record.Schemas, pkMap map[string]struct{}) *ColStoreIndexWriter {
+
+	iw := &ColStoreIndexWriter{
+		ir: ir,
+	}
+	iw.indexBuilder = index.NewIndexWriterBuilder()
+	iw.indexWriters = iw.indexBuilder.NewIndexWriters(dir, mst, fileName.String(), *lock, schema, pkMap, *ir)
+	iw.Open()
+	return iw
+}
+
+func (iw *ColStoreIndexWriter) MustClose() {
+	for _, writer := range iw.indexBuilder.GetSkipIndexWriters() {
+		util.MustClose(writer)
+	}
+}
+
+func (iw *ColStoreIndexWriter) Flush() error {
+	for _, writer := range iw.indexBuilder.GetSkipIndexWriters() {
+		if err := writer.Flush(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (iw *ColStoreIndexWriter) Open() {
+	for _, writer := range iw.indexBuilder.GetSkipIndexWriters() {
+		writer.Open()
+	}
+}
+
+func (iw *ColStoreIndexWriter) FlushSegment() error {
+	for _, writers := range iw.indexWriters {
+		for _, writer := range writers {
+			err := writer.FlushSegment()
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (iw *ColStoreIndexWriter) Write(ref record.Field, col *record.ColVal) error {
+	if len(iw.indexWriters) == 0 {
+		return nil
+	}
+
+	skipWriters, ok := iw.indexWriters[ref.Name]
+	if !ok {
+		return nil
+	}
 
 	var err error
-	skipWriters := indexWriterBuilder.GetSkipIndexWriters()
-	schemaIdxes := indexWriterBuilder.GetSchemaIdxes()
+
+	rec := &record.Record{}
+	rec.Schema = append(rec.Schema, ref)
+	rec.ColVals = append(rec.ColVals, *col)
 	for i := range skipWriters {
-		err = skipWriters[i].CreateAttachIndex(idxRec, schemaIdxes[i], segmentsOffset)
+		err = skipWriters[i].CreateAttachIndex(rec, []int{0}, []int{col.Len})
 		if err != nil {
 			return err
 		}
@@ -202,43 +326,8 @@ func (b *ColumnStoreTSSPWriter) writeSkipIndex(rec *record.Record, oks *colstore
 	return nil
 }
 
-func (b *ColumnStoreTSSPWriter) fetchSkipIndexRecord(rec *record.Record, oks *colstore.OffsetKeySorter, indexRelation *influxql.IndexRelation) (*record.Record, []int) {
-	mp := make(map[string]struct{})
-	for _, list := range indexRelation.IndexList {
-		for i := range list.IList {
-			mp[list.IList[i]] = struct{}{}
-		}
-	}
-	idxRec := &record.Record{}
-	var segmentsOffset []int
-	idxRec.ReserveSchema(len(mp))
-	idxRec.ReserveColVal(len(mp))
-
-	j := 0
-	totalRows := 0
-	for i := range rec.Len() {
-		_, ok := mp[rec.Schema[i].Name]
-		if !ok {
-			continue
-		}
-
-		typ := rec.Schema[i].Type
-		src := &rec.ColVals[i]
-		dst := &idxRec.ColVals[j]
-		idxRec.Schema[j] = rec.Schema[i]
-
-		oks.IteratorSegment(func(times []int64, offsets []int64) bool {
-			pickColVal(src, dst, offsets, typ)
-			if j == 0 {
-				totalRows += len(offsets)
-				segmentsOffset = append(segmentsOffset, totalRows)
-			}
-			return true
-		})
-
-		j++
-	}
-	return idxRec, segmentsOffset
+func (iw *ColStoreIndexWriter) BuildSkipIndexInfo() []*colstore.SkipIndexInfo {
+	return iw.indexBuilder.BuildSkipIndexInfo()
 }
 
 func pickColVal(src *record.ColVal, dst *record.ColVal, ofs []int64, typ int) {

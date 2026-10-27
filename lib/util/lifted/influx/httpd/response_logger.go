@@ -197,8 +197,16 @@ func parseUsername(r *http.Request) string {
 // sanitize redacts passwords from query string for logging.
 func sanitize(r *http.Request) {
 	values := r.URL.Query()
+	needSanitize := false
 	for i, q := range values["q"] {
+		if strings.HasPrefix(q, "select") ||
+			strings.HasPrefix(q, "SELECT") {
+			continue
+		}
 		values["q"][i] = influxql.Sanitize(q)
+		needSanitize = true
 	}
-	r.URL.RawQuery = values.Encode()
+	if needSanitize {
+		r.URL.RawQuery = values.Encode()
+	}
 }

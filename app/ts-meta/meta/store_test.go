@@ -17,6 +17,7 @@ package meta_test
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"sort"
@@ -41,11 +42,11 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 var dbPTMu = sync.RWMutex{}
@@ -192,6 +193,7 @@ type MockStore interface {
 	TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error
 	Ping(nodeID uint64, address string, timeout time.Duration) error
 	SendClearEvents(nodeId uint64, data transport.Codec) error
+	GetRPPTWriteStatus(node *meta2.DataNode, db, rp string) (meta2.PTMstWriteStatus, error)
 }
 
 type MockNetStorage struct {
@@ -247,6 +249,10 @@ func (s *MockNetStorage) Ping(nodeID uint64, address string, timeout time.Durati
 
 func (s *MockNetStorage) SendClearEvents(uint64, transport.Codec) error {
 	return nil
+}
+
+func (s *MockNetStorage) GetRPPTWriteStatus(node *meta2.DataNode, db, rp string) (meta2.PTMstWriteStatus, error) {
+	return nil, nil
 }
 
 func NewMockNetStorage() MockStore {
@@ -371,7 +377,7 @@ func MockReportLoad(ms *meta.MetaService, db string, ptId uint32) {
 					rpStat.ShardStats = &proto2.ShardStatus{
 						ShardID:     proto.Uint64(shardID),
 						ShardSize:   proto.Uint64(shStat[shardID].shardRowCount),
-						SeriesCount: proto.Int(len(shStat[shardID].shardKeyValue)),
+						SeriesCount: proto.Int32(int32(len(shStat[shardID].shardKeyValue))),
 						MaxTime:     proto.Int64(shStat[shardID].maxTime),
 					}
 					dbPTStat[db][ptId].rpStatistics[rp].shardStatistics[shardID].mu.RUnlock()
@@ -383,9 +389,7 @@ func MockReportLoad(ms *meta.MetaService, db string, ptId uint32) {
 			val := &proto2.ReportShardsLoadCommand{DBPTStat: loads}
 			t1 := proto2.Command_ReportShardsCommand
 			cmd := &proto2.Command{Type: &t1}
-			if err := proto.SetExtension(cmd, proto2.E_ReportShardsLoadCommand_Command, val); err != nil {
-				panic(err)
-			}
+			proto.SetExtension(cmd, proto2.E_ReportShardsLoadCommand_Command, val)
 			b, err := proto.Marshal(cmd)
 			if err != nil {
 				logger2.GetLogger().Warn("marsh report cmd failed", zap.Error(err))
@@ -1044,9 +1048,7 @@ func createUpdateReplicationCmd(db string, rgId, masterId uint32, peers []meta2.
 
 	t1 := proto2.Command_UpdateReplicationCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_UpdateReplicationCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_UpdateReplicationCommand_Command, val)
 	return cmd
 }
 
@@ -1117,9 +1119,7 @@ func createUpdateRetentionPolicyCmd(db, rp string, rgId, masterId uint32, peers 
 
 	t1 := proto2.Command_UpdateRetentionPolicyCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_UpdateRetentionPolicyCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_UpdateRetentionPolicyCommand_Command, val)
 	return cmd
 }
 
@@ -1502,9 +1502,7 @@ func TestShowClusterAllNode(t *testing.T) {
 
 	c := proto2.Command_ShowClusterCommand
 	cmd := &proto2.Command{Type: &c}
-	if err := proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val)
 	b, err := proto.Marshal(cmd)
 	assert.Equal(t, err, nil)
 	info, err := mms.GetStore().ShowCluster(b)
@@ -1534,9 +1532,7 @@ func TestShowClusterMetaNode(t *testing.T) {
 
 	c := proto2.Command_ShowClusterCommand
 	cmd := &proto2.Command{Type: &c}
-	if err := proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val)
 	b, err := proto.Marshal(cmd)
 	assert.Equal(t, err, nil)
 	info, err := mms.GetStore().ShowCluster(b)
@@ -1565,9 +1561,7 @@ func TestShowClusterDataNode(t *testing.T) {
 
 	c := proto2.Command_ShowClusterCommand
 	cmd := &proto2.Command{Type: &c}
-	if err := proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val)
 	b, err := proto.Marshal(cmd)
 	assert.Equal(t, err, nil)
 	info, err := mms.GetStore().ShowCluster(b)
@@ -1592,9 +1586,7 @@ func TestShowClusterErr(t *testing.T) {
 
 	c := proto2.Command_ShowClusterCommand
 	cmd := &proto2.Command{Type: &c}
-	if err := proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val)
 	b, err := proto.Marshal(cmd)
 	assert.Equal(t, err, nil)
 	_, err = mms.GetStore().ShowCluster(b)
@@ -2655,14 +2647,14 @@ func Test_GetIndexDurationInfo(t *testing.T) {
 
 	cmd = meta.GenerateShardDurationCmd(0, nil, 1)
 	_, err = mms.GetStore().GetIndexDurationInfo(cmd)
-	assert.Equal(t, err.Error(), "%!s(<nil>) is not a E_IndexDurationCommand_Command")
+	assert.Error(t, err, "<nil> is not a IndexDurationCommand")
 }
 
 func TestStore_meteRecover(t *testing.T) {
 
 	dir := t.TempDir()
 	mms, err := meta.BuildMockMetaService(dir, "127.0.0.1")
-	mms.GetConfig().DataDir = "/tmp/openGemini/data"
+	mms.GetConfig().DataDir = filepath.Join(dir, "openGemini", "data")
 	mms.GetConfig().MetaRecover = true
 	mms.GetConfig().Version = 1
 	if err != nil {
@@ -2730,4 +2722,65 @@ func TestStore_meteRecover(t *testing.T) {
 	mms.GetStore().MeteRecover()
 	assert.NoError(t, err)
 
+}
+
+func TestRestoreDataDataNode(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+	data := &meta2.Data{
+		MetaNodes: []meta2.NodeInfo{{ID: 0}},
+		DataNodes: []meta2.DataNode{{NodeInfo: meta2.NodeInfo{ID: 2, TCPHost: "127.0.0.2:8401", Status: 1}}, {NodeInfo: meta2.NodeInfo{ID: 3, TCPHost: "127.0.0.3:8401", Status: 1}}},
+	}
+	mms.GetStore().SetData(data)
+
+	err = mms.GetStore().RestoreData("")
+	assert.Equal(t, err.Error(), "data hosts cannot be empty")
+
+	if err = mms.GetStore().RestoreData("127.0.0.2:8401,127.0.0.3:8401"); err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, 2, len(mms.GetStore().GetData().DataNodes))
+
+	err = mms.GetStore().RestoreData("127.0.0.2:8401,127.0.0.4:8401")
+	assert.Equal(t, err.Error(), "not all inused data nodes have matched")
+
+	if err := mms.GetStore().RestoreData("127.0.0.2:8401"); err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, 2, len(mms.GetStore().GetData().DataNodes))
+
+	data = &meta2.Data{
+		MetaNodes: []meta2.NodeInfo{{ID: 0}},
+		DataNodes: []meta2.DataNode{{NodeInfo: meta2.NodeInfo{ID: 2, TCPHost: "127.0.0.2:8401", Status: 1}}, {NodeInfo: meta2.NodeInfo{ID: 3, TCPHost: "127.0.0.3:8401", Status: 4}}},
+	}
+	mms.GetStore().SetData(data)
+	if err := mms.GetStore().RestoreData("127.0.0.2:8401"); err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, 1, len(mms.GetStore().GetData().DataNodes))
+	assert.Equal(t, "127.0.0.2:8401", mms.GetStore().GetData().DataNodes[0].TCPHost)
+
+	errStore := &meta.Store{}
+	err = errStore.RestoreData("127.0.0.2:8401,127.0.0.3:8401")
+	assert.Equal(t, err.Error(), raft.ErrNotLeader.Error())
+}
+
+func TestLeaderHttp(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+	data := &meta2.Data{
+		MetaNodes: []meta2.NodeInfo{{ID: 0, TCPHost: "127.0.0.3:9088", Host: "127.0.0.3:9092"}, {ID: 1, TCPHost: "127.0.0.1:9088", Host: "127.0.0.1:9092"}},
+		DataNodes: []meta2.DataNode{{NodeInfo: meta2.NodeInfo{ID: 2, TCPHost: "127.0.0.2:8401"}}, {NodeInfo: meta2.NodeInfo{ID: 3, TCPHost: "127.0.0.3:8401"}}},
+	}
+	mms.GetStore().SetData(data)
+	result := mms.GetStore().LeaderHTTP()
+	assert.Equal(t, "127.0.0.1:9092", result)
 }

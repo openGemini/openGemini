@@ -1,4 +1,4 @@
-FROM fedora:latest AS builder
+FROM golang:1.24-trixie AS builder
 
 WORKDIR /build
 
@@ -6,14 +6,23 @@ ENV GOPROXY=https://mirrors.huaweicloud.com/repository/goproxy/,https://goproxy.
 ENV CGO_ENABLED=1
 ENV GOBIN=/build/bin
 
-RUN dnf install golang gcc gcc-c++ -y --setopt=tsflags=nodocs && dnf clean all
+RUN apt update && apt install gcc g++ git upx-ucl -y
 
 COPY . .
 
 RUN rm -rf go.sum && go mod tidy
 
+RUN mkdir -p /tmp/ts-cli && cd /tmp/ && git clone https://github.com/openGemini/openGemini-cli.git &&\
+    cd /tmp/openGemini-cli && go mod tidy &&\
+    GOBIN=/build/bin go install -ldflags "-s -w" ./cmd/ts-cli
+
 RUN go build -ldflags "-s -w" -o ./bin/ts-server ./app/ts-server/ &&\
-    go install github.com/openGemini/openGemini-cli/cmd/ts-cli@latest
+    go build -ldflags "-s -w" -o ./bin/ts-sql ./app/ts-sql/ &&\
+    go build -ldflags "-s -w" -o ./bin/ts-data ./app/ts-data/ &&\
+    go build -ldflags "-s -w" -o ./bin/ts-meta ./app/ts-meta/ &&\
+    go build -ldflags "-s -w" -o ./bin/ts-store ./app/ts-store/ &&\
+    upx -9 ./bin/ts-server && upx -9 ./bin/ts-sql && upx -9 ./bin/ts-data &&\
+    upx -9 ./bin/ts-meta && upx -9 ./bin/ts-store && upx -9 ./bin/ts-cli
 
 FROM fedora:latest
 
@@ -24,8 +33,7 @@ ENV PATH=$PATH:/home/opengemini/bin
 COPY --from=builder /build/bin/* /home/opengemini/bin/
 COPY --from=builder /build/config/openGemini.singlenode.conf /home/opengemini/config/opengemini.conf
 
-RUN dnf install -y --setopt=tsflags=nodocs net-tools curl bind-utils procps && dnf clean all &&\
-    sed -i 's/bind-address = "127.0.0.1:8086"/bind-address = "0.0.0.0:8086"/g' /home/opengemini/config/opengemini.conf &&\
+RUN sed -i 's/bind-address = "127.0.0.1:8086"/bind-address = "0.0.0.0:8086"/g' /home/opengemini/config/opengemini.conf &&\
     sed -i 's/rpc-address = "127.0.0.1:8305"/rpc-address = "0.0.0.0:8305"/g' /home/opengemini/config/opengemini.conf
 
 EXPOSE 8086

@@ -258,7 +258,7 @@ func TestTransport(t *testing.T) {
 	client.StartAnalyze(span)
 	client.Init(ctx, nil)
 	err := client.Run()
-	assert.EqualError(t, err, fmt.Sprintf("unknown error"))
+	assert.EqualError(t, err, fmt.Sprintf("some error"))
 }
 
 func TestEmptyMessage(t *testing.T) {

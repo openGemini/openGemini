@@ -17,16 +17,16 @@ package immutable
 import (
 	"container/heap"
 	"errors"
-	"fmt"
 	"math"
+	"sort"
 	"sync"
 
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/failpoint"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/pingcap/failpoint"
 )
 
 type mergePerformer struct {
@@ -64,6 +64,7 @@ type mergePerformer struct {
 	mergedTimeCol *record.ColVal
 
 	nilCol record.ColVal
+	swap   record.ColVal
 }
 
 func NewMergePerformer(ur *UnorderedReader, stat *statistics.MergeStatItem) *mergePerformer {
@@ -93,15 +94,51 @@ func (p *mergePerformer) Handle(col *record.ColVal, times []int64, lastSeg bool)
 		maxOrderTime = math.MaxInt64
 	}
 
-	unorderedCol, unorderedTimes, err := p.readUnordered(maxOrderTime)
-	if err != nil {
-		return err
-	}
-	if unorderedCol != nil {
-		record.CheckCol(unorderedCol, p.ref.Type)
+	orderCol := &p.swap
+	orderStart, orderEnd := 0, 0
+	orderSize := len(times)
+	var maxTime int64 = math.MinInt64
+
+	for maxTime < maxOrderTime {
+		maxTime = p.ur.MatchMaxTime(maxOrderTime)
+		unorderedCol, unorderedTimes, err := p.readUnordered(maxTime)
+		if err != nil {
+			return err
+		}
+
+		if orderStart == orderSize {
+			// ordered data write completed
+			err = p.write(p.ref, unorderedCol, unorderedTimes, lastSeg && maxTime >= maxOrderTime)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+
+		if maxTime >= times[len(times)-1] && orderStart == 0 {
+			orderCol = col
+			orderEnd = orderSize
+		} else {
+			orderEnd = sort.Search(len(times)-orderStart, func(i int) bool {
+				return times[orderStart+i] > maxTime
+			})
+
+			orderEnd += orderStart
+			if orderEnd > orderStart {
+				orderCol.Init()
+				orderCol.AppendColVal(col, p.ref.Type, orderStart, orderEnd)
+			}
+		}
+
+		err = p.merge(orderCol, unorderedCol, times[orderStart:orderEnd], unorderedTimes, p.ref, lastSeg && maxTime >= maxOrderTime)
+		if err != nil {
+			return err
+		}
+
+		orderStart = orderEnd
 	}
 
-	return p.merge(col, unorderedCol, times, unorderedTimes, p.ref, lastSeg)
+	return nil
 }
 
 func (p *mergePerformer) SeriesChanged(sid uint64, orderTimes []int64) error {
@@ -263,6 +300,10 @@ func (p *mergePerformer) merge(orderCol, unorderedCol *record.ColVal,
 		return p.write(ref, orderCol, orderTimes, lastSeg)
 	}
 
+	if len(orderTimes) == 0 {
+		return p.write(ref, unorderedCol, unorderedTimes, lastSeg)
+	}
+
 	p.mh.AddUnorderedCol(unorderedCol, unorderedTimes)
 	mergedCol, mergedTimes, err := p.mh.Merge(orderCol, orderTimes, ref.Type)
 	if err != nil {
@@ -284,6 +325,7 @@ func (p *mergePerformer) readUnordered(max int64) (*record.ColVal, []int64, erro
 		col, times, err = p.ur.Read(p.sid, max)
 	}
 
+	record.CheckCol(col, p.ref.Type)
 	return col, times, err
 }
 
@@ -321,6 +363,11 @@ func (p *mergePerformer) writeMergedTime() error {
 }
 
 func (p *mergePerformer) write(ref *record.Field, col *record.ColVal, times []int64, lastSeg bool) error {
+	failpoint.ApplyPrivateMethod(failpoint.ColumnWriteError, p.cw, "write",
+		func(sid uint64, ref *record.Field, col *record.ColVal, times []int64) error {
+			return errors.New("failed to wirte column data")
+		})
+
 	if err := p.cw.write(p.sid, ref, col, times); err != nil {
 		return err
 	}
@@ -431,10 +478,6 @@ func (cw *columnWriter) writeAll(sid uint64, ref *record.Field, col *record.ColV
 }
 
 func (cw *columnWriter) write(sid uint64, ref *record.Field, col *record.ColVal, times []int64) error {
-	failpoint.Inject("column-writer-error", func() {
-		failpoint.Return(fmt.Errorf("failed to wirte column data"))
-	})
-
 	cw.remainTime.AppendTimes(times)
 
 	// fast path

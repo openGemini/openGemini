@@ -21,6 +21,20 @@ import (
 
 type IndexType int
 
+func (t IndexType) String() string {
+	if t >= TypeEnd || t < MergeSet {
+		return ""
+	}
+	return TypeToName[t]
+}
+
+func (t IndexType) FileExtension() string {
+	if t >= TypeEnd || t < MergeSet {
+		return ""
+	}
+	return FileExtensions[t]
+}
+
 const (
 	MergeSet IndexType = iota
 	Text
@@ -30,46 +44,58 @@ const (
 	BloomFilterFullText
 	MinMax
 	Set
-	IndexTypeAll
+	Spatial
 	BloomFilterIp
+	BloomFilterUniversal
+	AggMap // only for column store, and no need to create manually
+	TypeEnd
 )
 
 const (
-	MergeSetIndex            = "mergeset"
-	TextIndex                = "text"
-	FieldIndex               = "field"
-	TimeClusterIndex         = "timecluster"
-	BloomFilterIndex         = "bloomfilter"
-	BloomFilterFullTextIndex = "bloomfilter_fulltext"
-	MinMaxIndex              = "minmax"
-	SetIndex                 = "set"
-	BloomFilterIpIndex       = "bloomfilter_ip"
+	MergeSetIndex             = "mergeset"
+	TextIndex                 = "text"
+	FieldIndex                = "field"
+	TimeClusterIndex          = "timecluster"
+	BloomFilterIndex          = "bloomfilter"
+	BloomFilterFullTextIndex  = "bloomfilter_fulltext"
+	BloomFilterUniversalIndex = "bloomfilter_universal"
+	MinMaxIndex               = "minmax"
+	SetIndex                  = "set"
+	BloomFilterIpIndex        = "bloomfilter_ip"
+	SpatialIndex              = "spatial"
 )
 
 var (
-	IndexNameToType = map[string]IndexType{
-		MergeSetIndex:            MergeSet,
-		TextIndex:                Text,
-		FieldIndex:               Field,
-		TimeClusterIndex:         TimeCluster,
-		BloomFilterIndex:         BloomFilter,
-		BloomFilterFullTextIndex: BloomFilterFullText,
-		MinMaxIndex:              MinMax,
-		SetIndex:                 Set,
-		BloomFilterIpIndex:       BloomFilterIp,
+	NameToType = map[string]IndexType{
+		MergeSetIndex:             MergeSet,
+		TextIndex:                 Text,
+		FieldIndex:                Field,
+		TimeClusterIndex:          TimeCluster,
+		BloomFilterIndex:          BloomFilter,
+		BloomFilterFullTextIndex:  BloomFilterFullText,
+		BloomFilterUniversalIndex: BloomFilterUniversal,
+		MinMaxIndex:               MinMax,
+		SetIndex:                  Set,
+		BloomFilterIpIndex:        BloomFilterIp,
+		SpatialIndex:              Spatial,
 	}
-	IndexTypeToName = map[IndexType]string{
-		MergeSet:            MergeSetIndex,
-		Text:                TextIndex,
-		Field:               FieldIndex,
-		TimeCluster:         TimeClusterIndex,
-		BloomFilter:         BloomFilterIndex,
-		BloomFilterFullText: BloomFilterFullTextIndex,
-		MinMax:              MinMaxIndex,
-		Set:                 SetIndex,
-		BloomFilterIp:       BloomFilterIpIndex,
+	TypeToName     = [TypeEnd]string{}
+	FileExtensions = [TypeEnd]string{
+		BloomFilter:         ".bf",
+		BloomFilterFullText: ".bf",
+		MinMax:              ".mm",
+		Set:                 ".set",
+		Spatial:             ".spi",
+		BloomFilterIp:       ".bf",
+		AggMap:              ".am",
 	}
 )
+
+func init() {
+	for k, v := range NameToType {
+		TypeToName[v] = k
+	}
+}
 
 type ContextKey string
 
@@ -78,17 +104,13 @@ const (
 )
 
 func GetIndexTypeByName(name string) (IndexType, error) {
-	index, ok := IndexNameToType[strings.ToLower(name)]
+	index, ok := NameToType[strings.ToLower(name)]
 	if !ok {
 		return MergeSet, fmt.Errorf("invalid index name %s", name)
 	}
 	return index, nil
 }
 
-func GetIndexNameByType(id IndexType) (string, error) {
-	name, ok := IndexTypeToName[id]
-	if !ok {
-		return "", fmt.Errorf("invalid index type %d", id)
-	}
-	return name, nil
+func GetIndexNameByType(id IndexType) string {
+	return id.String()
 }

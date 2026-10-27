@@ -7,7 +7,7 @@ This code is originally from: https://github.com/influxdata/influxdb/blob/1.7/se
 
 import (
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 // SubscriptionInfo holds the subscription information.

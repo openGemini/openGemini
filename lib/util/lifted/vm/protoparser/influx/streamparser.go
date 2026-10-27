@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 )
@@ -31,7 +31,7 @@ const defaultBlockSize = 64 * 1024
 func ReadLinesBlockExt(r io.Reader, dstBuf, tailBuf []byte, maxLineLen, blockSize int) ([]byte, []byte, error) {
 	startTime := time.Now()
 	if cap(dstBuf) < blockSize {
-		dstBuf = bytesutil.Resize(dstBuf, blockSize)
+		dstBuf = bytesutil.ResizeNoCopyNoOverallocate(dstBuf, blockSize)
 	}
 
 	dstBuf = append(dstBuf[:0], tailBuf...)
@@ -74,7 +74,7 @@ again:
 		if cap(dstBuf) < 2*len(dstBuf) {
 			// Increase dsbBuf capacity, so more data could be read into it.
 			dstBufLen := len(dstBuf)
-			dstBuf = bytesutil.Resize(dstBuf, 2*cap(dstBuf))
+			dstBuf = bytesutil.ResizeWithCopyNoOverallocate(dstBuf, 2*cap(dstBuf))
 			dstBuf = dstBuf[:dstBufLen]
 		}
 		goto again

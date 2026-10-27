@@ -109,6 +109,7 @@ func newFileCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *executor
 	}
 	loc := immutable.NewLocation(file, ctx.decs)
 	loc.SetClosedSignal(ctx.closedSignal)
+	loc.SetSpan(span)
 	var err error
 	minT, maxT, err := file.MinMaxTime()
 	if err != nil {
@@ -206,6 +207,14 @@ func (f *fileCursor) readPreAggData() (*DataBlockInfo, error) {
 		ptTags := f.tagSet.GetTagsWithQuerySchema(i, f.querySchema)
 		sInfo := &seriesInfo{sid: sid, tags: *ptTags, key: tagSetItem.SeriesKey}
 		f.loc.ResetMeta()
+
+		if f.ctx.isLastRowQuery {
+			// data files are pruned based on the mem data for last row
+			data := f.readInMemData(i, idx, sInfo)
+			if data != nil {
+				return data, nil
+			}
+		}
 
 		contains, err := f.loc.Contains(sid, f.ctx.tr, f.metaContext)
 		if err != nil {

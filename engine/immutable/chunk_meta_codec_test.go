@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/snappy"
+	"github.com/klauspost/compress/snappy"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/record"
@@ -55,9 +55,7 @@ func iterateChunkMeta(file immutable.TSSPFile, hook func(cm *immutable.ChunkMeta
 }
 
 func marshalChunkMetaSelf(ctx *immutable.ChunkMetaCodecCtx, cm *immutable.ChunkMeta) ([]byte, error) {
-	defer immutable.SetChunkMetaCompressMode(immutable.ChunkMetaCompressNone)
-	immutable.SetChunkMetaCompressMode(immutable.ChunkMetaCompressSelf)
-
+	ctx.EnableCompress()
 	return immutable.MarshalChunkMeta(ctx, cm, nil)
 }
 

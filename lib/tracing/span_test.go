@@ -21,6 +21,7 @@ import (
 
 	"github.com/influxdata/influxdb/pkg/tracing/fields"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -80,4 +81,19 @@ func TestSpan(t *testing.T) {
 		t.Fatalf("test span faield.\nexp: %s\ngot: %s\n",
 			exp.String(), traceStr)
 	}
+}
+
+func TestSpanAddCounter(t *testing.T) {
+	convey.Convey("test span add counter", t, func() {
+		_, span := tracing.NewTrace("root")
+		span.CreateCounter("testCount", "")
+		span.CreateCounter("testElapsed", "ns")
+		tracing.AddCounter(span, "testCount", 1)
+		tracing.AddCounter(nil, "testCount", 1)
+		start := tracing.GetElapsedCounter(nil, "")
+		convey.So(start, convey.ShouldNotBeNil)
+		start = tracing.GetElapsedCounter(span, "testElapsed")
+		defer start()
+		convey.So(func() { span.Finish() }, convey.ShouldNotPanic)
+	})
 }

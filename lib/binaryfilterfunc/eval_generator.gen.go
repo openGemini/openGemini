@@ -26,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
 func GetFloatLTConditionBitMap(params *TypeFunParams) []byte {
@@ -1152,12 +1153,19 @@ func GetBooleanNEQConditionBitMapWithNull(params *TypeFunParams) []byte {
 
 func GetStringMatchPhraseConditionBitMap(params *TypeFunParams) []byte {
 	if params.col.NilCount == 0 {
-		return GetStringMatchPhraseConditionBitMapWithoutNull(params)
+		return GetStringMatchPhraseConditionBitMapWithoutNull(params, influxql.MATCHPHRASE)
 	}
-	return GetStringMatchPhraseConditionBitMapWithNull(params)
+	return GetStringMatchPhraseConditionBitMapWithNull(params, influxql.MATCHPHRASE)
 }
 
-func GetStringMatchPhraseConditionBitMapWithoutNull(params *TypeFunParams) []byte {
+func GetStringUnMatchPhraseConditionBitMap(params *TypeFunParams) []byte {
+	if params.col.NilCount == 0 {
+		return GetStringMatchPhraseConditionBitMapWithoutNull(params, influxql.UNMATCHPHRASE)
+	}
+	return GetStringMatchPhraseConditionBitMapWithNull(params, influxql.UNMATCHPHRASE)
+}
+
+func GetStringMatchPhraseConditionBitMapWithoutNull(params *TypeFunParams, op uint32) []byte {
 	var idx int
 	compare, col, offset, opt, pos := params.compare, params.col, params.offset, params.opt, params.pos
 	goal := util.Str2bytes(compare.(string))
@@ -1181,14 +1189,16 @@ func GetStringMatchPhraseConditionBitMapWithoutNull(params *TypeFunParams) []byt
 			content = col.Val[col.Offset[i]:col.Offset[i+1]]
 		}
 		tokenFinder.InitInput(content, goal)
-		if !tokenFinder.Next() {
+
+		ok := tokenFinder.Next()
+		if (ok && op == influxql.UNMATCHPHRASE) || (!ok && op != influxql.UNMATCHPHRASE) {
 			bitmap.SetBitMap(pos, idx)
 		}
 	}
 	return pos
 }
 
-func GetStringMatchPhraseConditionBitMapWithNull(params *TypeFunParams) []byte {
+func GetStringMatchPhraseConditionBitMapWithNull(params *TypeFunParams, op uint32) []byte {
 	var idx int
 	compare, col, offset, pos, opt, bitMap := params.compare, params.col, params.offset, params.pos, params.opt, params.bitMap
 	goal := util.Str2bytes(compare.(string))
@@ -1216,7 +1226,8 @@ func GetStringMatchPhraseConditionBitMapWithNull(params *TypeFunParams) []byte {
 			content = col.Val[col.Offset[i]:col.Offset[i+1]]
 		}
 		tokenFinder.InitInput(content, goal)
-		if !tokenFinder.Next() {
+		ok := tokenFinder.Next()
+		if (ok && op == influxql.UNMATCHPHRASE) || (!ok && op != influxql.UNMATCHPHRASE) {
 			bitmap.SetBitMap(pos, idx)
 		}
 	}
@@ -1288,4 +1299,184 @@ func IsIpInRange(ipStr, subnetStr string) bool {
 		return false
 	}
 	return subnet.Contains(ip)
+}
+
+func GetFloatINConditionBitMap(params *TypeFunParams) []byte {
+	if params.col.NilCount == 0 {
+		return GetFloatINConditionBitMapWithoutNull(params)
+	}
+	return GetFloatINConditionBitMapWithNull(params)
+}
+
+func GetIntegerINConditionBitMap(params *TypeFunParams) []byte {
+	if params.col.NilCount == 0 {
+		return GetIntegerINConditionBitMapWithoutNull(params)
+	}
+	return GetIntegerINConditionBitMapWithNull(params)
+}
+
+func GetStringINConditionBitMap(params *TypeFunParams) []byte {
+	if params.col.NilCount == 0 {
+		return GetStringINConditionBitMapWithoutNull(params)
+	}
+	return GetStringINConditionBitMapWithNull(params)
+}
+
+func GetFloatINConditionBitMapWithoutNull(params *TypeFunParams) []byte {
+	var idx int
+	compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
+	var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
+	cmpData := compare.(map[interface{}]bool)
+	for i := 0; i < col.Len; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+			continue
+		}
+		if !cmpData[values[i]] {
+			bitmap.SetBitMap(pos, idx)
+		}
+	}
+	return pos
+}
+
+func GetIntegerINConditionBitMapWithoutNull(params *TypeFunParams) []byte {
+	var idx int
+	compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
+	var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
+	cmpData := compare.(map[interface{}]bool)
+	for i := 0; i < col.Len; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+			continue
+		}
+		if !cmpData[values[i]] {
+			bitmap.SetBitMap(pos, idx)
+		}
+	}
+	return pos
+}
+
+func GetStringINConditionBitMapWithoutNull(params *TypeFunParams) []byte {
+	var idx int
+	compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
+	cmpData := compare.(map[interface{}]bool)
+	for i := 0; i < col.Len-1; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+			continue
+		}
+		if !cmpData[util.Bytes2str(col.Val[col.Offset[i]:col.Offset[i+1]])] {
+			bitmap.SetBitMap(pos, idx)
+		}
+	}
+	idx = offset + col.Len - 1
+	if bitmap.IsNil(pos, idx) {
+		return pos
+	}
+	if !cmpData[util.Bytes2str(col.Val[col.Offset[col.Len-1]:])] {
+		bitmap.SetBitMap(pos, idx)
+	}
+	return pos
+}
+
+func GetFloatINConditionBitMapWithNull(params *TypeFunParams) []byte {
+	compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
+	var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
+	var idx int
+	var index int
+	cmpData := compare.(map[interface{}]bool)
+	for i := 0; i < col.Len; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+			if !bitmap.IsNil(bitMap, idx) {
+				index++
+			}
+			continue
+		}
+
+		if bitmap.IsNil(bitMap, idx) {
+			bitmap.SetBitMap(pos, idx)
+			continue
+		}
+		if !cmpData[values[index]] {
+			bitmap.SetBitMap(pos, idx)
+		}
+		index++
+	}
+	return pos
+}
+
+func GetIntegerINConditionBitMapWithNull(params *TypeFunParams) []byte {
+	compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
+	var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
+	var idx int
+	var index int
+	cmpData := compare.(map[interface{}]bool)
+	for i := 0; i < col.Len; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+			if !bitmap.IsNil(bitMap, idx) {
+				index++
+			}
+			continue
+		}
+
+		if bitmap.IsNil(bitMap, idx) {
+			bitmap.SetBitMap(pos, idx)
+			continue
+		}
+		if !cmpData[values[index]] {
+			bitmap.SetBitMap(pos, idx)
+		}
+		index++
+	}
+	return pos
+}
+
+func GetStringINConditionBitMapWithNull(params *TypeFunParams) []byte {
+	compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
+	var idx int
+	cmpData := compare.(map[interface{}]bool)
+	for i := 0; i < col.Len-1; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+			continue
+		}
+
+		if bitmap.IsNil(bitMap, idx) {
+			bitmap.SetBitMap(pos, idx)
+			continue
+		}
+		if !cmpData[util.Bytes2str(col.Val[col.Offset[i]:col.Offset[i+1]])] {
+			bitmap.SetBitMap(pos, idx)
+		}
+	}
+	idx = offset + col.Len - 1
+	if bitmap.IsNil(pos, idx) {
+		return pos
+	}
+	if bitmap.IsNil(bitMap, idx) || !cmpData[util.Bytes2str(col.Val[col.Offset[col.Len-1]:])] {
+		bitmap.SetBitMap(pos, idx)
+	}
+	return pos
 }

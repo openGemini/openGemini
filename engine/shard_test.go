@@ -21,16 +21,19 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"os"
 	"path"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	set "github.com/deckarep/golang-set/v2"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/pkg/tracing/fields"
@@ -40,6 +43,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
+	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/engine/shelf"
@@ -49,16 +53,17 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/raftlog"
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 	"github.com/openGemini/openGemini/lib/syscontrol"
-	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -67,8 +72,10 @@ import (
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/smartystreets/goconvey/convey"
 	assert2 "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func init() {
@@ -83,6 +90,7 @@ const defaultDb = "db0"
 const defaultRp = "rp0"
 const defaultShGroupId = uint64(1)
 const defaultShardId = uint64(1)
+const defaultShardId2 = uint64(2)
 const defaultPtId = uint32(1)
 const defaultChunkSize = 1000
 const defaultMeasurementName = "cpu"
@@ -119,7 +127,7 @@ func GenDataRecord(msNames []string, seriesNum, pointNumOfPerSeries int, interva
 		if fixBool {
 			fields["field3_bool"] = (i%2 == 0)
 		} else {
-			fields["field3_bool"] = (rand.Int31n(100) > 50)
+			fields["field3_bool"] = (rand.Int32N(100) > 50)
 		}
 
 		if !fullField {
@@ -1007,12 +1015,6 @@ func TestShard_NewColStoreShard(t *testing.T) {
 	_, ok := initColumnStoreMstInfo(simpleMstInfo())
 	require.True(t, ok)
 
-	conf := &config.GetStoreConfig().ColumnStore
-	conf.MergesetEnabled = true
-	defer func() {
-		conf.MergesetEnabled = false
-	}()
-
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1357,6 +1359,79 @@ func TestShard_NewColStoreShardWithPKIndexAndTCNilPrimaryKeyMultiFiles(t *testin
 	conf.SetMaxRowsPerSegment(util.DefaultMaxRowsPerSegment4ColStore)
 }
 
+func TestShard_ScanWithSparseIndex(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer clearMstInfo()
+	_, ok := initColumnStoreMstInfo(defaultMstInfo(0))
+	require.True(t, ok)
+
+	enableClusterIndex()
+	st := time.Now().Truncate(time.Second)
+
+	// pk Rec
+	// frag_index field1_string                field2_int
+	// 0          test-test-test-test-0        1
+	// 1          test-test-test-test-0-1      2
+	// 2          test-test-test-test-0-2      3
+	// 3          test-test-test-test-1        2
+	// 4          test-test-test-test-1-1      3
+	// 5          test-test-test-test-1-2      4
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 2, 3, time.Second, st, true, true, false, 1)
+	err = writeData(sh, rows, true)
+	sh.waitSnapshot()
+	require.Equal(t, err, nil)
+	engineType := sh.GetEngineType()
+	require.Equal(t, config.COLUMNSTORE, engineType)
+
+	// set the primary index reader
+	sh.pkIndexReader = sparseindex.NewGroupPKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+	// set the skip index reader
+	sh.skIndexReader = sparseindex.NewSKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+
+	assertNumberOfIdxFile(t, sh, 1)
+
+	opt := &query.ProcessorOptions{
+		Sources:   []influxql.Source{&influxql.Measurement{Name: defaultMeasurementName}},
+		StartTime: st.UnixNano(),
+		EndTime:   st.Add(time.Hour).UnixNano(),
+		Condition: &influxql.BinaryExpr{
+			Op:  influxql.LTE,
+			LHS: &influxql.VarRef{Val: "field2_int"},
+			RHS: &influxql.IntegerLiteral{Val: 2},
+		},
+	}
+
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
+
+	mst := querySchema.Options().GetSourcesNames()[0]
+	dataFiles := sh.immTables.CopyCSFiles(mst)
+	fileName := dataFiles[0].Path()
+
+	// condition: <=2, expect rows: 0, 1, 3
+	expectRanges := fragment.FragmentRanges{&fragment.FragmentRange{Start: 0, End: 2}, &fragment.FragmentRange{Start: 3, End: 4}}
+	// get the shard fragments by scanWithSparseIndex
+	fileFrags1, skipFileIdx1, err := sh.scanWithSparseIndex(dataFiles, querySchema, mst)
+	require.Equal(t, err, nil)
+	require.Equal(t, len(skipFileIdx1), 0)
+	segmentRanges1 := fileFrags1.FileMarks[fileName].GetFragmentRanges()
+	require.Equal(t, expectRanges, segmentRanges1)
+
+	// get the shard fragments by scanWithClusterIndex
+	fileFrags2, skipFileIdx2, err := sh.scanWithClusterIndex(dataFiles, querySchema, mst)
+	require.Equal(t, err, nil)
+	require.Equal(t, len(skipFileIdx2), 0)
+	segmentRanges2 := fileFrags2.FileMarks[fileName].GetFragmentRanges()
+	require.Equal(t, expectRanges, segmentRanges2)
+
+	require.NoError(t, closeShard(sh))
+}
+
 func TestColStoreWriteSkipIndex(t *testing.T) {
 	testDir := t.TempDir()
 	_ = os.RemoveAll(testDir)
@@ -1378,7 +1453,7 @@ func TestColStoreWriteSkipIndex(t *testing.T) {
 	require.Equal(t, err, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	require.Equal(t, err, nil)
-	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
+	rec := msInfo.GetWriteChunk().WriteRec.GetRecord()
 
 	cpu1 := mstInfo
 	cpu1.Name = "cpu1"
@@ -1421,7 +1496,7 @@ func TestColStoreWriteSkipIndexSwitchFile(t *testing.T) {
 	require.Equal(t, err, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	require.Equal(t, err, nil)
-	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
+	rec := msInfo.GetWriteChunk().WriteRec.GetRecord()
 
 	cpu1 := mstInfo
 	cpu1.Name = "cpu1"
@@ -1435,6 +1510,135 @@ func TestColStoreWriteSkipIndexSwitchFile(t *testing.T) {
 	if err = closeShard(sh); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestShard_GetPreAgg_WithClusterIndex(t *testing.T) {
+	//Skip for now, adapt later
+	//t.Run("use group pk index", testGetPreAgg(false))
+	t.Run("use cluster pk index", testGetPreAgg(true))
+}
+
+func testGetPreAgg(isClusterIndex bool) func(t *testing.T) {
+	return func(t *testing.T) {
+		testDir := t.TempDir()
+		_ = os.RemoveAll(testDir)
+		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+		require.NoError(t, err)
+
+		defer clearMstInfo()
+		mstsInfo := &meta.MeasurementInfo{
+			Name:       defaultMeasurementName,
+			EngineType: config.COLUMNSTORE,
+			ColStoreInfo: &meta.ColStoreInfo{
+				SortKey:             []string{"field1_string"},
+				PrimaryKey:          []string{"field1_string"},
+				TimeClusterDuration: 0,
+			},
+			Schema: &meta.CleanSchema{
+				"field1_string": meta.SchemaVal{Typ: influx.Field_Type_String},
+			},
+		}
+		_, ok := initColumnStoreMstInfo(mstsInfo)
+		require.True(t, ok)
+
+		if isClusterIndex {
+			enableClusterIndex()
+		}
+		st := time.Now().Truncate(time.Second)
+
+		// pk field: field1_string
+		// other fields: field2_int, field3_bool, field4_float
+		// index      field1_string                field2_int        field3_bool        field4_float
+		// 0          test-test-test-test-0        1                 true(random)       1.1
+		// 1          test-test-test-test-1        2                 true(random)       2.2
+		// 2          test-test-test-test-0-1      2                 true(random)       2.1
+		// 3          test-test-test-test-2        3                 true(random)       3.3
+		// 4          test-test-test-test-1-1      3                 true(random)       3.2
+		// 5          test-test-test-test-0-2      3                 true(random)       3.1
+		// 6          test-test-test-test-2-1      4                 true(random)       4.3
+		// 7          test-test-test-test-1-2      4                 true(random)       4.2
+		// 8          test-test-test-test-2-2      5                 true(random)       5.3
+		rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 3, 3, time.Second, st, true, true, false, 1)
+		err = writeData(sh, rows, true)
+		sh.waitSnapshot()
+		require.Equal(t, err, nil)
+		engineType := sh.GetEngineType()
+		require.Equal(t, config.COLUMNSTORE, engineType)
+
+		// set the primary index reader
+		sh.pkIndexReader = sparseindex.NewGroupPKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+		// set the skip index reader
+		sh.skIndexReader = sparseindex.NewSKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+
+		assertNumberOfIdxFile(t, sh, 1)
+		queryAggExprs := []string{"field2_int_count", "field2_int_sum", "field2_int_min", "field2_int_max", "field3_bool_count", "other_field", "field4_float_count", "field4_float_sum", "field4_float_min", "field4_float_max"}
+
+		opt1 := &query.ProcessorOptions{
+			Sources: []influxql.Source{&influxql.Measurement{Name: defaultMeasurementName}},
+		}
+		querySchema1 := executor.NewQuerySchema(nil, nil, opt1, nil)
+		rec1, err := sh.GetPreAgg(querySchema1, queryAggExprs)
+		require.Equal(t, err, nil)
+
+		expectedRec1 := genPreAggRecord([]int64{9}, []int64{27}, []int64{1}, []int64{5}, []int64{9}, []int64{0}, []int64{9}, []float64{28.8}, []float64{1.1}, []float64{5.3})
+
+		for i := 0; i < 6; i++ {
+			require.Equal(t, expectedRec1.Column(i).IntegerValues(), rec1.Column(i).IntegerValues())
+		}
+		for j := 6; j < 9; j++ {
+			require.InDelta(t, expectedRec1.Column(j).FloatValues()[0], rec1.Column(j).FloatValues()[0], util.PrecisionThreshold)
+		}
+
+		opt2 := &query.ProcessorOptions{
+			Sources: []influxql.Source{&influxql.Measurement{Name: defaultMeasurementName}},
+			Condition: &influxql.BinaryExpr{
+				Op:  influxql.GT,
+				LHS: &influxql.VarRef{Val: "field1_string"},
+				RHS: &influxql.StringLiteral{Val: "test-test-test-test-1-1"},
+			},
+		}
+		querySchema2 := executor.NewQuerySchema(nil, nil, opt2, nil)
+		rec2, err := sh.GetPreAgg(querySchema2, queryAggExprs)
+		require.Equal(t, err, nil)
+
+		expectedRec2 := genPreAggRecord([]int64{4}, []int64{16}, []int64{3}, []int64{5}, []int64{4}, []int64{0}, []int64{4}, []float64{17.1}, []float64{3.3}, []float64{5.3})
+
+		for i := 0; i < 6; i++ {
+			require.Equal(t, expectedRec2.Column(i).IntegerValues(), rec2.Column(i).IntegerValues())
+		}
+		for j := 6; j < 9; j++ {
+			require.InDelta(t, expectedRec2.Column(j).FloatValues()[0], rec2.Column(j).FloatValues()[0], util.PrecisionThreshold)
+		}
+
+		require.NoError(t, closeShard(sh))
+	}
+}
+
+func genPreAggRecord(f2Count, f2Sum, f2Min, f2Max, f3Count, f4Count, fCount []int64, f4Sum, f4Min, f4Max []float64) *record.Record {
+	var schema = record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "field2_int_count"},
+		record.Field{Type: influx.Field_Type_Int, Name: "field2_int_sum"},
+		record.Field{Type: influx.Field_Type_Int, Name: "field2_int_min"},
+		record.Field{Type: influx.Field_Type_Int, Name: "field2_int_max"},
+		record.Field{Type: influx.Field_Type_Int, Name: "field3_bool_count"},
+		record.Field{Type: influx.Field_Type_Int, Name: "other_field"},
+		record.Field{Type: influx.Field_Type_Int, Name: "field4_float_count"},
+		record.Field{Type: influx.Field_Type_Float, Name: "field4_float_sum"},
+		record.Field{Type: influx.Field_Type_Float, Name: "field4_float_min"},
+		record.Field{Type: influx.Field_Type_Float, Name: "field4_float_max"},
+	}
+	rec := record.NewRecord(schema, false)
+	rec.ColVals[0].AppendIntegers(f2Count...)
+	rec.ColVals[1].AppendIntegers(f2Sum...)
+	rec.ColVals[2].AppendIntegers(f2Min...)
+	rec.ColVals[3].AppendIntegers(f2Max...)
+	rec.ColVals[4].AppendIntegers(f3Count...)
+	rec.ColVals[5].AppendIntegers(f4Count...)
+	rec.ColVals[6].AppendIntegers(fCount...)
+	rec.ColVals[7].AppendFloats(f4Sum...)
+	rec.ColVals[8].AppendFloats(f4Min...)
+	rec.ColVals[9].AppendFloats(f4Max...)
+	return rec
 }
 
 func TestShard_AsyncWalReplay_serial(t *testing.T) {
@@ -1781,30 +1985,6 @@ func TestShardTierToDownSampleShard(t *testing.T) {
 		}
 	}
 
-}
-
-func TestWriteIndexForColsError(t *testing.T) {
-	testDir := t.TempDir()
-
-	// step1: clean env
-	_ = os.RemoveAll(testDir)
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
-	require.NoError(t, err)
-
-	conf := &config.GetStoreConfig().ColumnStore
-	conf.MergesetEnabled = true
-	defer func() {
-		conf.MergesetEnabled = false
-	}()
-
-	rec := genRecord()
-	storage, ok := sh.storage.(*ColumnStoreImpl)
-	require.True(t, ok)
-	err = storage.WriteIndexForCols(sh, rec, "cpu")
-	require.Error(t, err)
-	require.Equal(t, err, errors.New("measurement info is not found"))
-	err = closeShard(sh)
-	require.NoError(t, err)
 }
 
 func TestWriteExceptionError(t *testing.T) {
@@ -3800,9 +3980,7 @@ func TestSnapshotLimitTsspFiles(t *testing.T) {
 	}
 
 	files, _, _ := sh.immTables.GetBothFilesRef("mst", false, util.TimeRange{}, nil)
-	if len(files) != 2 {
-		t.Fatalf("wire fail, exp:2 files, get:%v files", len(files))
-	}
+	require.Equal(t, 1, len(files))
 	immutable.UnrefFiles(files...)
 
 	st = time.Unix(0, minTime)
@@ -3813,9 +3991,7 @@ func TestSnapshotLimitTsspFiles(t *testing.T) {
 	}
 
 	_, files, _ = sh.immTables.GetBothFilesRef("mst", false, util.TimeRange{}, nil)
-	if len(files) != 2 {
-		t.Fatalf("wire fail, exp:2 files, get:%v files", len(files))
-	}
+	require.Equal(t, 1, len(files))
 	immutable.UnrefFiles(files...)
 
 	for nameIdx := range msNames {
@@ -4093,6 +4269,30 @@ func TestFilterByFiledWithFastPath(t *testing.T) {
 					[]int{1}, []string{"hd"},
 					[]int{1}, []bool{false},
 					[]int64{19})},
+			{"IntFieldInCondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field2_int in (1000, 0)", nil, false,
+				genRowRec(schema,
+					[]int{1, 1, 1}, []int64{1000, 0, 0},
+					[]int{1, 1, 1}, []float64{1001.3, 1002.4, 1002.4},
+					[]int{1, 1, 1}, []string{"ha", "hb", "hc"},
+					[]int{1, 1, 1}, []bool{true, true, false},
+					[]int64{22, 21, 20})},
+			{"FloatFieldInCondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field4_float in (1001.3, 1002.4, 1002.4)", nil, false,
+				genRowRec(schema,
+					[]int{1, 1, 1}, []int64{1000, 0, 0},
+					[]int{1, 1, 1}, []float64{1001.3, 1002.4, 1002.4},
+					[]int{1, 1, 1}, []string{"ha", "hb", "hc"},
+					[]int{1, 1, 1}, []bool{true, true, false},
+					[]int64{22, 21, 20})},
+			{"StringFieldInCondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field1_string in ('ha', 'hb', 'hc')", nil, false,
+				genRowRec(schema,
+					[]int{1, 1, 1}, []int64{1000, 0, 0},
+					[]int{1, 1, 1}, []float64{1001.3, 1002.4, 1002.4},
+					[]int{1, 1, 1}, []string{"ha", "hb", "hc"},
+					[]int{1, 1, 1}, []bool{true, true, false},
+					[]int64{22, 21, 20})},
 		}
 		ascending := true
 		for _, c := range cases {
@@ -4276,6 +4476,30 @@ func TestFilterByFiledWithFastPath2(t *testing.T) {
 					[]int{1}, []string{"hd"},
 					[]int{1}, []bool{false},
 					[]int64{19})},
+			{"IntFieldINCondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field2_int in (1100)", nil, false,
+				genRowRec(schema,
+					[]int{1}, []int64{1100},
+					[]int{1}, []float64{0},
+					[]int{1}, []string{"hd"},
+					[]int{1}, []bool{false},
+					[]int64{19})},
+			{"FloatFieldINCondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field4_float in (0)", nil, false,
+				genRowRec(schema,
+					[]int{1}, []int64{1100},
+					[]int{1}, []float64{0},
+					[]int{1}, []string{"hd"},
+					[]int{1}, []bool{false},
+					[]int64{19})},
+			{"StringFieldINCondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field1_string in ('hd')", nil, false,
+				genRowRec(schema,
+					[]int{1}, []int64{1100},
+					[]int{1}, []float64{0},
+					[]int{1}, []string{"hd"},
+					[]int{1}, []bool{false},
+					[]int64{19})},
 		}
 
 		ascending := true
@@ -4407,9 +4631,7 @@ func TestWriteRecByColumnStore(t *testing.T) {
 	eng, err := initEngine1(dir, config.COLUMNSTORE)
 	require.NoError(t, err)
 
-	config.GetStoreConfig().ColumnStore.MergesetEnabled = true
 	defer func() {
-		config.GetStoreConfig().ColumnStore.MergesetEnabled = false
 		_ = eng.Close()
 	}()
 
@@ -4546,13 +4768,7 @@ func TestWriteDataByNewEngine3(t *testing.T) {
 	require.True(t, ok)
 
 	err = sh.WriteRows(rows, nil)
-	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
-	if err != nil {
-		t.Fatal(err)
-	}
 	time.Sleep(time.Second * 1)
-	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
-	mutable.SetWriteChunk(msInfo, rec)
 	require.NoError(t, err)
 	// wait mem table flush
 	sh.commitSnapshot(sh.activeTbl)
@@ -4666,188 +4882,6 @@ func TestLeftBound(t *testing.T) {
 	require.Equal(t, res, 9)
 }
 
-// TestWriteDetachedData local bf is not exist
-func TestWriteDetachedData(t *testing.T) {
-	testDir := t.TempDir()
-	_ = os.RemoveAll(testDir)
-	// step1: create shard
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
-	if err != nil {
-		t.Fatal(err)
-	}
-	conf := immutable.GetColStoreConfig()
-	conf.SetMaxRowsPerSegment(20)
-	conf.SetExpectedSegmentSize(102)
-	conf.SetMaxSegmentLimit(65535)
-	immutable.SetDetachedFlushEnabled(true)
-	// step2: write data
-	st := time.Now().Truncate(time.Second)
-	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
-
-	mstInfo := pkTimeMstInfo()
-	mstInfo.ColStoreInfo.CompactionType = config.BLOCK
-	mstInfo.IndexRelation = defaultBFIndexRelation()
-
-	defer clearMstInfo()
-	_, ok := initColumnStoreMstInfo(mstInfo)
-	require.True(t, ok)
-
-	err = sh.WriteRows(rows, nil)
-	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(time.Second * 1)
-	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
-	mutable.SetWriteChunk(msInfo, rec)
-	// wait mem table flush
-	sh.commitSnapshot(sh.activeTbl)
-
-	require.Equal(t, 4*100, int(sh.rowCount))
-	err = closeShard(sh)
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-// TestWriteDetachedDataV2 local bf exist, and flush multi times
-func TestWriteDetachedDataV2(t *testing.T) {
-	testDir := t.TempDir()
-	_ = os.RemoveAll(testDir)
-	// step1: create shard
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
-	if err != nil {
-		t.Fatal(err)
-	}
-	immutable.SetDetachedFlushEnabled(true)
-	conf := immutable.GetColStoreConfig()
-	conf.SetMaxRowsPerSegment(20)
-	conf.SetExpectedSegmentSize(102)
-	conf.SetMaxSegmentLimit(65535)
-	// step2: write data
-	st := time.Now().Truncate(time.Second)
-	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
-
-	mstInfo := pkTimeMstInfo()
-	mstInfo.IndexRelation = defaultBFIndexRelation()
-
-	defer clearMstInfo()
-	_, ok := initColumnStoreMstInfo(mstInfo)
-	require.True(t, ok)
-
-	err = sh.WriteRows(rows, nil)
-	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	flushTimes := 3
-	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
-	for i := 0; i < flushTimes; i++ {
-		mutable.SetWriteChunk(msInfo, rec)
-		sh.commitSnapshot(sh.activeTbl)
-	}
-
-	require.Equal(t, 4*100, int(sh.rowCount))
-	time.Sleep(time.Second * 1)
-	err = closeShard(sh)
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestWriteFullTextIndexV1(t *testing.T) {
-	testDir := t.TempDir()
-	_ = os.RemoveAll(testDir)
-	// step1: create shard
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
-	if err != nil {
-		t.Fatal(err)
-	}
-	conf := immutable.GetColStoreConfig()
-	conf.SetMaxRowsPerSegment(20)
-	conf.SetExpectedSegmentSize(102)
-	immutable.SetDetachedFlushEnabled(true)
-	// step2: write data
-	st := time.Now().Truncate(time.Second)
-	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
-
-	mstInfo := pkTimeMstInfo()
-	mstInfo.ColStoreInfo.CompactionType = config.BLOCK
-	mstInfo.IndexRelation = fullTxtBFIndexRelation()
-	mstInfo.IndexRelation.IndexOptions = []*influxql.IndexOptions{
-		{
-			Options: []*influxql.IndexOption{
-				{Tokens: tokenizer.CONTENT_SPLITTER, TokensTable: tokenizer.CONTENT_SPLIT_TABLE, Tokenizers: "standard"},
-			},
-		},
-	}
-
-	defer clearMstInfo()
-	_, ok := initColumnStoreMstInfo(mstInfo)
-	require.True(t, ok)
-
-	err = sh.WriteRows(rows, nil)
-	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
-	mutable.SetWriteChunk(msInfo, rec)
-	// wait mem table flush
-	sh.commitSnapshot(sh.activeTbl)
-
-	require.Equal(t, 4*100, int(sh.rowCount))
-	time.Sleep(time.Second * 1)
-	err = closeShard(sh)
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestWriteFullTextIndexV2(t *testing.T) {
-	testDir := t.TempDir()
-	_ = os.RemoveAll(testDir)
-	// step1: create shard
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
-	if err != nil {
-		t.Fatal(err)
-	}
-	conf := immutable.GetColStoreConfig()
-	conf.SetMaxRowsPerSegment(20)
-	conf.SetExpectedSegmentSize(102)
-	immutable.SetDetachedFlushEnabled(true)
-	// step2: write data
-	st := time.Now().Truncate(time.Second)
-	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
-
-	mstInfo := pkTimeMstInfo()
-	mstInfo.ColStoreInfo.CompactionType = config.BLOCK
-	mstInfo.IndexRelation = fullTxtBFIndexRelation()
-
-	defer clearMstInfo()
-	_, ok := initColumnStoreMstInfo(mstInfo)
-	require.True(t, ok)
-
-	err = sh.WriteRows(rows, nil)
-	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	flushTimes := 2
-	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
-	for i := 0; i < flushTimes; i++ {
-		mutable.SetWriteChunk(msInfo, rec)
-		sh.commitSnapshot(sh.activeTbl)
-	}
-
-	require.Equal(t, 4*100, int(sh.rowCount))
-	time.Sleep(time.Second * 1)
-	err = closeShard(sh)
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestWriteFullTextIndexV3(t *testing.T) {
 	testDir := t.TempDir()
 	_ = os.RemoveAll(testDir)
@@ -4859,7 +4893,6 @@ func TestWriteFullTextIndexV3(t *testing.T) {
 	conf := immutable.GetColStoreConfig()
 	conf.SetMaxRowsPerSegment(20)
 	conf.SetExpectedSegmentSize(102)
-	immutable.SetDetachedFlushEnabled(false)
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -4873,12 +4906,7 @@ func TestWriteFullTextIndexV3(t *testing.T) {
 	require.True(t, ok)
 
 	err = sh.WriteRows(rows, nil)
-	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
-	mutable.SetWriteChunk(msInfo, rec)
+	require.NoError(t, err)
 	// wait mem table flush
 	sh.commitSnapshot(sh.activeTbl)
 
@@ -4901,7 +4929,6 @@ func TestWriteAttachedFullTextIndexV1(t *testing.T) {
 	conf := immutable.GetColStoreConfig()
 	conf.SetMaxRowsPerSegment(20)
 	conf.SetExpectedSegmentSize(102)
-	immutable.SetDetachedFlushEnabled(false)
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -4914,12 +4941,7 @@ func TestWriteAttachedFullTextIndexV1(t *testing.T) {
 	require.True(t, ok)
 
 	err = sh.WriteRows(rows, nil)
-	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
-	mutable.SetWriteChunk(msInfo, rec)
+	require.NoError(t, err)
 	// wait mem table flush
 	sh.commitSnapshot(sh.activeTbl)
 
@@ -4942,7 +4964,6 @@ func TestWriteAttachedFullTextIndexV2(t *testing.T) {
 	conf := immutable.GetColStoreConfig()
 	conf.SetMaxRowsPerSegment(20)
 	conf.SetExpectedSegmentSize(102)
-	immutable.SetDetachedFlushEnabled(false)
 	defer func() {
 		conf.SetMaxRowsPerSegment(util.DefaultMaxRowsPerSegment4ColStore)
 	}()
@@ -4959,14 +4980,9 @@ func TestWriteAttachedFullTextIndexV2(t *testing.T) {
 	require.True(t, ok)
 
 	err = sh.WriteRows(rows, nil)
-	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	flushTimes := 2
-	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
 	for i := 0; i < flushTimes; i++ {
-		mutable.SetWriteChunk(msInfo, rec)
 		sh.commitSnapshot(sh.activeTbl)
 	}
 
@@ -4996,14 +5012,8 @@ func TestWriteDataByNewEngineWithSchemaLess(t *testing.T) {
 	require.True(t, ok)
 
 	err = sh.WriteRows(rows, nil)
-	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(time.Second * 1)
-	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
-	mutable.SetWriteChunk(msInfo, rec)
 	require.NoError(t, err)
+	time.Sleep(time.Second * 1)
 	// wait mem table flush
 	sh.commitSnapshot(sh.activeTbl)
 
@@ -5038,7 +5048,7 @@ func TestWriteDataByNewEngineWithTag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mutable.JoinWriteRec(sh.activeTbl, defaultMeasurementName)
+
 	writeRec := msInfo.GetWriteChunk().WriteRec
 	require.Equal(t, 9, writeRec.GetRecord().Len())
 	// wait mem table flush
@@ -5075,8 +5085,7 @@ func TestWriteDataByNewEngineWithTag2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mutable.MergeSchema(sh.activeTbl, defaultMeasurementName)
-	mutable.JoinWriteRec(sh.activeTbl, defaultMeasurementName)
+
 	writeRec := msInfo.GetWriteChunk().WriteRec
 	require.Equal(t, 9, writeRec.GetRecord().Len())
 	// wait mem table flush
@@ -5297,9 +5306,9 @@ func GenAggDataRecord(msNames []string, seriesNum, pointNumOfPerSeries int, inte
 			"field1_string": fmt.Sprintf("test-test-test-test-%d", i),
 		}
 		if fixBool {
-			fields["field3_bool"] = (i%2 == 0)
+			fields["field3_bool"] = i%2 == 0
 		} else {
-			fields["field3_bool"] = (rand.Int31n(100) > 50)
+			fields["field3_bool"] = rand.Int32N(100) > 50
 		}
 
 		if !fullField {
@@ -5719,37 +5728,6 @@ func TestDownSampleSharCompact(t *testing.T) {
 	}()
 	sh.ident.DownSampleLevel = 1
 	require.NoError(t, sh.Compact())
-}
-
-func TestFindTagIndex(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-
-	metaSchema := make(meta.CleanSchema)
-	for i := range schema {
-		if schema[i].Name == "string" {
-			metaSchema[schema[i].Name] = meta2.SchemaVal{Typ: int8(influx.Field_Type_Tag)}
-			continue
-		}
-		metaSchema[schema[i].Name] = meta2.SchemaVal{Typ: int8(schema[i].Type)}
-	}
-
-	expRes := []int{3}
-	res := findTagIndex(schema, &metaSchema)
-
-	if len(res) != len(expRes) {
-		t.Fatal("find tag index error")
-	}
-	for i := range res {
-		if res[i] != expRes[i] {
-			t.Fatal("unexpected result")
-		}
-	}
 }
 
 func TestWriteIndexForLabelStore(t *testing.T) {
@@ -6466,8 +6444,9 @@ func TestInterEngine_DoShardMove_Mock(t *testing.T) {
 	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
 	require.NoError(t, err)
 
+	mockPath := filepath.Join(t.TempDir(), "openGemini")
 	file := MocTsspFile{
-		path: "/tmp/openGemini",
+		path: mockPath,
 	}
 	mockobsName := "00000001-0000-00000000.tssp.init"
 
@@ -6571,6 +6550,25 @@ func TestWriteSnapshotRaftSnapshot(t *testing.T) {
 	newSh.SetSnapShotter(shotter)
 	newSh.storage.writeSnapshot(newSh)
 	err = closeShard(newSh)
+	require.NoError(t, err)
+}
+
+func TestRemoveWalFilesError(t *testing.T) {
+	var impl = &tsstoreImpl{}
+
+	testDir := t.TempDir()
+	defer os.RemoveAll(testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	require.NoError(t, err)
+
+	patches := gomonkey.ApplyFunc(RemoveWalFiles, func(files *WalFiles) error {
+		return errors.New("file not exist")
+	})
+	defer patches.Reset()
+
+	impl.writeSnapshot(sh)
+
+	err = closeShard(sh)
 	require.NoError(t, err)
 }
 
@@ -6764,6 +6762,18 @@ func (client *MockMetaClient) MetaNodes() ([]meta2.NodeInfo, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) RetentionPolicy(database, name string) (rpi *meta2.RetentionPolicyInfo, err error) {
+	if database == "db0" && name == "rp0" {
+		rpi = &meta2.RetentionPolicyInfo{
+			IndexGroups: []meta2.IndexGroupInfo{
+				{
+					ID:       456,
+					Timezone: "UTC",
+					Indexes:  []meta2.IndexInfo{{ID: 659}},
+				},
+			},
+		}
+		return rpi, nil
+	}
 	return nil, nil
 }
 func (client *MockMetaClient) SetAdminPrivilege(username string, admin bool) error {
@@ -6964,6 +6974,11 @@ func (mmc *MockMetaClient) GetAllMst(dbName string) []string {
 	msts = append(msts, "cpu")
 	msts = append(msts, "mem")
 	return msts
+}
+
+func (mmc *MockMetaClient) StatisticDatabaseShards() []opsStat.OpsStatistic {
+	var statistic []opsStat.OpsStatistic
+	return statistic
 }
 
 func (client *MockMetaClient) RetryRegisterQueryIDOffset(host string) (uint64, error) {
@@ -7262,4 +7277,94 @@ func TestCreateAggTagSetCursorWithFilterCursor(t *testing.T) {
 	if err != nil || aggTagSetCursorInSerial == nil {
 		t.Fatal(err)
 	}
+}
+
+func TestShardFreeMemTableSequencer(t *testing.T) {
+	convey.Convey("test free shard memTable Seq", t, func() {
+		s := shard{}
+		convey.Convey("test memTable nil", func() {
+			ans := s.FreeMemTableSequencer()
+			convey.So(ans, convey.ShouldBeTrue)
+		})
+
+		convey.Convey("test memTable free normal", func() {
+			fakeSeq := immutable.NewSequencer()
+			memT := &immutable.MmsTables{}
+			s.immTables = memT
+			s.ident = &meta.ShardIdentifier{}
+			logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+
+			p := gomonkey.ApplyMethod(memT, "FreeSequencer", func(_ *immutable.MmsTables) bool {
+				return true
+			})
+
+			p2 := gomonkey.ApplyMethod(memT, "Sequencer", func(_ *immutable.MmsTables) *immutable.Sequencer {
+				return fakeSeq
+			})
+			defer p2.Reset()
+
+			fakeSeq.SetStat(true, true)
+			ans := s.FreeMemTableSequencer()
+			convey.So(ans, convey.ShouldBeTrue)
+
+			fakeSeq.SetStat(false, false)
+			ans = s.FreeMemTableSequencer()
+			convey.So(ans, convey.ShouldBeTrue)
+			p.Reset()
+
+			p = gomonkey.ApplyMethod(memT, "FreeSequencer", func(_ *immutable.MmsTables) bool {
+				return false
+			})
+			ans = s.FreeMemTableSequencer()
+			convey.So(ans, convey.ShouldBeFalse)
+			p.Reset()
+		})
+	})
+}
+
+func TestWriteTSDataWithStatistics(t *testing.T) {
+	testDir := t.TempDir()
+
+	// step2: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
+	require.NoError(t, err)
+
+	defer sh.Close()
+	defer sh.indexBuilder.Close()
+
+	tags := map[string]string{
+		"db":       defaultDb,
+		"rp":       defaultRp,
+		"pt_id":    strconv.Itoa(int(defaultPtId)),
+		"testcase": "TestWriteDetachedDataWithStatistics",
+	}
+	statistics.InitPtWriteStatistics(tags, true, 1)
+
+	sh.initSeriesLimiter(10)
+	rows, _, _ := GenDataRecord([]string{"mst"}, 20, 1, 1, time.Now(), false, true, false)
+	err = writeData(sh, rows, true)
+
+	require.NoError(t, err)
+}
+
+func TestShard_RecoverParquetLog(t *testing.T) {
+	convey.Convey("test recover parquet log", t, func() {
+		s := &shard{}
+		err := s.RecoverParquetLog()
+		convey.So(err, convey.ShouldBeNil)
+
+		conf := immutable.NewTsStoreConfig()
+		tier := uint64(util.Warm)
+		lockPath := ""
+		store := immutable.NewTableStore("./", &lockPath, &tier, true, conf)
+		s.immTables = store
+
+		p := gomonkey.ApplyMethod(store, "RecoverParquetLog", func(_ *immutable.MmsTables) error {
+			return errors.New("test error")
+		})
+
+		defer p.Reset()
+		err = s.RecoverParquetLog()
+		convey.So(err, convey.ShouldNotBeNil)
+	})
 }

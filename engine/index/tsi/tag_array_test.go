@@ -22,13 +22,13 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/dictmap"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/savsgio/dictpool"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -268,7 +268,7 @@ func CreateIndexByPts_TagArray(iBuilder *IndexBuilder, idx Index, genKeys func()
 		pts = append(pts, pt)
 	}
 
-	mmPoints := &dictpool.Dict{}
+	mmPoints := make(dictmap.DictMap[string, *[]influx.Row])
 	mmPoints.Set("mn-1", &pts)
 	if err := iBuilder.CreateIndexIfNotExists(mmPoints, true); err != nil {
 		if !strings.Contains(err.Error(), "error tag array") {
@@ -276,12 +276,7 @@ func CreateIndexByPts_TagArray(iBuilder *IndexBuilder, idx Index, genKeys func()
 		}
 	}
 
-	for mmIndex := range mmPoints.D {
-		rows, ok := mmPoints.D[mmIndex].Value.(*[]influx.Row)
-		if !ok {
-			panic("create index failed due to map mmPoints")
-		}
-
+	for _, rows := range mmPoints {
 		for rowIdx := range *rows {
 			if (*rows)[rowIdx].SeriesId == 0 {
 				panic("create index failed")
@@ -320,7 +315,7 @@ func CreateIndexByPts_TagArray_Error(iBuilder *IndexBuilder, idx Index, genKeys 
 		pts = append(pts, pt)
 	}
 
-	mmPoints := &dictpool.Dict{}
+	mmPoints := make(dictmap.DictMap[string, *[]influx.Row])
 	mmPoints.Set("mn-1", &pts)
 	err := iBuilder.CreateIndexIfNotExists(mmPoints, true)
 
@@ -1183,7 +1178,7 @@ func BenchmarkWrite_With_TagArray(b *testing.B) {
 		pts = append(pts, pt)
 	}
 
-	mmPoints := &dictpool.Dict{}
+	mmPoints := make(dictmap.DictMap[string, *[]influx.Row])
 	mmPoints.Set("mn-1", &pts)
 
 	for i := 0; i < b.N; i++ {
@@ -1234,7 +1229,7 @@ func BenchmarkWrite_With_NoTagArray(b *testing.B) {
 		pts = append(pts, pt)
 	}
 
-	mmPoints := &dictpool.Dict{}
+	mmPoints := make(dictmap.DictMap[string, *[]influx.Row])
 	mmPoints.Set("mn-1", &pts)
 
 	for i := 0; i < b.N; i++ {

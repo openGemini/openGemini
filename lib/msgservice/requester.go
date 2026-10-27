@@ -106,6 +106,17 @@ func (r *Requester) SysCtrl(req *SysCtrlRequest) (interface{}, error) {
 	return cb.GetResponse(), nil
 }
 
+func (r *Requester) TaskResponse() (interface{}, error) {
+	data := NewTaskMessage(r.msgTyp, r.data)
+	cb := &GetTaskCallback{}
+
+	if err := r.Request(spdy.TaskNodeRequest, data, cb); err != nil {
+		return nil, err
+	}
+
+	return cb.GetResponse(), nil
+}
+
 func (r *Requester) requestRaftMsg(queryTyp uint8, data transport.Codec, cb transport.Callback) error {
 	var trans *transport.Transport
 	var err error

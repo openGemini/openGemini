@@ -344,3 +344,44 @@ func TestSrLoggerErr(t *testing.T) {
 	logger.GetSrLogger().Warningf("warnf")
 	logger.InitSrLogger(config.Logger{Level: 20})
 }
+
+func TestInitLogger(t *testing.T) {
+	for _, testcase := range []struct {
+		App    config.App
+		SetNil bool
+	}{
+		{App: config.AppSql, SetNil: false},
+		{App: config.AppStore, SetNil: false},
+		{App: config.AppSingle, SetNil: false},
+		{App: config.AppSql, SetNil: true},
+		{App: config.AppStore, SetNil: true},
+		{App: config.AppSingle, SetNil: true},
+	} {
+		conf := config.NewLogger(testcase.App)
+		if testcase.SetNil {
+			conf.QueryLogger = nil
+			conf.SlowQueryLogger = nil
+			conf.AuditLogger = nil
+			conf.CompactLogger = nil
+		}
+		logger.InitLogger(conf)
+		if testcase.App == config.AppSql {
+			assert.NotEmpty(t, logger.GetSlowQueryLogger())
+			assert.NotEmpty(t, logger.GetQueryLogger())
+			assert.NotEmpty(t, logger.GetAuditLogger())
+		} else if testcase.App == config.AppStore {
+			compactLogger, endF := logger.GetCompactLogger("", "")
+			assert.NotEmpty(t, compactLogger)
+			assert.NotEmpty(t, endF)
+		} else {
+			assert.NotEmpty(t, logger.GetSlowQueryLogger())
+			assert.NotEmpty(t, logger.GetQueryLogger())
+			assert.NotEmpty(t, logger.GetAuditLogger())
+			compactLogger, endF := logger.GetCompactLogger("", "")
+			assert.NotEmpty(t, compactLogger)
+			assert.NotEmpty(t, endF)
+		}
+	}
+	traceID := logger.GenTraceID()
+	assert.NotEmpty(t, traceID)
+}

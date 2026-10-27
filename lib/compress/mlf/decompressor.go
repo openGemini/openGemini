@@ -22,6 +22,8 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 )
 
+//go:generate tmpl -data=@decompressor.gen.data decompressor.gen.go.tmpl
+
 type Decompressor struct {
 	bm     BitMap
 	values []float64
@@ -70,13 +72,13 @@ func (d *Decompressor) Decode(data []byte) []float64 {
 		data = data[10:]
 	}
 
-	if len(bmBytes) == 0 && bitSize < maxFactorBits {
+	if len(bmBytes) == 0 && bitSize <= maxFactorBits {
 		// no zero, no uncompressed, no negative
 		decodeFuncTable[bitSize](d.values, data, pow10[precisionSize], multiplicand, publicPrefixSize)
 		return d.values
 	}
 
-	if len(bmBytes) > 0 && bitSize > 0 && bitSize < maxFactorBits {
+	if len(bmBytes) > 0 && bitSize > 0 && bitSize <= maxFactorBits {
 		d.decodeMix(data, uncompressed, bmBytes[1:], bitSize, pow10[precisionSize], multiplicand, publicPrefixSize)
 		return d.values
 	}

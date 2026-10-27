@@ -25,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/smartystreets/goconvey/convey"
@@ -353,9 +354,14 @@ func createSortQuerySchema() *executor.QuerySchema {
 			Alias: "",
 		},
 	})
+	sortFields := influxql.SortFields{
+		&influxql.SortField{
+			Name: "time", Ascending: true,
+		},
+	}
 	var names []string
 	names = append(names, "f1")
-	schema := executor.NewQuerySchema(fields, names, &opt, nil)
+	schema := executor.NewQuerySchema(fields, names, &opt, sortFields)
 	schema.AddTable(m, schema.MakeRefs())
 	return schema
 }
@@ -1588,7 +1594,14 @@ func TestBuildInTagConditionPlan(t *testing.T) {
 	convey.Convey("normal condition", t, func() {
 		sql := "select * from mst where \"host\" in (select \"host02\" from mst1 where time > now() - 5m)"
 		creator, selectStmt, schema, builder := PrepareForInnerPlan(sql, t)
-		_, err := executor.BuildInConditionPlan(context.Background(), creator, selectStmt, schema, builder)
+		var key = []uint64{1}
+		ctx := context.WithValue(context.Background(), (query.QueryIDKey), key)
+		ssqs := statistics.NewSqlSlowQueryStatistics("db0")
+		locs := make([][2]int, 0)
+		locs = append(locs, [2]int{0, 31})
+		ssqs.SetQueryAndLocs("select * from mst where \"host\" in (select \"host02\" from mst1 where time > now() - 5m)", locs)
+		ctx = context.WithValue(ctx, query.QueryDurationKey, ssqs)
+		_, err := executor.BuildInConditionPlan(ctx, creator, selectStmt, schema, builder)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1597,6 +1610,13 @@ func TestBuildInTagConditionPlan(t *testing.T) {
 	convey.Convey("without time filter", t, func() {
 		sql := "select * from mst where \"host\" in (select \"host02\" from mst1)"
 		creator, selectStmt, schema, builder := PrepareForInnerPlan(sql, t)
+		var key = []uint64{1}
+		ctx := context.WithValue(context.Background(), (query.QueryIDKey), key)
+		ssqs := statistics.NewSqlSlowQueryStatistics("db0")
+		locs := make([][2]int, 0)
+		locs = append(locs, [2]int{0, 31})
+		ssqs.SetQueryAndLocs("select * from mst where \"host\" in (select \"host02\" from mst1)", locs)
+		ctx = context.WithValue(ctx, query.QueryDurationKey, ssqs)
 		_, err := executor.BuildInConditionPlan(context.Background(), creator, selectStmt, schema, builder)
 		if err != nil {
 			t.Fatal(err)
@@ -1778,4 +1798,67 @@ func TestLogicalDistinct(t *testing.T) {
 	assert.Equal(t, node, nil)
 	assert.Equal(t, len(distinct.Children()), 1)
 	assert.Equal(t, distinct.Type(), "*executor.LogicalDistinct")
+}
+
+func TestLogicalDistinctForSelect(t *testing.T) {
+	opt := &query.ProcessorOptions{}
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.VarRef{
+				Val:  "value1",
+				Type: influxql.String,
+			},
+		},
+		&influxql.Field{
+			Expr: &influxql.VarRef{
+				Val:  "value2",
+				Type: influxql.Float,
+			},
+			Auxiliary: true,
+		},
+	}
+	schema := executor.NewQuerySchema(fields, []string{"value1", "value2"}, opt, nil)
+	schema.SetSelectDistinct(true)
+	series := executor.NewLogicalSeries(schema)
+	reader := executor.NewLogicalReader(series, schema)
+	distinct := executor.NewLogicalDistinct(reader, schema)
+	assert.Equal(t, 2, len(distinct.Children()[0].Schema().Fields()))
+	assert.Equal(t, 1, len(distinct.RowDataType().Fields()))
+}
+
+func TestLogicalLLMSemantic(t *testing.T) {
+	llmFunc := query.LLM_GENERATE
+	opt := &query.ProcessorOptions{
+		Dimensions: []string{"country"},
+	}
+	fields := []*influxql.Field{{Expr: &influxql.Call{
+		Name: llmFunc,
+		Args: []influxql.Expr{
+			&influxql.VarRef{
+				Val:  "string",
+				Type: influxql.String,
+			},
+			&influxql.StringLiteral{
+				Val: "Represent countries using ISO 3166 country codes:",
+			},
+		},
+	}}, {Expr: &influxql.VarRef{
+		Val:  "int64",
+		Type: influxql.Integer,
+	}}}
+	schema := executor.NewQuerySchema(fields, []string{"string", "int64"}, opt, nil)
+	series := executor.NewLogicalSeries(schema)
+	reader := executor.NewLogicalReader(series, schema)
+	llmSemantic := executor.NewLogicalLLMSemantic(reader, schema)
+	assert.Equal(t, nil, llmSemantic.New(nil, nil, nil))
+	llmSemantic.DeriveOperations()
+	llmSemantic.Clone()
+	llmSemantic.Digest()
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	llmSemantic.Explain(planWriter)
+	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
+	planBuilder.Push(reader)
+	planBuilder.LLMSemantic()
+	assert.Equal(t, len(llmSemantic.Children()), 1)
+	assert.Equal(t, llmSemantic.Type(), "*executor.LogicalLLMSemantic")
 }

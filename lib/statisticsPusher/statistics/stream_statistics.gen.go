@@ -28,10 +28,13 @@ import (
 )
 
 type StreamStatistics struct {
-	itemStreamIn        int64
-	itemStreamInNum     int64
-	itemStreamFilter    int64
-	itemStreamFilterNum int64
+	itemStreamIn           int64
+	itemStreamInNum        int64
+	itemStreamFilterIn     int64
+	itemStreamFilterInNum  int64
+	itemStreamFilterOut    int64
+	itemStreamFilterOutNum int64
+	itemStreamReplayInNum  int64
 
 	mu  sync.RWMutex
 	buf []byte
@@ -54,10 +57,13 @@ func (s *StreamStatistics) Init(tags map[string]string) {
 
 func (s *StreamStatistics) Collect(buffer []byte) ([]byte, error) {
 	data := map[string]interface{}{
-		"StreamIn":        s.itemStreamIn,
-		"StreamInNum":     s.itemStreamInNum,
-		"StreamFilter":    s.itemStreamFilter,
-		"StreamFilterNum": s.itemStreamFilterNum,
+		"StreamIn":           s.itemStreamIn,
+		"StreamInNum":        s.itemStreamInNum,
+		"StreamFilterIn":     s.itemStreamFilterIn,
+		"StreamFilterInNum":  s.itemStreamFilterInNum,
+		"StreamFilterOut":    s.itemStreamFilterOut,
+		"StreamFilterOutNum": s.itemStreamFilterOutNum,
+		"StreamReplayInNum":  s.itemStreamReplayInNum,
 	}
 
 	buffer = AddPointToBuffer("stream", s.tags, data, buffer)
@@ -73,10 +79,13 @@ func (s *StreamStatistics) Collect(buffer []byte) ([]byte, error) {
 
 func (s *StreamStatistics) CollectOps() []opsStat.OpsStatistic {
 	data := map[string]interface{}{
-		"StreamIn":        s.itemStreamIn,
-		"StreamInNum":     s.itemStreamInNum,
-		"StreamFilter":    s.itemStreamFilter,
-		"StreamFilterNum": s.itemStreamFilterNum,
+		"StreamIn":           s.itemStreamIn,
+		"StreamInNum":        s.itemStreamInNum,
+		"StreamFilterIn":     s.itemStreamFilterIn,
+		"StreamFilterInNum":  s.itemStreamFilterInNum,
+		"StreamFilterOut":    s.itemStreamFilterOut,
+		"StreamFilterOutNum": s.itemStreamFilterOutNum,
+		"StreamReplayInNum":  s.itemStreamReplayInNum,
 	}
 
 	return []opsStat.OpsStatistic{
@@ -96,12 +105,24 @@ func (s *StreamStatistics) AddStreamInNum(i int64) {
 	atomic.AddInt64(&s.itemStreamInNum, i)
 }
 
-func (s *StreamStatistics) AddStreamFilter(i int64) {
-	atomic.AddInt64(&s.itemStreamFilter, i)
+func (s *StreamStatistics) AddStreamFilterIn(i int64) {
+	atomic.AddInt64(&s.itemStreamFilterIn, i)
 }
 
-func (s *StreamStatistics) AddStreamFilterNum(i int64) {
-	atomic.AddInt64(&s.itemStreamFilterNum, i)
+func (s *StreamStatistics) AddStreamFilterInNum(i int64) {
+	atomic.AddInt64(&s.itemStreamFilterInNum, i)
+}
+
+func (s *StreamStatistics) AddStreamFilterOut(i int64) {
+	atomic.AddInt64(&s.itemStreamFilterOut, i)
+}
+
+func (s *StreamStatistics) AddStreamFilterOutNum(i int64) {
+	atomic.AddInt64(&s.itemStreamFilterOutNum, i)
+}
+
+func (s *StreamStatistics) AddStreamReplayInNum(i int64) {
+	atomic.AddInt64(&s.itemStreamReplayInNum, i)
 }
 
 func (s *StreamStatistics) Push(item *StreamStatItem) {

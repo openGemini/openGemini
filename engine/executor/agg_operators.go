@@ -23,11 +23,11 @@ import (
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
-	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
 func init() {
 	RegistryAggOp("ad_rmse_ext", &ADRmseExtOp{})
+	RegistryAggOp("ad_diff_abs", &ADDiffAbsOp{})
 	RegistryAggOp("min", &MinOp{})
 	RegistryAggOp("max", &MaxOp{})
 	RegistryAggOp("percentile_approx", &PercentileApproxOp{})
@@ -43,9 +43,9 @@ func init() {
 	RegistryAggOp("quantile_prom", &PromQuantileOp{})
 	RegistryAggOp("absent_prom", &PromAbsentOp{})
 	RegistryAggOp("regr_slope", &RegrSlopeOp{})
-	RegistryAggOp(query.CASTOR, &CastorOp{})
-	RegistryAggOp(query.CASTOR_AD, &CastorADOp{})
+	RegistryAggOp("ad_slope_score", &ADSlopeScoreOp{})
 	RegistryAggOp("rca", &RCAOp{})
+	RegistryAggOp("ad_diff_time", &ADDiffTimeOp{})
 }
 
 type ADRmseExtOp struct{}
@@ -69,6 +69,30 @@ func (c *ADRmseExtOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) 
 			inOrdinal, outOrdinal), nil
 	default:
 		return nil, errno.NewError(errno.UnsupportedDataType, "ad_rmse_ext", dataType.String())
+	}
+}
+
+type ADDiffAbsOp struct{}
+
+func (c *ADDiffAbsOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
+	inRowDataType, outRowDataType, opt, isSingleCall := params.InRowDataType, params.OutRowDataType, params.ExprOpt, params.IsSingleCall
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, errno.NewError(errno.SchemaNotAligned, "ad_diff_abs", "input and output schemas are not aligned")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Float:
+		return NewRoutineImpl(NewFloatColFloatSliceIterator(ADDiffAbsReduce[float64],
+			isSingleCall, inOrdinal, outOrdinal, nil, outRowDataType),
+			inOrdinal, outOrdinal), nil
+	case influxql.Integer:
+		return NewRoutineImpl(NewIntegerColIntegerSliceIterator(ADDiffAbsReduce[int64],
+			isSingleCall, inOrdinal, outOrdinal, nil, outRowDataType),
+			inOrdinal, outOrdinal), nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedDataType, "ad_diff_abs", dataType.String())
 	}
 }
 
@@ -148,18 +172,6 @@ func (c *PercentileApproxOp) CreateRoutine(params *AggCallFuncParams) (Routine, 
 	}
 	percentile /= 100
 	return NewPercentileApproxRoutineImpl(inRowDataType, outRowDataType, exprOpt, isSingleCall, opt, name, clusterNum, percentile)
-}
-
-type CastorOp struct{}
-
-func (c *CastorOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
-	return nil, nil
-}
-
-type CastorADOp struct{}
-
-func (c *CastorADOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
-	return nil, nil
 }
 
 type BasePromOp struct {
@@ -401,6 +413,31 @@ func (c *RegrSlopeOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) 
 	}
 }
 
+type ADSlopeScoreOp struct{}
+
+func (c *ADSlopeScoreOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
+	inRowDataType, outRowDataType, opt, isSingleCall := params.InRowDataType, params.OutRowDataType, params.ExprOpt, params.IsSingleCall
+
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, errno.NewError(errno.SchemaNotAligned, "ad_slope_score", "input and output schemas are not aligned")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Float:
+		return NewRoutineImpl(NewFloatColFloatSliceIterator(ADSlopeScoreReduce[float64],
+			isSingleCall, inOrdinal, outOrdinal, nil, outRowDataType),
+			inOrdinal, outOrdinal), nil
+	case influxql.Integer:
+		return NewRoutineImpl(NewIntegerColIntegerSliceIterator(ADSlopeScoreReduce[int64],
+			isSingleCall, inOrdinal, outOrdinal, nil, outRowDataType),
+			inOrdinal, outOrdinal), nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedDataType, "ad_slope_score", dataType.String())
+	}
+}
+
 type RCAOp struct{}
 
 func (c *RCAOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
@@ -438,4 +475,28 @@ func (c *RCAOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
 	}
 
 	return NewRoutineImpl(NewGraphFilterIterator(FaultDemarcation, outOrdinal, algoParams, ordinalMap), inOrdinal, outOrdinal), nil
+}
+
+type ADDiffTimeOp struct{}
+
+func (c *ADDiffTimeOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
+	inRowDataType, outRowDataType, opt, isSingleCall := params.InRowDataType, params.OutRowDataType, params.ExprOpt, params.IsSingleCall
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, errno.NewError(errno.SchemaNotAligned, "ad_diff_time", "input and output schemas are not aligned")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Float:
+		return NewRoutineImpl(NewFloatColFloatSliceIterator(ADDiffTimeReduce[float64],
+			isSingleCall, inOrdinal, outOrdinal, nil, outRowDataType),
+			inOrdinal, outOrdinal), nil
+	case influxql.Integer:
+		return NewRoutineImpl(NewIntegerColIntegerSliceIterator(ADDiffTimeReduce[int64],
+			isSingleCall, inOrdinal, outOrdinal, nil, outRowDataType),
+			inOrdinal, outOrdinal), nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedDataType, "ad_diff_time", dataType.String())
+	}
 }

@@ -45,3 +45,7 @@ func (vh *ApiVersionHandler) Handle(header protocol.RequestHeader, _ []byte, onM
 
 	return onMessage(versions)
 }
+
+func (vh *ApiVersionHandler) Release() {
+
+}

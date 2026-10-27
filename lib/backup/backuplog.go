@@ -25,13 +25,23 @@ type IncBackupLogInfo struct {
 	DelFileListMap map[string][][]string `json:"delOrderFileListMap"`
 }
 
-type MetaBackupLogInfo struct {
-	MetaIds []string `json:"metaIds"`
-	IsNode  bool     `json:"isNode"`
-}
-
 type BackupResult struct {
 	Result    string              `json:"result"`
-	DataBases map[string]struct{} `json:"databases"`
+	Databases map[string]struct{} `json:"databases"`
 	Time      int64               `json:"time"`
+	DataDir   string              `json:"dataDir"`
+	MetaDir   string              `json:"metaDir"`
+	WalDir    string              `json:"walDir"`
+}
+
+type NodeInfoMap struct {
+	SrcNode uint64                           `json:"srcNode"`
+	DstNode uint64                           `json:"dstNode"`
+	DbMap   map[string]map[string]*RpInfoMap `json:"dbMap"`
+	PtMap   map[string]map[string]string     `json:"ptMap"`
+}
+
+type RpInfoMap struct {
+	ShardMap map[string]string `json:"shardMap"`
+	IndexMap map[string]string `json:"indexMap"`
 }

@@ -30,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/dictmap"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/obs"
@@ -39,7 +40,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/savsgio/dictpool"
 )
 
 var (
@@ -591,7 +591,7 @@ func (gs GroupSeries) SeriesCnt() int {
 }
 
 type Index interface {
-	CreateIndexIfNotExists(mmRows *dictpool.Dict) error
+	CreateIndexIfNotExists(mmRows dictmap.DictMap[string, *[]influx.Row]) error
 	GetSeriesIdBySeriesKey(key []byte) (uint64, error)
 	SearchSeries(series [][]byte, name []byte, condition influxql.Expr, tr TimeRange) ([][]byte, error)
 	SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions, callBack func(num int64) error, _ interface{}) (GroupSeries, int64, error)

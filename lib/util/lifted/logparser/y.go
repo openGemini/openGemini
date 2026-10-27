@@ -279,6 +279,7 @@ type yyLexer interface {
 type yyParser interface {
 	Parse(yyLexer) int
 	Lookahead() int
+	Release()
 }
 
 type yyParserImpl struct {
@@ -292,7 +293,7 @@ func (p *yyParserImpl) Lookahead() int {
 }
 
 func yyNewParser() yyParser {
-	return &yyParserImpl{}
+	return yyParserPool.Get()
 }
 
 const yyFlag = -1000
@@ -415,7 +416,9 @@ out:
 }
 
 func yyParse(yylex yyLexer) int {
-	return yyNewParser().Parse(yylex)
+	p := yyNewParser()
+	defer p.Release()
+	return p.Parse(yylex)
 }
 
 func (yyrcvr *yyParserImpl) Parse(yylex yyLexer) int {

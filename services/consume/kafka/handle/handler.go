@@ -50,6 +50,7 @@ func handlerKey(id, ver uint16) uint32 {
 
 type Handler interface {
 	Handle(header protocol.RequestHeader, buf []byte, onMessage OnMessage) error
+	Release()
 }
 
 type HandlerFactory struct {
@@ -117,5 +118,10 @@ func (hm *HandlerManager) Call(header protocol.RequestHeader, body []byte, onMes
 }
 
 func (hm *HandlerManager) MustClose() {
-
+	// to release fetch handler
+	h, ok := hm.handles[handlerKey(Fetch, V2)]
+	if !ok {
+		return
+	}
+	h.Release()
 }

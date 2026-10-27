@@ -45,6 +45,20 @@ func TestBucketCanOutOflimit(t *testing.T) {
 	}
 }
 
+func TestBucketGetTotalResource(t *testing.T) {
+	bt := bucket.NewInt64Bucket(time.Minute, 1000, true)
+	if bt.GetTotalResource() != 1000 {
+		t.Error("TestBucketGetTotalResource error")
+	}
+}
+
+func TestBucketGetBlockExecutor(t *testing.T) {
+	bt := bucket.NewInt64Bucket(time.Minute, 1000, true)
+	if bt.GetBlockExecutor() != 0 {
+		t.Error("TestBucketGetBlockExecutor error")
+	}
+}
+
 func TestBucketCannotOutOfLimit(t *testing.T) {
 	bt := bucket.NewInt64Bucket(time.Minute, 1000, false)
 	err := bt.GetResource(1000)

@@ -66,7 +66,7 @@ type tsmMergeCursor struct {
 }
 
 func newTsmMergeCursor(ctx *idKeyCursorContext, sid uint64, filter influxql.Expr, rowFilters *[]clv.RowFilter,
-	tags *influx.PointTags, lazyInit bool, _ *tracing.Span) (*tsmMergeCursor, error) {
+	tags *influx.PointTags, lazyInit bool, span *tracing.Span) (*tsmMergeCursor, error) {
 
 	c := getTsmCursor()
 	c.ctx = ctx
@@ -77,6 +77,7 @@ func newTsmMergeCursor(ctx *idKeyCursorContext, sid uint64, filter influxql.Expr
 	c.orderRecIter.reset()
 	c.outOrderRecIter.reset()
 	c.sid = sid
+	c.ctx.SetSpan(span)
 	// if not sortedSeries, add location info in next function.
 	if !lazyInit {
 		c.locations = immutable.NewLocationCursor(len(ctx.readers.Orders))
@@ -119,6 +120,7 @@ func AddLocations(l *immutable.LocationCursor, files immutable.TableReaders, ctx
 			return nil
 		}
 		loc := immutable.NewLocation(r, ctx.decs)
+		loc.SetSpan(ctx.span)
 		contains, err := loc.Contains(sid, ctx.tr, metaCtx)
 		if err != nil {
 			return err
@@ -131,13 +133,13 @@ func AddLocations(l *immutable.LocationCursor, files immutable.TableReaders, ctx
 }
 
 func AddLocationsWithInit(l *immutable.LocationCursor, files immutable.TableReaders, ctx *idKeyCursorContext, sid uint64) error {
-	var chunkMetaContext *immutable.ChunkMetaContext
-	if ctx.querySchema.Options().IsPromQuery() && ctx.metaContext != nil {
-		chunkMetaContext = ctx.metaContext
-	} else {
+	chunkMetaContext := ctx.metaContext
+	if chunkMetaContext == nil {
 		chunkMetaContext = immutable.NewChunkMetaContext(ctx.schema)
-		defer chunkMetaContext.Release()
+		ctx.metaContext = chunkMetaContext
 	}
+	chunkMetaContext.InitColumns(ctx.schema)
+
 	if err := AddLocations(l, files, ctx, sid, chunkMetaContext); err != nil {
 		return err
 	}
@@ -168,6 +170,7 @@ func AddLocationsWithLimit(l *immutable.LocationCursor, files immutable.TableRea
 
 		r := files[filesIndex]
 		loc := immutable.NewLocation(r, ctx.decs)
+		loc.SetSpan(ctx.span)
 		contains, err := loc.Contains(sid, ctx.tr, chunkMetaContext)
 		if err != nil {
 			return 0, err
@@ -212,6 +215,7 @@ func AddLocationsWithFirstTime(l *immutable.LocationCursor, files immutable.Tabl
 
 	for _, r := range files {
 		loc := immutable.NewLocation(r, ctx.decs)
+		loc.SetSpan(ctx.span)
 		contains, err := loc.Contains(sid, ctx.tr, chunkMetaContext)
 		if err != nil {
 			return -1, err
@@ -453,6 +457,12 @@ func (c *tsmMergeCursor) Close() error {
 
 func (c *tsmMergeCursor) StartSpan(span *tracing.Span) {
 	c.span = span
+	if c.locations != nil {
+		c.locations.SetSpan(span)
+	}
+	if c.ctx != nil {
+		c.ctx.SetSpan(span)
+	}
 }
 
 func (c *tsmMergeCursor) EndSpan() {

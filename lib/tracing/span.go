@@ -220,3 +220,20 @@ func AddPP(span *Span, begin time.Time) {
 
 	atomic.AddInt64(&span.elapsed, time.Since(begin).Nanoseconds())
 }
+
+func AddCounter(span *Span, name string, val int64) {
+	if span == nil {
+		return
+	}
+	span.Count(name, val)
+}
+
+func GetElapsedCounter(span *Span, name string) func() {
+	if span == nil {
+		return func() {}
+	}
+	t := time.Now()
+	return func() {
+		span.Count(name, time.Since(t).Nanoseconds())
+	}
+}

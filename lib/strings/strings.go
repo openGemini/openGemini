@@ -21,6 +21,12 @@ import (
 	"unsafe"
 )
 
+var pool *BuilderPool
+
+func init() {
+	pool = NewBuilderPool()
+}
+
 func UnionSlice(s []string) []string {
 	if len(s) <= 1 {
 		return s
@@ -105,6 +111,14 @@ func (p *BuilderPool) Size() int64 {
 
 type StringBuilder struct {
 	buf []byte
+}
+
+func GetStringBuilder() *StringBuilder {
+	return pool.Get()
+}
+
+func PutStringBuilder(r *StringBuilder) {
+	pool.Put(r)
 }
 
 func NewStringBuilder(size int) *StringBuilder {

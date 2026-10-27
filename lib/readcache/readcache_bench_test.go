@@ -16,7 +16,7 @@ package readcache
 
 import (
 	"bytes"
-	"math/rand"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -122,7 +122,7 @@ func BenchmarkParallelRead(b *testing.B) {
 	b.StartTimer()
 	miss := 0
 	b.RunParallel(func(pb *testing.PB) {
-		id := rand.Intn(10000)
+		id := rand.IntN(10000)
 		for pb.Next() {
 			if _, isGet := cacheIns.Get(cacheIns.CreateCacheKey(path, int64(id))); !isGet {
 				miss++
@@ -139,7 +139,7 @@ func BenchmarkParallelReadWrite(b *testing.B) {
 	b.StartTimer()
 	miss := 0
 	b.RunParallel(func(pb *testing.PB) {
-		id := rand.Intn(10000)
+		id := rand.IntN(10000)
 		for pb.Next() {
 			key := cacheIns.CreateCacheKey(path, int64(id))
 			cacheIns.AddPage(key, dataB, int64(len(dataB)), MetaCachePool)
@@ -163,7 +163,7 @@ func BenchmarkFileDelete(b *testing.B) {
 
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		id := rand.Intn(10000)
+		id := rand.IntN(10000)
 		key := path + strconv.Itoa(id)
 		cacheIns.Remove(key)
 	}
@@ -184,7 +184,7 @@ func BenchmarkParallelFileDelete(b *testing.B) {
 
 	b.StartTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		id := rand.Intn(10000)
+		id := rand.IntN(10000)
 		for pb.Next() {
 			key := path + strconv.Itoa(id)
 			cacheIns.Remove(key)

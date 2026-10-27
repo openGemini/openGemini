@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"reflect"
 	"strconv"
 	"testing"
@@ -25,7 +26,6 @@ import (
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -1176,6 +1176,12 @@ func TestHashAggTransformGroupByNoFixIntervalNullFillForDimsInForAllAggForNormal
 		}
 	}
 	trans, err := executor.NewHashAggTransform(inRowDataTypes, outRowDataTypes, exprOpt, schema, executor.Normal)
+	assert.Error(t, err)
+	assert.Nil(t, trans)
+	assert.Contains(t, err.Error(), "time-range specification (including a start time) is mandatory for GROUP BY time aggregation on column store engine")
+
+	schema2 := buildHashAggTransformSchemaGroupByNoFixIntervalNullFillWithStartTime()
+	trans, err = executor.NewHashAggTransform(inRowDataTypes, outRowDataTypes, exprOpt, schema2, executor.Normal)
 	if err != nil {
 		panic("")
 	}
@@ -1216,6 +1222,24 @@ func buildHashAggTransformSchemaGroupByNoFixIntervalNullFill() *executor.QuerySc
 	return schema
 }
 
+func buildHashAggTransformSchemaGroupByNoFixIntervalNullFillWithStartTime() *executor.QuerySchema {
+	outPutRowsChan := make(chan query.RowsChan)
+	opt := query.ProcessorOptions{
+		ChunkSize:   1024,
+		ChunkedSize: 10000,
+		RowsChan:    outPutRowsChan,
+		Dimensions:  make([]string, 0),
+		Ascending:   true,
+		Fill:        influxql.NullFill,
+		Interval:    hybridqp.Interval{Duration: 1},
+		StartTime:   0,
+		EndTime:     influxql.MaxTime,
+	}
+	opt.Dimensions = append(opt.Dimensions, "tag1")
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+	return schema
+}
+
 func buildHashAggTransformSchemaProm() *executor.QuerySchema {
 	outPutRowsChan := make(chan query.RowsChan)
 	opt := query.ProcessorOptions{
@@ -1242,7 +1266,7 @@ func TestHashAggTransformGroupByNoFixIntervalNullFillForDimsInForAllAgg(t *testi
 	var outRowDataTypes []hybridqp.RowDataType
 	outRowDataType := buildHashAggOutputRowDataType1()
 	outRowDataTypes = append(outRowDataTypes, outRowDataType)
-	schema := buildHashAggTransformSchemaGroupByNoFixIntervalNullFill()
+	schema := buildHashAggTransformSchemaGroupByNoFixIntervalNullFillWithStartTime()
 	aggFuncsName := buildAggFuncsName()
 	exprOpt := make([]hybridqp.ExprOptions, len(outRowDataType.Fields()))
 	for i := range outRowDataType.Fields() {
@@ -2078,7 +2102,7 @@ func TestHashAggTransformNilDimsWithInterval(t *testing.T) {
 	var outRowDataTypes []hybridqp.RowDataType
 	outRowDataType := buildHashAggOutputRowDataType1()
 	outRowDataTypes = append(outRowDataTypes, outRowDataType)
-	schema := buildHashAggTransformSchemaGroupByNoFixIntervalNullFill()
+	schema := buildHashAggTransformSchemaGroupByNoFixIntervalNullFillWithStartTime()
 	aggFuncsName := buildAggFuncsName()
 	exprOpt := make([]hybridqp.ExprOptions, len(outRowDataType.Fields()))
 	for i := range outRowDataType.Fields() {
@@ -2933,7 +2957,7 @@ func buildBenchChunksDoubleGroupBy(chunkCount, chunkSize, tagPerChunk, intervalP
 		intervalIndex := make([]int, 0, chunkSize/intervalPerChunk)
 		times := make([]int64, 0, chunkSize)
 		for j := 0; j < tagPerChunk; j++ {
-			s := string(letters[0:rand.Intn(len(letters))])
+			s := string(letters[0:rand.IntN(len(letters))])
 			for k := 0; k < chunkSize/tagPerChunk; k++ {
 				times = append(times, int64(k))
 				chunk.Column(0).AppendFloatValue(float64(k))

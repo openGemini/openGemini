@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/failpoint"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -37,7 +38,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
 
@@ -571,7 +571,7 @@ func (r *ChunkReader) selectPreAgg(
 		} else {
 			column.AppendNil()
 		}
-	case "last":
+	case "last", "last_row":
 		recColMeta := rec.ColMeta[r.fieldItemIndex[i].index]
 		if value, t := recColMeta.Last(); !immutable.IsInterfaceNil(value) {
 			transMetaFun(value, column)
@@ -850,7 +850,7 @@ func (r *ChunkReader) Work(ctx context.Context) error {
 			iterCount++
 			rowCount += ch.Len()
 
-			failpoint.Inject("fixture-on-chunkreader", nil)
+			failpoint.Sleep("fixture-on-chunkreader", func() {})
 
 			tracing.SpanElapsed(r.outputSpan, func() {
 				r.sendChunk(ch)

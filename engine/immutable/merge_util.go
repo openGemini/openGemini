@@ -19,6 +19,7 @@ import (
 	"math"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,10 +29,6 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
-)
-
-var (
-	LevelMergeFileNum = []int{8, 8}
 )
 
 const (
@@ -86,7 +83,7 @@ func (ctx *MergeContext) UnorderedLen() int {
 }
 
 func (ctx *MergeContext) Limited() bool {
-	conf := &config.GetStoreConfig().Merge
+	conf := config.GetStoreConfig().Merge
 	return (ctx.UnorderedLen() >= conf.MaxUnorderedFileNumber) ||
 		ctx.unordered.size > int64(conf.MaxUnorderedFileSize)
 }
@@ -151,17 +148,17 @@ func BuildMergeContext(mst string, files *TSSPFiles, full bool, lmt *lastMergeTi
 	}
 
 	conf := config.GetStoreConfig()
-	if conf.Merge.MergeSelfOnly || conf.UnorderedOnly {
+	if conf.Merge.UnorderedMergeSelf || conf.UnorderedOnly {
 		buildUnorderedOnlyMergeContext(mst, files, callback)
 		return ret
 	}
 
-	for i := uint16(0); i < conf.Merge.MaxMergeSelfLevel; i++ {
+	for i := uint16(0); i < conf.Merge.GetMaxMergeSelfLevel(); i++ {
 		buildLevelMergeContext(mst, files, i, callback)
 	}
 
 	if len(ret) == 0 &&
-		(files.MergedLevelCount(conf.Merge.MaxMergeSelfLevel) >= DefaultLevelMergeFileNum ||
+		(files.MergedLevelCount(conf.Merge.GetMaxMergeSelfLevel()) >= DefaultLevelMergeFileNum ||
 			!lmt.Nearly(mst, time.Duration(conf.Merge.MinInterval))) {
 		ret = append(ret, buildNormalMergeContext(mst, files))
 	}
@@ -181,8 +178,9 @@ func buildLevelMergeContext(mst string, files *TSSPFiles, level uint16, callback
 	ctx := NewMergeContext(mst, level, true)
 
 	fileNum := DefaultLevelMergeFileNum
-	if int(level) < len(LevelMergeFileNum) {
-		fileNum = LevelMergeFileNum[level]
+	levelMergeFileNum := config.GetStoreConfig().Merge.GetMaxNumOfFileToMergeSelf()
+	if int(level) < len(levelMergeFileNum) {
+		fileNum = levelMergeFileNum[level]
 	}
 
 	maxFileSize := int64(config.GetStoreConfig().Merge.MaxUnorderedFileSize)
@@ -213,7 +211,7 @@ func buildFullMergeContext(mst string, files *TSSPFiles, callback func(ctx *Merg
 		return
 	}
 
-	conf := &config.GetStoreConfig().Merge
+	conf := config.GetStoreConfig().Merge
 	ctx := NewMergeContext(mst, 0, true)
 
 	for _, f := range files.Files() {
@@ -329,7 +327,7 @@ func (lmt *lastMergeTime) Nearly(mst string, d time.Duration) bool {
 }
 
 type MeasurementInProcess struct {
-	mu     sync.Mutex
+	mu     sync.RWMutex
 	tables map[string]struct{}
 }
 
@@ -346,9 +344,9 @@ func (m *MeasurementInProcess) Add(name string) bool {
 }
 
 func (m *MeasurementInProcess) Has(name string) bool {
-	m.mu.Lock()
+	m.mu.RLock()
 	_, ok := m.tables[name]
-	m.mu.Unlock()
+	m.mu.RUnlock()
 	return ok
 }
 
@@ -357,6 +355,22 @@ func (m *MeasurementInProcess) Del(name string) {
 	defer m.mu.Unlock()
 
 	delete(m.tables, name)
+}
+
+func (m *MeasurementInProcess) MatchPrefix(prefix string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for k := range m.tables {
+		if strings.HasPrefix(k, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func ShardInParquetProcess(path string) bool {
+	return parquetFileLock.MatchPrefix(path)
 }
 
 func NewMeasurementInProcess() *MeasurementInProcess {

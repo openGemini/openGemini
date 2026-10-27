@@ -36,7 +36,7 @@ func (s *mockRPCMessageSender) SendRPCMsg(currentServer int, msg *message.MetaMe
 	return errors.New("mock error")
 }
 
-func TestClient_SendSql2MetaHeartbeat(t *testing.T) {
+func TestClient_SendCQ2MetaHeartbeat(t *testing.T) {
 	defer func() {
 		connectedServer = 0
 	}()
@@ -46,17 +46,17 @@ func TestClient_SendSql2MetaHeartbeat(t *testing.T) {
 		closing: make(chan struct{}),
 	}
 	c.SendRPCMessage = &mockRPCMessageSender{}
-	err := c.SendSql2MetaHeartbeat("127.0.0.1:8086")
+	err := c.SendCQ2MetaHeartbeat("127.0.0.1:8086")
 	assert.EqualError(t, err, "mock error")
 
 	// SetMetaServers
 	c.SetMetaServers([]string{"127.0.0.1:8088", "127.0.0.2:8088", "127.0.0.3:8088"})
-	err = c.SendSql2MetaHeartbeat("127.0.0.1:8086")
+	err = c.SendCQ2MetaHeartbeat("127.0.0.1:8086")
 	assert.NoError(t, err)
 
 	// close
 	close(c.closing)
-	err = c.SendSql2MetaHeartbeat("127.0.0.1:8086")
+	err = c.SendCQ2MetaHeartbeat("127.0.0.1:8086")
 	assert.NoError(t, err)
 }
 

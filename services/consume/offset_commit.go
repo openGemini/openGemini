@@ -52,3 +52,7 @@ func (h *CommitOffsetV2) Handle(header protocol.RequestHeader, body []byte, onMe
 
 	return onMessage(resp)
 }
+
+func (h *CommitOffsetV2) Release() {
+
+}

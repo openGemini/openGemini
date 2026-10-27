@@ -399,3 +399,30 @@ func TestIndexScanTransform(t *testing.T) {
 	info := buildIndexScanExtraInfo1()
 	testIndexScanTransformTsIndex(t, index, info)
 }
+
+func TestIndexScanTransform_LastRow(t *testing.T) {
+	// build the logical plan
+	fields := influxql.Fields{&influxql.Field{
+		Expr: &influxql.Call{
+			Name: "last_row",
+			Args: []influxql.Expr{
+				&influxql.VarRef{
+					Val:  "val1",
+					Type: influxql.Float,
+				},
+			},
+		},
+	},
+	}
+	opt := query.ProcessorOptions{
+		HintType:       hybridqp.FullSeriesQuery,
+		GroupByAllDims: true,
+		Sources:        []influxql.Source{&influxql.Measurement{Name: "m", EngineType: config.TSSTORE}},
+	}
+	schema := executor.NewQuerySchema(fields, []string{"val1"}, &opt, nil)
+	reader := executor.NewLogicalReader(nil, schema)
+	indexScan := executor.NewLogicalIndexScan(reader, schema)
+	info := buildIndexScanExtraInfo1()
+	info.Store.(*MockStoreEngine1).noSeries = true
+	testIndexScanTransformTsIndex(t, indexScan, info)
+}

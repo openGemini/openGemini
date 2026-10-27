@@ -15,7 +15,7 @@
 package executor_test
 
 import (
-	"math/rand"
+	"math/rand/v2"
 	"reflect"
 	"sort"
 	"testing"
@@ -169,9 +169,8 @@ func builddata(s string, dataSize int) []float64 {
 			data[i] = rand.NormFloat64()*desiredStdDev + desiredMean
 		}
 	case "uniform":
-		uniform := rand.New(rand.NewSource(seed))
 		for i := range data {
-			data[i] = uniform.Float64() * 100
+			data[i] = rand.Float64() * 100
 		}
 	}
 	return data

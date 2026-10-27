@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/ski"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/dictmap"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
@@ -36,7 +37,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/savsgio/dictpool"
 )
 
 type SeriesRowCountFunc func(msName string, sid uint64, rowCounts int64)
@@ -170,14 +170,13 @@ func (writeRec *WriteRec) SortRecord(hlp *record.ColumnSortHelper) {
 }
 
 type MsInfo struct {
-	mu                sync.RWMutex
-	Name              string // measurement name with version
-	Schema            record.Schemas
-	sidMap            map[uint64]*WriteChunk
-	chunkBufs         []WriteChunk
-	writeChunk        *WriteChunkForColumnStore
-	concurrencyChunks *rowChunks
-	flushed           bool
+	mu         sync.RWMutex
+	Name       string // measurement name with version
+	Schema     record.Schemas
+	sidMap     map[uint64]*WriteChunk
+	chunkBufs  []WriteChunk
+	writeChunk *WriteChunkForColumnStore
+	flushed    bool
 }
 
 func (msi *MsInfo) Init(row *influx.Row) {
@@ -213,23 +212,22 @@ func (msi *MsInfo) CreateChunk(sid uint64) (*WriteChunk, bool) {
 }
 
 func (msi *MsInfo) CreateWriteChunkForColumnStore(sortKeys []string) {
-	msi.mu.Lock()
 	if msi.writeChunk != nil {
-		msi.mu.Unlock()
 		return
 	}
-	msi.writeChunk = NewWriteChunkForColumnStore()
-	msi.writeChunk.WriteRec.initForReuse(msi.Schema)
-	msi.writeChunk.sortKeys = GetSortKeys(msi.Schema, sortKeys)
+
+	msi.mu.Lock()
+	if msi.writeChunk == nil {
+		chunk := NewWriteChunkForColumnStore()
+		chunk.WriteRec.initForReuse(msi.Schema)
+		chunk.sortKeys = GetSortKeys(msi.Schema, sortKeys)
+		msi.writeChunk = chunk
+	}
 	msi.mu.Unlock()
 }
 
 func (msi *MsInfo) GetWriteChunk() *WriteChunkForColumnStore {
 	return msi.writeChunk
-}
-
-func (msi *MsInfo) GetRowChunks() *rowChunks {
-	return msi.concurrencyChunks
 }
 
 func (msi *MsInfo) SetWriteChunk(writeChunk *WriteChunkForColumnStore) {
@@ -264,10 +262,9 @@ func GetSortKeys(schema []record.Field, primaryKeys []string) []record.PrimaryKe
 
 type MTable interface {
 	initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo
-	FlushChunks(table *MemTable, dataPath, msName, db, rp string, lock *string, tbStore immutable.TablesStore, msRowCount int64, fileInfos chan []immutable.FileInfoExtend)
-	WriteRows(table *MemTable, rowsD *dictpool.Dict, wc WriteRowsCtx) error
+	FlushChunks(table *MemTable, msName string, tbStore immutable.TablesStore, fileInfos chan []immutable.FileInfoExtend)
+	WriteRows(table *MemTable, rowsD dictmap.DictMap[string, *[]influx.Row], wc WriteRowsCtx) error
 	WriteCols(table *MemTable, rec *record.Record, mst string) error
-	SetFlushManagerInfo(manager map[string]FlushManager, accumulateMetaIndex *sync.Map)
 	Reset(table *MemTable)
 }
 
@@ -290,15 +287,6 @@ func LoadMstRowCount(countFile string) (int, error) {
 		return 0, err
 	}
 	return rowCount, nil
-}
-
-func createMsBuilder(tbStore immutable.TablesStore, order bool, lockPath *string, dataPath string, msName string, totalChunks int, size int, conf *immutable.Config, engineType config.EngineType) *immutable.MsBuilder {
-	seq := tbStore.Sequencer()
-	defer seq.UnRef()
-
-	FileName := immutable.NewTSSPFileName(tbStore.NextSequence(), 0, 0, 0, order, lockPath)
-	msb := immutable.NewMsBuilder(dataPath, msName, lockPath, conf, totalChunks, FileName, util.Hot, seq, size, engineType, tbStore.GetObsOption(), tbStore.GetShardID())
-	return msb
 }
 
 type MemTableReleaseHook func(t *MemTable)
@@ -378,10 +366,7 @@ func (t *MemTable) initMTable(engineType config.EngineType) {
 	case config.TSSTORE:
 		t.MTable = NewTsMemTableImpl()
 	case config.COLUMNSTORE:
-		t.MTable = &CSMemTableImpl{
-			flushManager:        make(map[string]FlushManager),
-			accumulateMetaIndex: &sync.Map{},
-		}
+		t.MTable = &CSMemTableImpl{}
 	default:
 		panic("UnKnown engine type")
 	}

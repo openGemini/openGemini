@@ -34,6 +34,7 @@ const (
 	AlwaysTrue
 	AlwaysFalse
 	UNKNOWN // unsupported type value.
+	OutRange
 )
 
 type RPNExpr struct {
@@ -41,14 +42,15 @@ type RPNExpr struct {
 }
 
 var switchMap = map[influxql.Token]influxql.Token{
-	influxql.GT:          influxql.LT,
-	influxql.LT:          influxql.GT,
-	influxql.GTE:         influxql.LTE,
-	influxql.LTE:         influxql.GTE,
-	influxql.EQ:          influxql.EQ,
-	influxql.NEQ:         influxql.NEQ,
-	influxql.MATCHPHRASE: influxql.MATCHPHRASE,
-	influxql.IPINRANGE:   influxql.IPINRANGE,
+	influxql.GT:            influxql.LT,
+	influxql.LT:            influxql.GT,
+	influxql.GTE:           influxql.LTE,
+	influxql.LTE:           influxql.GTE,
+	influxql.EQ:            influxql.EQ,
+	influxql.NEQ:           influxql.NEQ,
+	influxql.MATCHPHRASE:   influxql.MATCHPHRASE,
+	influxql.UNMATCHPHRASE: influxql.UNMATCHPHRASE,
+	influxql.IPINRANGE:     influxql.IPINRANGE,
 }
 
 func ConvertToRPNExpr(expr influxql.Expr) *RPNExpr {
@@ -69,7 +71,7 @@ func ConvertToRPNExpr(expr influxql.Expr) *RPNExpr {
 		rpnExpr.Val = append(rpnExpr.Val, innerExpr.Val...)
 	case *influxql.VarRef:
 		rpnExpr.Val = append(rpnExpr.Val, expr)
-	case *influxql.StringLiteral, *influxql.IntegerLiteral, *influxql.NumberLiteral, *influxql.BooleanLiteral:
+	case *influxql.StringLiteral, *influxql.IntegerLiteral, *influxql.NumberLiteral, *influxql.BooleanLiteral, *influxql.SetLiteral:
 		rpnExpr.Val = append(rpnExpr.Val, expr)
 	default:
 	}
@@ -86,5 +88,6 @@ type SKRPNElement struct {
 
 type SKBaseReader interface {
 	IsExist(blockId int64, elem *SKRPNElement) (bool, error)
+	GetRowCount(blockId int64, elem *SKRPNElement) (int64, error)
 	StartSpan(span *tracing.Span)
 }

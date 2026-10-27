@@ -16,8 +16,6 @@ package metaclient
 
 import (
 	"errors"
-	"os"
-	"path"
 	"testing"
 
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
@@ -88,17 +86,11 @@ func TestClient_SendBackupToMeta(t *testing.T) {
 			logger:      logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
 			closing:     make(chan struct{}),
 		}
-		back_dir := t.TempDir()
-		backupPath := path.Join(back_dir, "/backup")
 		c.SendRPCMessage = &mockRPCMessageSenderForBackup{}
-		params := map[string]string{backup.BackupPath: backupPath}
-		res, err := c.SendBackupToMeta("backup", params)
-		assert.NoError(t, err)
-		var resExpect = map[string]string{
-			"127.0.0.1:8092": "success",
-		}
+		params := map[string]string{backup.BackupPath: t.TempDir()}
+		res := c.SendBackupToMeta(0, "backup", params)
+		var resExpect = "success"
 		assert.EqualValues(t, resExpect, res)
-		os.RemoveAll(backupPath)
 	})
 	t.Run("2", func(t *testing.T) {
 		c := &Client{
@@ -109,11 +101,8 @@ func TestClient_SendBackupToMeta(t *testing.T) {
 		}
 		c.SendRPCMessage = &mockRPCMessageSenderForBackup{}
 		params := map[string]string{}
-		res, err := c.SendBackupToMeta("backup", params)
-		assert.NoError(t, err)
-		var resExpect = map[string]string{
-			"127.0.0.1:8092": "failed,missing the required parameter backupPath",
-		}
+		res := c.SendBackupToMeta(0, "backup", params)
+		var resExpect = "failed,missing the required parameter backupPath"
 		assert.EqualValues(t, resExpect, res)
 	})
 	t.Run("3", func(t *testing.T) {
@@ -125,11 +114,8 @@ func TestClient_SendBackupToMeta(t *testing.T) {
 		}
 		c.SendRPCMessage = &mockRPCMessageSenderForBackup2{}
 		params := map[string]string{}
-		res, err := c.SendBackupToMeta("backup", params)
-		assert.NoError(t, err)
-		var resExpect = map[string]string{
-			"127.0.0.1:8092": "failed,mock error",
-		}
+		res := c.SendBackupToMeta(0, "backup", params)
+		var resExpect = "failed,mock error"
 		assert.EqualValues(t, resExpect, res)
 	})
 }
@@ -143,10 +129,8 @@ func TestWriteBackupMetaData(t *testing.T) {
 		}
 	})
 	t.Run("2", func(t *testing.T) {
-		back_dir := t.TempDir()
-		backupPath := path.Join(back_dir, "/backup")
 		params := map[string]string{
-			backup.BackupPath: backupPath,
+			backup.BackupPath: t.TempDir(),
 		}
 		err := writeBackupMetaData(params, []byte{1, 2, 3})
 		if err != nil {
@@ -154,8 +138,7 @@ func TestWriteBackupMetaData(t *testing.T) {
 		}
 		err = writeBackupMetaData(params, []byte{1, 2, 3})
 		if err == nil {
-			t.Fatal(err.Error())
+			t.Fatal("expected an error overwriting backup metadata")
 		}
-		os.RemoveAll(backupPath)
 	})
 }

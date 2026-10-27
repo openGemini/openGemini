@@ -28,12 +28,12 @@ import (
 
 	"github.com/influxdata/influxdb/pkg/bloom"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/numberenc"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -52,10 +52,6 @@ var (
 )
 
 func NonStreamingCompaction(fi FilesInfo) bool {
-	if config.GetStoreConfig().Compact.CorrectTimeDisorder {
-		return true
-	}
-
 	flag := GetMergeFlag4TsStore()
 	if flag == util.NonStreamingCompact {
 		return true
@@ -92,53 +88,25 @@ func NewStreamStreamIterator(fi *FileIterator) *StreamIterator {
 	return itr
 }
 
-var streamIteratorsPool = NewStreamIteratorsPool(cpu.GetCpuNum() / 2)
-
-type StreamIteratorsPool struct {
-	cache chan *StreamIterators
-	pool  sync.Pool
-}
-
-func NewStreamIteratorsPool(n int) *StreamIteratorsPool {
-	if n < 2 {
-		n = 2
+var streamIteratorsPool = pool.NewDefaultUnionPool(func() *StreamIterators {
+	return &StreamIterators{
+		ctx:        NewReadContext(true),
+		colBuilder: NewColumnBuilder(),
+		col:        &record.ColVal{},
+		tmpCol:     &record.ColVal{},
+		timeCol:    &record.ColVal{},
+		tmpTimeCol: &record.ColVal{},
+		Conf:       GetTsStoreConfig(),
+		schemaMap:  make(map[string]struct{}),
 	}
-	if n > cpu.GetCpuNum() {
-		n = cpu.GetCpuNum()
-	}
-	return &StreamIteratorsPool{
-		cache: make(chan *StreamIterators, n),
-	}
-}
+})
 
 func getStreamIterators() *StreamIterators {
-	select {
-	case itr := <-streamIteratorsPool.cache:
-		return itr
-	default:
-		v := streamIteratorsPool.pool.Get()
-		if v == nil {
-			return &StreamIterators{
-				ctx:        NewReadContext(true),
-				colBuilder: NewColumnBuilder(),
-				col:        &record.ColVal{},
-				tmpCol:     &record.ColVal{},
-				timeCol:    &record.ColVal{},
-				tmpTimeCol: &record.ColVal{},
-				Conf:       GetTsStoreConfig(),
-				schemaMap:  make(map[string]struct{}),
-			}
-		}
-		return v.(*StreamIterators)
-	}
+	return streamIteratorsPool.Get()
 }
 
 func putStreamIterators(itr *StreamIterators) {
-	select {
-	case streamIteratorsPool.cache <- itr:
-	default:
-		streamIteratorsPool.pool.Put(itr)
-	}
+	streamIteratorsPool.PutWithMemSize(itr, 0)
 }
 
 type StreamIterators struct {
@@ -158,9 +126,8 @@ type StreamIterators struct {
 	fields        record.Schemas
 
 	TableData
-	mIndex MetaIndex
-	keys   map[uint64]struct{}
-	bf     *bloom.Filter
+	keys map[uint64]struct{}
+	bf   *bloom.Filter
 
 	Conf       *Config
 	ctx        *ReadContext
@@ -175,17 +142,12 @@ type StreamIterators struct {
 	fileName   TSSPFileName
 	fileSize   int64
 
-	encChunkMeta      []byte
-	encChunkIndexMeta []byte
-	encIdTime         []byte
-	crc               uint32
-	version           uint64
-	chunkRows         int64
-	maxChunkRows      int64
-
-	chunkSegments   int
-	cmOffset        []uint32
-	currentCMOffset int
+	encIdTime     []byte
+	crc           uint32
+	version       uint64
+	chunkRows     int64
+	maxChunkRows  int64
+	chunkSegments int
 
 	lastSeg    record.Record
 	col        *record.ColVal
@@ -198,9 +160,8 @@ type StreamIterators struct {
 	log        *Log.Logger
 
 	maxTime int64
-
-	events            *Events
-	chunkMetaCodecCtx *ChunkMetaCodecCtx
+	events  *Events
+	cmw     *ChunkMetaWriter
 }
 
 func (c *StreamIterators) InitEvents(level uint16) *Events {
@@ -273,10 +234,6 @@ func (c *StreamIterators) Close() {
 	c.fileSize = 0
 	c.colBuilder.resetPreAgg()
 
-	if c.chunkMetaCodecCtx != nil {
-		c.chunkMetaCodecCtx.Release()
-		c.chunkMetaCodecCtx = nil
-	}
 	putStreamIterators(c)
 }
 
@@ -341,7 +298,7 @@ func (c *StreamIterators) genChunkSchema() {
 		}
 	}
 
-	sort.Sort(c.fields)
+	sort.Sort(&c.fields)
 	c.fields = append(c.fields, record.Field{Name: record.TimeField, Type: influx.Field_Type_Int})
 
 	c.lastSeg.Reset()
@@ -393,23 +350,19 @@ func (m *MmsTables) NewStreamIterators(group FilesInfo) *StreamIterators {
 	compItrs.chunkRows = 0
 	compItrs.maxChunkRows = 0
 	compItrs.tier = FilesMergedTire(group.oldFiles)
+	compItrs.cmw = NewChunkMetaWriter(m.Conf.CompressChunkMeta)
 
 	heap.Init(compItrs)
 
-	if IsChunkMetaCompressSelf() {
-		compItrs.chunkMetaCodecCtx = GetChunkMetaCodecCtx()
-	}
 	return compItrs
 }
 
 func (c *StreamIterators) reset() {
 	c.colBuilder.resetPreAgg()
 	c.trailer.reset()
-	c.mIndex.reset()
 	c.TableData.reset()
 	c.pair.Reset(c.name)
-	c.cmOffset = c.cmOffset[:0]
-	c.currentCMOffset = 0
+	c.cmw.Reset()
 }
 
 func (c *StreamIterators) SetWriter(w fileops.FileWriter) {
@@ -474,8 +427,8 @@ func (c *StreamIterators) Size() int64 {
 		return 0
 	}
 	n := c.writer.DataSize()
-	n += c.writer.ChunkMetaSize()
-	n += int64(len(c.metaIndexItems) * MetaIndexLen)
+	n += int64(c.cmw.MemorySize())
+	n += int64(c.cmw.MetaIndexCount() * MetaIndexLen)
 	bm, _ := bloom.Estimate(uint64(len(c.keys)), falsePositive)
 	bmBytes := pow2((bm + 7) / 8)
 	n += int64(bmBytes) + int64(trailerSize+len(c.name))
@@ -502,14 +455,8 @@ func (c *StreamIterators) writeMetaToDisk() error {
 	cm.columnCount = uint32(len(cm.colMeta))
 	cm.segCount = uint32(len(cm.timeRange))
 	minT, maxT := cm.MinMaxTime()
-	if c.mIndex.count == 0 {
-		c.mIndex.size = 0
-		c.mIndex.id = cm.sid
-		c.mIndex.minTime = minT
-		c.mIndex.maxTime = maxT
-		c.mIndex.offset = c.writer.ChunkMetaSize()
-		c.currentCMOffset = 0
-	}
+
+	c.cmw.UpdateMetaIndex(minT, maxT, cm.sid)
 
 	c.updateChunkStat(cm.sid, maxT)
 	c.keys[cm.sid] = struct{}{}
@@ -536,15 +483,7 @@ func (c *StreamIterators) writeMetaToDisk() error {
 		c.trailer.maxTime = maxT
 	}
 
-	c.mIndex.count++
-	if c.mIndex.minTime > minT {
-		c.mIndex.minTime = minT
-	}
-	if c.mIndex.maxTime < maxT {
-		c.mIndex.maxTime = maxT
-	}
-
-	if needSwitchChunkMeta(c.Conf, int(c.writer.ChunkMetaBlockSize()), int(c.mIndex.count)) {
+	if config.ChunkMetaLimited(c.cmw.MemorySize(), c.cmw.MemoryCount()) {
 		if err := c.SwitchChunkMeta(); err != nil {
 			return err
 		}
@@ -554,47 +493,12 @@ func (c *StreamIterators) writeMetaToDisk() error {
 }
 
 func (c *StreamIterators) SwitchChunkMeta() error {
-	offBytes := numberenc.MarshalUint32SliceAppend(nil, c.cmOffset)
-	_, err := c.writer.WriteChunkMeta(offBytes)
-	if err != nil {
-		err = errWriteFail(c.writer.Name(), err)
-		c.log.Error("write chunk meta fail", zap.Error(err))
-		return err
-	}
-
-	size, err := c.writer.SwitchMetaBuffer()
-	if err != nil {
-		return err
-	}
-
-	c.mIndex.size = uint32(size)
-	c.metaIndexItems = append(c.metaIndexItems, c.mIndex)
-	c.mIndex.reset()
-	c.cmOffset = c.cmOffset[:0]
-	return nil
+	_, err := c.cmw.FlushChunkMeta(c.writer)
+	return err
 }
 
 func (c *StreamIterators) WriteChunkMeta(cm *ChunkMeta) (int, error) {
-	buf, err := MarshalChunkMeta(c.chunkMetaCodecCtx, cm, c.encChunkMeta[:0])
-	if err != nil {
-		return 0, err
-	}
-
-	c.encChunkMeta = buf
-	c.cmOffset = append(c.cmOffset, uint32(c.currentCMOffset))
-	c.currentCMOffset += len(c.encChunkMeta)
-
-	wn, err := c.writer.WriteChunkMeta(c.encChunkMeta)
-	if err != nil {
-		err = errWriteFail(c.writer.Name(), err)
-		c.log.Error("write chunk meta fail", zap.Error(err))
-		return 0, err
-	}
-	if wn != len(c.encChunkMeta) {
-		err = errno.NewError(errno.ShortWrite, wn, len(c.encChunkMeta))
-		c.log.Error("write chunk meta fail", zap.String("file", c.writer.Name()), zap.Error(err))
-	}
-	return wn, err
+	return c.cmw.Write(cm)
 }
 
 func (c *StreamIterators) FileVersion() uint64 {
@@ -673,7 +577,7 @@ func (c *StreamIterators) Flush() error {
 		return errEmptyFile
 	}
 
-	if c.mIndex.count > 0 {
+	if c.cmw.MemorySize() > 0 {
 		if err := c.SwitchChunkMeta(); err != nil {
 			return err
 		}
@@ -681,29 +585,16 @@ func (c *StreamIterators) Flush() error {
 
 	c.genBloomFilter()
 	c.trailer.dataOffset = int64(len(tableMagic) + int(unsafe.Sizeof(version)))
-	c.trailer.dataSize = c.writer.DataSize() - c.trailer.dataOffset
-	metaOff := c.writer.DataSize()
-	c.trailer.indexSize = c.writer.ChunkMetaSize()
+	c.trailer.dataSize = c.writer.DataSize() - c.trailer.dataOffset - c.cmw.Size()
+	c.trailer.indexSize = c.cmw.Size()
 
-	if err := c.writer.AppendChunkMetaToData(); err != nil {
-		c.log.Error("copy chunk meta fail", zap.String("name", c.fd.Name()), zap.Error(err))
+	wn, err := c.cmw.FlushMetaIndex(c.writer)
+	if err != nil {
 		return err
 	}
 
-	miOff := c.writer.DataSize()
-	for i := range c.metaIndexItems {
-		m := &c.metaIndexItems[i]
-		m.offset += metaOff
-		c.encChunkIndexMeta = m.marshal(c.encChunkIndexMeta[:0])
-		_, err := c.writer.WriteData(c.encChunkIndexMeta)
-		if err != nil {
-			c.log.Error("write meta index fail", zap.String("name", c.fd.Name()), zap.Error(err))
-			return err
-		}
-	}
-
-	c.trailer.metaIndexSize = c.writer.DataSize() - miOff
-	c.trailer.metaIndexItemNum = int64(len(c.metaIndexItems))
+	c.trailer.metaIndexSize = int64(wn)
+	c.trailer.metaIndexItemNum = int64(c.cmw.MetaIndexCount())
 	c.trailer.bloomSize = int64(len(c.bloomFilter))
 
 	if _, err := c.writer.WriteData(c.bloomFilter); err != nil {
@@ -718,8 +609,10 @@ func (c *StreamIterators) Flush() error {
 		return err
 	}
 	c.trailer.EnableTimeStore()
-	c.trailer.SetChunkMetaHeader(c.chunkMetaCodecCtx.GetHeader())
-	c.trailer.SetChunkMetaCompressFlag()
+	if c.cmw.CompressEnabled() {
+		c.trailer.SetChunkMetaHeader(c.cmw.GetChunkMetaHeader())
+		c.trailer.SetChunkMetaCompressFlag()
+	}
 	c.trailerData = c.trailer.Marshal(c.trailerData[:0])
 
 	trailerOffset := c.writer.DataSize()
@@ -915,20 +808,25 @@ func (c *StreamIterators) compact(files []TSSPFile, level uint16, isOrder bool) 
 	defer close(finish)
 	go c.ListenCloseSignal(finish)
 
+	fieldIndex := make([]int, c.Len())
+	itrFieldIndex := make([]int, c.Len())
+
 	for c.Len() > 0 {
 		// merge one chunk
 		var err error
 		splitFile := true
 		iteratorStart, segmentIndex := 0, 0
 		c.genChunkSchema()
-		fieldIndex := make([]int, len(c.chunkItrs))
-		itrFieldIndex := make([]int, len(c.chunkItrs))
+
+		fieldIndex = fieldIndex[:len(c.chunkItrs)]
+		itrFieldIndex = itrFieldIndex[:len(c.chunkItrs)]
+
 		for splitFile {
 			c.iteratorStart, c.segmentIndex = iteratorStart, segmentIndex
 			dOff := c.writer.DataSize()
 			id := c.chunkItrs[0].curtChunkMeta.sid
 			c.Init(id, dOff, c.fields)
-			resetItrFieldIndex(itrFieldIndex)
+			clear(itrFieldIndex)
 			for dstIdx, ref := range c.fields {
 				if c.isClosed() {
 					return nil, ErrCompStopped
@@ -1012,12 +910,6 @@ func (c *StreamIterators) columnIdxForIters(fieldIndex, itrFieldIndex []int, ref
 	}
 }
 
-func resetItrFieldIndex(itrFieldIndex []int) {
-	for i := range itrFieldIndex {
-		itrFieldIndex[i] = 0
-	}
-}
-
 func (c *StreamIterators) nextChunk() {
 	for _, itr := range c.chunkItrs {
 		itr.curtChunkMeta = nil
@@ -1059,9 +951,8 @@ func (c *StreamIterators) splitColumn(ref record.Field, needCalPreAgg bool) (spl
 
 func (c *StreamIterators) validateTimes(times []int64) error {
 	if c.maxTime >= times[0] {
-		err := fmt.Errorf("minimum time is earlier than the maximum time of the previous segment: %d >= %d",
-			c.maxTime, times[0])
-		c.log.Error("Invalid series id", zap.Error(err))
+		err := errno.NewError(errno.CompactTimeDisorder, c.maxTime, times[0])
+		c.log.Error("invalid series data", zap.Error(err))
 		return err
 	}
 	c.maxTime = times[len(times)-1]
@@ -1140,8 +1031,14 @@ func (b *ColumnBuilder) encodeTimeColumn(cols []record.ColVal, offset int64) err
 		b.colMeta.growEntry()
 		m := &b.colMeta.entries[len(b.colMeta.entries)-1]
 		b.cm.growTimeRangeEntry()
-		b.cm.timeRange[len(b.cm.timeRange)-1].setMinTime(times[0])
-		b.cm.timeRange[len(b.cm.timeRange)-1].setMaxTime(times[len(times)-1])
+
+		minT, maxT := times[0], times[len(times)-1]
+		if b.timeDisorder {
+			minT, maxT = util.CalculateMinMax(times, 0)
+		}
+
+		b.cm.timeRange[len(b.cm.timeRange)-1].setMinTime(minT)
+		b.cm.timeRange[len(b.cm.timeRange)-1].setMaxTime(maxT)
 		m.setOffset(offset)
 
 		pos := len(b.data)
