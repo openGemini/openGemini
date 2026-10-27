@@ -16,7 +16,6 @@ package metaclient
 
 import (
 	"errors"
-	"os"
 	"testing"
 
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
@@ -88,11 +87,10 @@ func TestClient_SendBackupToMeta(t *testing.T) {
 			closing:     make(chan struct{}),
 		}
 		c.SendRPCMessage = &mockRPCMessageSenderForBackup{}
-		params := map[string]string{backup.BackupPath: "/backup"}
+		params := map[string]string{backup.BackupPath: t.TempDir()}
 		res := c.SendBackupToMeta(0, "backup", params)
 		var resExpect = "success"
 		assert.EqualValues(t, resExpect, res)
-		os.RemoveAll("/backup")
 	})
 	t.Run("2", func(t *testing.T) {
 		c := &Client{
@@ -106,7 +104,6 @@ func TestClient_SendBackupToMeta(t *testing.T) {
 		res := c.SendBackupToMeta(0, "backup", params)
 		var resExpect = "failed,missing the required parameter backupPath"
 		assert.EqualValues(t, resExpect, res)
-		os.RemoveAll("/backup")
 	})
 	t.Run("3", func(t *testing.T) {
 		c := &Client{
@@ -120,7 +117,6 @@ func TestClient_SendBackupToMeta(t *testing.T) {
 		res := c.SendBackupToMeta(0, "backup", params)
 		var resExpect = "failed,mock error"
 		assert.EqualValues(t, resExpect, res)
-		os.RemoveAll("/backup")
 	})
 }
 
@@ -131,11 +127,10 @@ func TestWriteBackupMetaData(t *testing.T) {
 		if err == nil {
 			t.Fatal()
 		}
-		os.RemoveAll("/backup")
 	})
 	t.Run("2", func(t *testing.T) {
 		params := map[string]string{
-			backup.BackupPath: "/backup",
+			backup.BackupPath: t.TempDir(),
 		}
 		err := writeBackupMetaData(params, []byte{1, 2, 3})
 		if err != nil {
@@ -143,8 +138,7 @@ func TestWriteBackupMetaData(t *testing.T) {
 		}
 		err = writeBackupMetaData(params, []byte{1, 2, 3})
 		if err == nil {
-			t.Fatal(err.Error())
+			t.Fatal("expected an error overwriting backup metadata")
 		}
-		os.RemoveAll("/backup")
 	})
 }

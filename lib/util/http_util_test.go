@@ -15,78 +15,40 @@
 package util_test
 
 import (
-	"fmt"
 	"io"
-	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
 )
 
-var addr = "127.0.0.1:8602"
-
-var errMsg string
-
-var errCode int
-
-type handler struct {
-}
-
-func newHandler() *handler {
-	h := &handler{}
-	return h
-}
-
-func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	httpd.HttpError(w, errMsg, errCode)
-}
-
-func mockHTTPServer(t *testing.T) {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		t.Error(err)
-	}
-
-	testHandler := newHandler()
-
-	err = http.Serve(ln, testHandler)
-	if err != nil && !strings.Contains(err.Error(), "closed") {
-		t.Errorf("listener failed: addr=%s, err=%s", ln.Addr(), err)
-	}
-}
-
 func TestHttpError(t *testing.T) {
-	go mockHTTPServer(t)
-	time.Sleep(10 * time.Millisecond)
-
-	errMsg = "StatusUnauthorized"
-	errCode = http.StatusUnauthorized
-	resp, err := http.Get(fmt.Sprintf("http://%s/test", addr))
-	if err != nil {
-		t.Fatalf("%v", err)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("%v", err)
-	}
-	if !strings.Contains(string(body), "StatusUnauthorized") {
-		t.Fatalf("unexpect error message")
-	}
-
-	errMsg = "StatusNotFound"
-	errCode = http.StatusNotFound
-	resp, err = http.Get(fmt.Sprintf("http://%s/test", addr))
-	if err != nil {
-		t.Fatalf("%v", err)
-	}
-	body, err = io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("%v", err)
-	}
-	if !strings.Contains(string(body), "StatusNotFound") {
-		t.Fatalf("unexpect error message")
+	for _, tc := range []struct {
+		message string
+		status  int
+	}{
+		{"StatusUnauthorized", http.StatusUnauthorized},
+		{"StatusNotFound", http.StatusNotFound},
+	} {
+		t.Run(tc.message, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				httpd.HttpError(w, tc.message, tc.status)
+			}))
+			defer server.Close()
+			resp, err := server.Client().Get(server.URL + "/test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != tc.status || !strings.Contains(string(body), tc.message) {
+				t.Fatalf("unexpected HTTP error response: status=%d body=%s", resp.StatusCode, body)
+			}
+		})
 	}
 }
