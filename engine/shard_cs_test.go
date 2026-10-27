@@ -147,7 +147,7 @@ func TestWriteRowsToColumnStoreError(t *testing.T) {
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
 	ctx := getMstWriteCtx(time.Millisecond*10, config.TSSTORE)
-	putMstWriteCtx(ctx)
+	defer putMstWriteCtx(ctx)
 
 	mapRows(rows, ctx)
 	mmPoints := ctx.getMstMap()

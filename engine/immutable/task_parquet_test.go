@@ -57,7 +57,7 @@ func TestParquetTaskPrepare(t *testing.T) {
 			Files:  []string{tsspFile, mergedFile},
 			enable: false,
 		}}
-		p1 := gomonkey.ApplyFunc(fileops.Mkdir, func(_ string, _ os.FileMode, _ ...fileops.FSOption) error {
+		p1 := gomonkey.ApplyFunc(fileops.MkdirAll, func(_ string, _ os.FileMode, _ ...fileops.FSOption) error {
 			return nil
 		})
 		defer p1.Reset()
@@ -498,6 +498,10 @@ func TestGetDateDirWithTimeZone(t *testing.T) {
 
 func TestSkipDisableMsts(t *testing.T) {
 	convey.Convey("test skip disable msts", t, func() {
+		patch := gomonkey.ApplyFunc(fileops.MkdirAll, func(_ string, _ os.FileMode, _ ...fileops.FSOption) error {
+			return nil
+		})
+		defer patch.Reset()
 		paths := []string{"/tsdb/instanceId/data/db/2/autogen/255_1723420800000000000_1723507200000000000_231/tssp/mst01_0000/0000086d-0002-00000000.tssp",
 			"/tsdb/instanceId/data/db01/3/autogen/260_1723420800000000000_1723507200000000000_236/tssp/mst_0000/00000061-0002-00000000.tssp",
 			"/tsdb/instanceId/data/db/0/autogen/253_1723420800000000000_1723507200000000000_229/tssp/mst_0000/000007a2-0002-00000000.tssp"}

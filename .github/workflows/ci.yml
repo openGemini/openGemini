@@ -100,6 +100,7 @@ jobs:
         run: |
           make build-check
           make go-build
+          make clean-test-env
           make start-subscriber
           bash scripts/install_cluster.sh
           ps -ef | grep ts- | grep -v grep
