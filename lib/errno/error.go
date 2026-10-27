@@ -249,21 +249,21 @@ func NewErrs() *Errs {
 	return &Errs{}
 }
 
-// Dispatch no lock, use len 1 error chan for lock
+// Dispatch records the first non-nil error before marking the caller as done,
+// so that Err never returns before that error is stored
 func (s *Errs) Dispatch(err error) {
+	if err != nil {
+		s.lock.Lock()
+		if s.err == nil {
+			s.err = err
+			if s.callback != nil {
+				s.callback()
+			}
+		}
+		s.lock.Unlock()
+	}
 	if atomic.AddInt32(&s.cnt, -1) >= 0 {
 		s.wg.Add(-1)
-	}
-	if err == nil {
-		return
-	}
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	if s.err == nil {
-		s.err = err
-		if s.callback != nil {
-			s.callback()
-		}
 	}
 }
 

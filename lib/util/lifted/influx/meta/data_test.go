@@ -3431,8 +3431,11 @@ func TestBuildDirTree(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := BuildDirTree(tt.args.rootPath)
-			assert2.NoError(t, err)
-			assert2.Equalf(t, tt.want, got, "BuildDirTree(%v)", tt.args.rootPath)
+			require.NoError(t, err)
+			assert2.Equal(t, tt.want.Name, got.Name)
+			assert2.Equal(t, tt.want.Path, got.Path)
+			// File.ReadDir returns filesystem order, which can vary between runners.
+			assert2.ElementsMatch(t, tt.want.Children, got.Children)
 		})
 	}
 }

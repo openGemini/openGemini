@@ -18,7 +18,9 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/stretchr/testify/assert"
@@ -197,6 +199,25 @@ func TestErrsDispatchMuti(t *testing.T) {
 	err := errs.Err()
 	if err != err1 {
 		t.Fatalf("expect %v, got %v", err1, err)
+	}
+}
+
+func TestErrsDispatchConcurrent(t *testing.T) {
+	errs := errno.NewErrs()
+	err1 := errors.New("t1")
+	var callbackDone atomic.Bool
+	errs.Init(2, func() {
+		time.Sleep(10 * time.Millisecond)
+		callbackDone.Store(true)
+	})
+	go errs.Dispatch(nil)
+	go errs.Dispatch(err1)
+	err := errs.Err()
+	if err != err1 {
+		t.Fatalf("expect %v, got %v", err1, err)
+	}
+	if !callbackDone.Load() {
+		t.Fatalf("expect callback to be done before Err returns")
 	}
 }
 
