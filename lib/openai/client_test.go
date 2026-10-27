@@ -155,8 +155,15 @@ func TestCreateChatCompletionStream_Success(t *testing.T) {
 
 // TestCreateChatCompletion_NetworkError tests a network error scenario
 func TestCreateChatCompletion_NetworkError(t *testing.T) {
-	// Create a client with an unreachable URL
-	client := openai.NewClient("http://invalid.url", "test-api-key")
+	// Close the connection before sending a response, without external DNS or proxies.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if assert.NoError(t, err) {
+			_ = conn.Close()
+		}
+	}))
+	defer ts.Close()
+	client := openai.NewClient(ts.URL, "test-api-key", openai.WithRetryPolicy(0, 0))
 
 	req := openai.ChatCompletionRequest{
 		Model: "gpt-3.5-turbo",
@@ -170,7 +177,7 @@ func TestCreateChatCompletion_NetworkError(t *testing.T) {
 
 	_, err := client.CreateChatCompletion(context.Background(), req)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no such host")
+	assert.ErrorIs(t, err, io.EOF)
 }
 
 // TestCreateChatCompletion_Timeout tests a timeout scenario
