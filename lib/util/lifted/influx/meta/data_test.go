@@ -3761,6 +3761,15 @@ func TestRemoveDuplicates(t *testing.T) {
 }
 
 func TestBuildDirTree(t *testing.T) {
+	var normalize func(*DirNode)
+	normalize = func(node *DirNode) {
+		sort.Slice(node.Children, func(i, j int) bool {
+			return node.Children[i].Name < node.Children[j].Name
+		})
+		for _, child := range node.Children {
+			normalize(child)
+		}
+	}
 
 	tempDir := t.TempDir()
 
@@ -3911,8 +3920,10 @@ func TestBuildDirTree(t *testing.T) {
 			require.NoError(t, err)
 			assert2.Equal(t, tt.want.Name, got.Name)
 			assert2.Equal(t, tt.want.Path, got.Path)
-			// File.ReadDir returns filesystem order, which can vary between runners.
-			assert2.ElementsMatch(t, tt.want.Children, got.Children)
+			// File.ReadDir order can vary at every level of the tree.
+			normalize(tt.want)
+			normalize(got)
+			assert2.Equal(t, tt.want, got)
 		})
 	}
 }
