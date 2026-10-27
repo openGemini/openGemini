@@ -219,7 +219,7 @@ func UnmarshalChunkMetaWithColumns(ctx *ChunkMetaCodecCtx, cm *ChunkMeta, column
 	j := 0
 	ok := false
 	for i := range columns {
-		if i > 0 && columns[i] == columns[i-1] {
+		if skipColumnMeta(columns, i) {
 			continue
 		}
 
