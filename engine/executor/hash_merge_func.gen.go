@@ -19,6 +19,8 @@
 
 package executor
 
+import "strings"
+
 type HashMergeColumn interface {
 	AppendValues(col Column, start int, end int)
 	SetOutPut(col Column)
@@ -165,7 +167,13 @@ func (m *HashMergeStringColumn) AppendValues(col Column, start int, end int) {
 	if col.NilCount() != 0 {
 		valueStart, valueEnd = col.GetRangeValueIndexV2(start, end)
 	}
+	n := len(m.values)
 	m.values = col.StringValuesRangeV2(m.values, valueStart, valueEnd)
+	// The strings share memory with col, which the upstream may reuse for later chunks
+	// while the values are still buffered here, so keep a private copy of them.
+	for i := n; i < len(m.values); i++ {
+		m.values[i] = strings.Clone(m.values[i])
+	}
 	dstPoints := valueEnd - valueStart
 	if dstPoints == srcPoints {
 		for ; start < end; start++ {
