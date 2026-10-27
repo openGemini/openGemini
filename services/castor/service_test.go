@@ -103,7 +103,7 @@ func Test_Close_NoRemainingDataUnreleased(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(srv.dataChan) > 0 || len(srv.dataFailureChan) > 0 || len(srv.dataFailureChan) > 0 {
+	if len(srv.dataChan) > 0 || len(srv.dataFailureChan) > 0 || len(srv.resultChan) > 0 {
 		t.Fatal("data not release")
 	}
 }
