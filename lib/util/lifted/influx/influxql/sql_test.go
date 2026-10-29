@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 var cases []string
@@ -494,9 +495,9 @@ type ErrCase struct {
 func TestSingleParserError(t *testing.T) {
 	c := []ErrCase{
 		{"create measurement mst0 (tag1 tag, field1 int64 field, field2 bool1, field3 string, field4 float64)",
-			"expect FLOAT64, INT64, BOOL, STRING for column data type"},
+			"expect FLOAT64 (FLOAT), INT64 (INTEGER), BOOL (BOOLEAN), STRING for column data type"},
 		{"create measurement mst0 (tag1 tag, field1 int64 field, field2 bool, field3 string1, field4 float64)",
-			"expect FLOAT64, INT64, BOOL, STRING for column data type"},
+			"expect FLOAT64 (FLOAT), INT64 (INTEGER), BOOL (BOOLEAN), STRING for column data type"},
 		{"create measurement mst0 (tag1 tag, field1 int64 field) with enginetype = columnstore shardkey tag11 type hash primarykey tag1 sortkey tag1,field1 property p1=k1,p2=k2",
 			"Invalid ShardKey"},
 		{"create measurement mst0 (tag1 tag, field1 int64 field) with enginetype = columnstore type hash1 primarykey tag1 sortkey tag1,field1 property p1=k1,p2=k2",
@@ -514,7 +515,7 @@ func TestSingleParserError(t *testing.T) {
 		{"create measurement db0.rp0.mst0 (tag1 string tag, field1 int64 field) with enginetype = columnstore",
 			"syntax error: unexpected TAG, expecting ',' or ')'"},
 		{"create measurement mst0 (column4 float,column1 string,column0 string,column3 float,column2 int) with enginetype = columnstore  shardkey column2,column3 type hash  primarykey column3,column4,column0,column1 sortkey column2,column3,column4,column0,column1",
-			"expect FLOAT64, INT64, BOOL, STRING for column data type"},
+			"expect FLOAT64 (FLOAT), INT64 (INTEGER), BOOL (BOOLEAN), STRING for column data type"},
 		{"create measurement mst0 (column4 float64,column1 string,column0 string,column3 float64,column2 int64) with enginetype = columnstore  shardkey column2,column3 type hash  primarykey column3,column4,column0,column1 sortkey column2,column3,column4,column0,column1",
 			"PrimaryKey should be left prefix of SortKey"},
 		{"show sortkey1 from mst",
@@ -604,6 +605,43 @@ func TestSingleParserError(t *testing.T) {
 			t.Errorf("<no error> instead of <%s> with sql: %s", c.err, c.query)
 		} else if err.Error() != c.err {
 			t.Errorf(err.Error(), "instead of", c.err, "with sql:", c.query)
+		}
+	}
+}
+
+func TestCreateMeasurementFieldTypes(t *testing.T) {
+	expTags := map[string]int32{"tag1": influx.Field_Type_Tag}
+	expFields := map[string]int32{
+		"field1": influx.Field_Type_Int,
+		"field2": influx.Field_Type_Float,
+		"field3": influx.Field_Type_Boolean,
+		"field4": influx.Field_Type_String,
+	}
+	c := []string{
+		"create measurement mst0 (tag1 tag, field1 int64, field2 float64, field3 bool, field4 string)",
+		// the type names reported by SHOW FIELD KEYS
+		"create measurement mst0 (tag1 tag, field1 integer, field2 float, field3 boolean, field4 string)",
+		"create measurement mst0 (tag1 tag, field1 INTEGER field, field2 Float field, field3 BOOLEAN field, field4 STRING field)",
+	}
+	for _, c := range c {
+		YyParser := &influxql.YyParser{
+			Query: influxql.Query{},
+		}
+		YyParser.Scanner = influxql.NewScanner(strings.NewReader(c))
+		YyParser.ParseTokens()
+		q, err := YyParser.GetQuery()
+		if err != nil {
+			t.Fatalf("unexpected error: %v, with sql: %s", err, c)
+		}
+		stmt, ok := q.Statements[0].(*influxql.CreateMeasurementStatement)
+		if !ok {
+			t.Fatalf("expect *influxql.CreateMeasurementStatement, got %T, with sql: %s", q.Statements[0], c)
+		}
+		if !reflect.DeepEqual(stmt.Tags, expTags) {
+			t.Errorf("tags %v not equal %v, with sql: %s", stmt.Tags, expTags, c)
+		}
+		if !reflect.DeepEqual(stmt.Fields, expFields) {
+			t.Errorf("fields %v not equal %v, with sql: %s", stmt.Fields, expFields, c)
 		}
 	}
 }
