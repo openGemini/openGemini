@@ -6,14 +6,17 @@ ENV GOPROXY=https://mirrors.huaweicloud.com/repository/goproxy/,https://goproxy.
 ENV CGO_ENABLED=1
 ENV GOBIN=/build/bin
 
-RUN dnf install golang gcc gcc-c++ -y --setopt=tsflags=nodocs && dnf clean all
+RUN dnf install golang gcc gcc-c++ git -y --setopt=tsflags=nodocs && dnf clean all
 
 COPY . .
 
 RUN rm -rf go.sum && go mod tidy
 
 RUN go build -ldflags "-s -w" -o ./bin/ts-server ./app/ts-server/ &&\
-    go install github.com/openGemini/openGemini-cli/cmd/ts-cli@latest
+    git clone --depth 1 --branch v0.0.1 https://github.com/openGemini/openGemini-cli.git /build/cli &&\
+    cd /build/cli &&\
+    test "$(git rev-parse HEAD)" = "07a3ea85125179c74fa1628ef41c2f9867cb8729" &&\
+    go install ./cmd/ts-cli
 
 FROM fedora:latest
 

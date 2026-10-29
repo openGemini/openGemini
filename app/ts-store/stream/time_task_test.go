@@ -48,27 +48,59 @@ func Test_Time_ConsumeData(t *testing.T) {
 		RetentionPolicy: "auto",
 	}
 	interval := 2 * time.Second
-	start := time.Now().Truncate(interval).Add(-interval)
+	start := time.Unix(0, 0)
 	fieldCalls := []*streamLib.FieldCall{}
 	calls := []string{"sum", "min", "max", "count"}
 	for _, c := range calls {
 		call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "float", "float", c, false)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		fieldCalls = append(fieldCalls, call)
 	}
-	task := &TimeTask{TaskDataPool: NewTaskDataPool(), windowCachePool: NewTaskCachePool(), BaseTask: &BaseTask{updateWindow: make(chan struct{}),
-		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0),
+	task := &TimeTask{TaskDataPool: NewTaskDataPool(), windowCachePool: NewTaskCachePool(), BaseTask: &BaseTask{
+		windowNum: 10, stats: statistics.NewStreamWindowStatItem(0),
 		Logger: l, store: m, cli: metaClient, src: &src, des: &des, window: interval,
 		start: start, end: start.Add(interval), fieldCalls: fieldCalls}}
-	task.run()
-	// wait run
+	require.NoError(t, task.initVar())
+	var err error
+	task.info, err = metaClient.Measurement(des.Database, des.RetentionPolicy, des.Name)
+	require.NoError(t, err)
+
+	// Drive flushes explicitly so assertions do not race the wall-clock ticker.
+	consumeDone := make(chan struct{})
+	go func() {
+		defer close(consumeDone)
+		task.consumeData()
+	}()
+	t.Cleanup(func() {
+		close(task.updateWindow)
+		select {
+		case <-consumeDone:
+		case <-time.After(5 * time.Second):
+			t.Error("stream consumer did not stop")
+		}
+	})
+
+	waitConsumed := func() {
+		t.Helper()
+		consumed := make(chan struct{})
+		cache := task.windowCachePool.Get()
+		cache.release = func() { close(consumed) }
+		task.Put(cache)
+		// The empty cache follows queued rows and any preceding window update.
+		select {
+		case <-consumed:
+		case <-time.After(5 * time.Second):
+			t.Fatal("stream consumer did not finish")
+		}
+	}
+
 	rowsLen := 10
 	batchLen := 10
 	allRows := batchLen * rowsLen
 	fieldRows := buildRows(rowsLen)
-	now := time.Now()
+	for i := range fieldRows {
+		fieldRows[i].Timestamp = start.Add(interval).UnixNano()
+	}
 	for i := 0; i < batchLen; i++ {
 		cache := task.windowCachePool.Get()
 		cache.ptId = 0
@@ -77,36 +109,25 @@ func Test_Time_ConsumeData(t *testing.T) {
 		cache.release = nil
 		task.Put(cache)
 	}
-	task.Drain()
-	t.Log("cost", time.Now().Sub(now))
-	if task.stats.WindowIn != int64(allRows) {
-		t.Fatal("unexpect in", task.stats.WindowIn)
-	}
-	if task.stats.WindowSkip != 0 {
-		t.Fatal("unexpect skip", task.stats.WindowSkip)
-	}
-	if task.stats.WindowProcess != int64(allRows) {
-		t.Fatal("unexpect process", task.stats.WindowProcess)
-	}
-	time.Sleep(interval)
-	time.Sleep(interval)
-	if task.stats.WindowIn != 0 {
-		t.Fatal("unexpect in", task.stats.WindowIn)
-	}
-	if task.stats.WindowSkip != 0 {
-		t.Fatal("unexpect skip", task.stats.WindowSkip)
-	}
-	if task.stats.WindowProcess != 0 {
-		t.Fatal("unexpect process", task.stats.WindowProcess)
-	}
-	time.Sleep(interval)
-	if m.count != 1 {
-		t.Fatal("unexpect flush count", m.count)
-	}
-	err := task.stop()
-	if err != nil {
-		t.Fatal(err)
-	}
+	waitConsumed()
+	require.Equal(t, int64(allRows), task.stats.WindowIn)
+	require.Zero(t, task.stats.WindowSkip)
+	require.Equal(t, int64(allRows), task.stats.WindowProcess)
+
+	// Advance past the empty first window and wait for its counters to reset.
+	require.NoError(t, task.flush())
+	waitConsumed()
+	require.Zero(t, task.stats.WindowIn)
+	require.Zero(t, task.stats.WindowSkip)
+	require.Zero(t, task.stats.WindowProcess)
+	require.Zero(t, m.count)
+
+	// The next window contains all rows and produces exactly one aggregate.
+	require.NoError(t, task.flush())
+	waitConsumed()
+	require.Equal(t, 1, m.count)
+	require.Equal(t, float64(allRows), m.value)
+	require.Equal(t, start.Add(interval), m.timestamp)
 }
 
 type invalidChanData struct {
