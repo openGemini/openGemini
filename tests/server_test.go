@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -12217,6 +12218,23 @@ func TestServer_Join_Table_With_Empty_Tag(t *testing.T) {
 }
 
 func TestServer_fullJoin_SubQuery(t *testing.T) {
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		paths, _ := filepath.Glob("/tmp/openGemini/logs/*/*.error.log")
+		for _, path := range paths {
+			contents, err := os.ReadFile(path)
+			if err != nil {
+				t.Logf("read server error log %s: %v", path, err)
+				continue
+			}
+			if len(contents) > 128*1024 {
+				contents = contents[len(contents)-128*1024:]
+			}
+			t.Logf("server error log %s:\n%s", path, contents)
+		}
+	})
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
 	defer s.Close()
