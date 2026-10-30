@@ -6008,7 +6008,10 @@ func (s *ShowStatsStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
 }
 
 // ShowShardGroupsStatement represents a command for displaying shard groups in the cluster.
-type ShowShardGroupsStatement struct{}
+type ShowShardGroupsStatement struct {
+	// Database to show shard groups of. All databases are shown if it is empty.
+	Database string
+}
 
 func (s *ShowShardGroupsStatement) Depth() int { return 1 }
 
@@ -6028,6 +6031,10 @@ func (s *ShowShardGroupsStatement) RenderBytes(buf *bytes.Buffer, posmap BufPosi
 	Begin := buf.Len()
 
 	buf.WriteString("SHOW SHARD GROUPS")
+	if s.Database != "" {
+		buf.WriteString(" ON ")
+		buf.WriteString(QuoteIdent(s.Database))
+	}
 
 	if posmap != nil {
 		posmap[s] = Position{Begin: Begin, End: buf.Len()}
@@ -6042,7 +6049,9 @@ func (s *ShowShardGroupsStatement) RequiredPrivileges() (ExecutionPrivileges, er
 
 // ShowShardsStatement represents a command for displaying shards in the cluster.
 type ShowShardsStatement struct {
-	mstInfo *Measurement
+	// Database to show shards of. All databases are shown if it is empty.
+	Database string
+	mstInfo  *Measurement
 }
 
 func (s *ShowShardsStatement) Depth() int {
@@ -6067,6 +6076,10 @@ func (s *ShowShardsStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositions
 	Begin := buf.Len()
 
 	buf.WriteString("SHOW SHARDS")
+	if s.Database != "" {
+		buf.WriteString(" ON ")
+		buf.WriteString(QuoteIdent(s.Database))
+	}
 
 	if posmap != nil {
 		posmap[s] = Position{Begin: Begin, End: buf.Len()}

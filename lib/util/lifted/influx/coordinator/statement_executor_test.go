@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/errno"
 	Logger "github.com/openGemini/openGemini/lib/logger"
@@ -491,4 +492,51 @@ func TestStatementExecutor_WithSelectStatement(t *testing.T) {
 	_ = statementExecutor.ExecuteStatement(withStmt, ctx, 0)
 	assert.True(t, withStmt.DependenciesCTEsAlias[0] == "t1")
 
+}
+
+type mockShowShardsMetaClient struct {
+	MockMetaClient
+	databases map[string]*meta2.DatabaseInfo
+	showDb    string
+}
+
+func (m *mockShowShardsMetaClient) Database(name string) (*meta2.DatabaseInfo, error) {
+	if dbi, ok := m.databases[name]; ok {
+		return dbi, nil
+	}
+	return nil, errno.NewError(errno.DatabaseNotFound, name)
+}
+
+func (m *mockShowShardsMetaClient) ShowShards(db string, rp string, mst string) models.Rows {
+	m.showDb = db
+	return models.Rows{{Name: db}}
+}
+
+func (m *mockShowShardsMetaClient) ShowShardGroups(database string) models.Rows {
+	m.showDb = database
+	return models.Rows{{Name: "shard groups"}}
+}
+
+func TestStatementExecutor_executeShowShardsOnDatabase(t *testing.T) {
+	client := &mockShowShardsMetaClient{databases: map[string]*meta2.DatabaseInfo{"db0": {Name: "db0"}}}
+	e := StatementExecutor{MetaClient: client}
+
+	for _, db := range []string{"", "db0"} {
+		client.showDb = "unset"
+		_, err := e.executeShowShardsStatement(&influxql.ShowShardsStatement{Database: db})
+		assert.NoError(t, err)
+		assert.Equal(t, db, client.showDb)
+
+		client.showDb = "unset"
+		_, err = e.executeShowShardGroupsStatement(&influxql.ShowShardGroupsStatement{Database: db})
+		assert.NoError(t, err)
+		assert.Equal(t, db, client.showDb)
+	}
+
+	client.showDb = "unset"
+	_, err := e.executeShowShardsStatement(&influxql.ShowShardsStatement{Database: "db1"})
+	assert.True(t, errno.Equal(err, errno.DatabaseNotFound))
+	_, err = e.executeShowShardGroupsStatement(&influxql.ShowShardGroupsStatement{Database: "db1"})
+	assert.True(t, errno.Equal(err, errno.DatabaseNotFound))
+	assert.Equal(t, "unset", client.showDb)
 }
