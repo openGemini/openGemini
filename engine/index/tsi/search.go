@@ -1042,7 +1042,10 @@ func (is *indexSearch) seriesByBinaryExpr(name []byte, n *influxql.BinaryExpr, t
 		return index.NewSeriesIDSetIterator(index.NewSeriesIDSetWithSet((*tsids).Clone())), nil
 	}
 
-	if len(is.tfs) == 0 {
+	// Searches returned by fieldIndex share this pool and may have zero capacity.
+	if cap(is.tfs) == 0 {
+		is.tfs = append(is.tfs, tagFilter{})
+	} else if len(is.tfs) == 0 {
 		is.tfs = is.tfs[:1]
 	}
 	tf := &is.tfs[0]

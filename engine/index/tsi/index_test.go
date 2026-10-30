@@ -2865,3 +2865,27 @@ func TestReplaceByNoClearIndexId(t *testing.T) {
 	_, _, err = ib.ReplaceByNoClearIndexId(1)
 	assert.NoError(t, err)
 }
+
+// fieldIndex and MergeSetIndex share indexSearchPool. Searches created by
+// fieldIndex have no tag-filter backing array.
+func TestSeriesByExprIteratorWithoutTagFilterCapacity(t *testing.T) {
+	idx, builder := getTestIndexAndBuilder(t.TempDir(), config.TSSTORE)
+	defer builder.Close()
+	CreateIndexByPts(idx)
+	primary := idx.(*MergeSetIndex)
+	is := primary.getIndexSearch()
+	defer primary.putIndexSearch(is)
+	is.tfs = nil
+	for _, condition := range []string{`tk1='value1'`, `tk1='value11'`} {
+		itr, err := is.measurementSeriesByExprIterator([]byte("mn-1_0000"), MustParseExpr(condition), false, 0, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 2
+		if condition == `tk1='value11'` {
+			want = 3
+		}
+		assert.Equal(t, want, len(itr.Ids().AppendTo(nil)))
+		is.tfs = is.tfs[:0]
+	}
+}
