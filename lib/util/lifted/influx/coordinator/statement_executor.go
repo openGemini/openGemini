@@ -1682,13 +1682,23 @@ func (e *StatementExecutor) executeShowContinuousQueriesStatement(q *influxql.Sh
 
 func (e *StatementExecutor) executeShowShardsStatement(stmt *influxql.ShowShardsStatement) (models.Rows, error) {
 	if stmt.GetMstInfo() == nil {
-		return e.MetaClient.ShowShards("", "", ""), nil
+		if stmt.Database != "" {
+			if _, err := e.MetaClient.Database(stmt.Database); err != nil {
+				return nil, err
+			}
+		}
+		return e.MetaClient.ShowShards(stmt.Database, "", ""), nil
 	}
 	return e.MetaClient.ShowShards(stmt.GetDBName(), stmt.GetRPName(), stmt.GetMstName()), nil
 }
 
 func (e *StatementExecutor) executeShowShardGroupsStatement(stmt *influxql.ShowShardGroupsStatement) (models.Rows, error) {
-	return e.MetaClient.ShowShardGroups(), nil
+	if stmt.Database != "" {
+		if _, err := e.MetaClient.Database(stmt.Database); err != nil {
+			return nil, err
+		}
+	}
+	return e.MetaClient.ShowShardGroups(stmt.Database), nil
 }
 
 func (e *StatementExecutor) executeShowSubscriptionsStatement(stmt *influxql.ShowSubscriptionsStatement) (models.Rows, error) {

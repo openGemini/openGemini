@@ -1971,9 +1971,13 @@ func (data *Data) ShowShardsFromMst(db string, rp string, mst string) models.Row
 	return rows
 }
 
-func (data *Data) ShowShards() models.Rows {
+// ShowShards returns the shards of the given database, or of all databases if database is empty.
+func (data *Data) ShowShards(database string) models.Rows {
 	var rows models.Rows
 	data.WalkDatabases(func(db *DatabaseInfo) {
+		if database != "" && db.Name != database {
+			return
+		}
 		row := &models.Row{Columns: []string{"id", "database", "retention_policy", "shard_group", "start_time", "end_time", "expiry_time", "owners", "tier", "downSample_level"}, Name: db.Name}
 		db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
 			rp.WalkShardGroups(func(sg *ShardGroupInfo) {
@@ -2012,9 +2016,13 @@ func joinUint64(a []uint64) string {
 	return buf.String()
 }
 
-func (data *Data) ShowShardGroups() models.Rows {
+// ShowShardGroups returns the shard groups of the given database, or of all databases if database is empty.
+func (data *Data) ShowShardGroups(database string) models.Rows {
 	row := &models.Row{Columns: []string{"id", "database", "retention_policy", "start_time", "end_time", "expiry_time"}, Name: "shard groups"}
 	data.WalkDatabases(func(db *DatabaseInfo) {
+		if database != "" && db.Name != database {
+			return
+		}
 		db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
 			rp.WalkShardGroups(func(sg *ShardGroupInfo) {
 				if sg.Deleted() {

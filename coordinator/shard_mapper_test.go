@@ -391,7 +391,7 @@ func (m mocShardMapperMetaClient) ShowShards(db string, rp string, mst string) m
 	return nil
 }
 
-func (m mocShardMapperMetaClient) ShowShardGroups() models.Rows {
+func (m mocShardMapperMetaClient) ShowShardGroups(database string) models.Rows {
 	return nil
 }
 

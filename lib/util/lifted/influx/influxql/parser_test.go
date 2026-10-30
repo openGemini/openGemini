@@ -77,3 +77,65 @@ func setupParse(s string) *influxql.NumberLiteral {
 	rhs := binaryExpr.RHS.(*influxql.NumberLiteral)
 	return rhs
 }
+
+func TestParseShowShardsOnDatabase(t *testing.T) {
+	tests := []struct {
+		sql      string
+		want     influxql.Statement
+		wantText string
+	}{
+		{
+			sql:      "SHOW SHARDS",
+			want:     &influxql.ShowShardsStatement{},
+			wantText: "SHOW SHARDS",
+		},
+		{
+			sql:      "SHOW SHARDS ON db0",
+			want:     &influxql.ShowShardsStatement{Database: "db0"},
+			wantText: "SHOW SHARDS ON db0",
+		},
+		{
+			sql:      `SHOW SHARDS ON "db 0"`,
+			want:     &influxql.ShowShardsStatement{Database: "db 0"},
+			wantText: `SHOW SHARDS ON "db 0"`,
+		},
+		{
+			sql:      "SHOW SHARD GROUPS",
+			want:     &influxql.ShowShardGroupsStatement{},
+			wantText: "SHOW SHARD GROUPS",
+		},
+		{
+			sql:      "SHOW SHARD GROUPS ON db0",
+			want:     &influxql.ShowShardGroupsStatement{Database: "db0"},
+			wantText: "SHOW SHARD GROUPS ON db0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.sql, func(t *testing.T) {
+			yyParser := &influxql.YyParser{Query: influxql.Query{}}
+			yyParser.Scanner = influxql.NewScanner(strings.NewReader(tt.sql))
+			yyParser.ParseTokens()
+			q, err := yyParser.GetQuery()
+			require.NoError(t, err)
+			require.Len(t, q.Statements, 1)
+			assert.Equal(t, tt.want, q.Statements[0])
+			assert.Equal(t, tt.wantText, q.Statements[0].String())
+
+			stmt, err := influxql.NewParser(strings.NewReader(tt.sql)).ParseStatement()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, stmt)
+		})
+	}
+
+	for _, sql := range []string{"SHOW SHARDS ON", "SHOW SHARD GROUPS ON"} {
+		yyParser := &influxql.YyParser{Query: influxql.Query{}}
+		yyParser.Scanner = influxql.NewScanner(strings.NewReader(sql))
+		yyParser.ParseTokens()
+		_, err := yyParser.GetQuery()
+		assert.Error(t, err, sql)
+
+		_, err = influxql.NewParser(strings.NewReader(sql)).ParseStatement()
+		assert.Error(t, err, sql)
+	}
+}

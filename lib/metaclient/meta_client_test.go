@@ -2461,6 +2461,17 @@ func TestClient_ShowShards(t *testing.T) {
 			wantSize: 3,
 			want:     []uint64{21, 33, 46},
 		},
+		{
+			name:   "test3",
+			fields: c1,
+			args: args{
+				db:  "db0",
+				rp:  "",
+				mst: "",
+			},
+			wantSize: 4,
+			want:     []uint64{1, 21, 33, 46},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

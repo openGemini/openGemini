@@ -737,17 +737,17 @@ func (c *Client) RaftEnabledForDB(name string) (RepConfWriteType, error) {
 func (c *Client) ShowShards(db string, rp string, mst string) models.Rows {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if db == "" && rp == "" && mst == "" {
-		return c.cacheData.ShowShards()
+	if mst == "" {
+		return c.cacheData.ShowShards(db)
 	} else {
 		return c.cacheData.ShowShardsFromMst(db, rp, mst)
 	}
 }
 
-func (c *Client) ShowShardGroups() models.Rows {
+func (c *Client) ShowShardGroups(database string) models.Rows {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.cacheData.ShowShardGroups()
+	return c.cacheData.ShowShardGroups(database)
 }
 
 func (c *Client) ShowSubscriptions() models.Rows {
