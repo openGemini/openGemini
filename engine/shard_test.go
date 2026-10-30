@@ -1509,15 +1509,13 @@ func TestShard_AsyncWalReplay_parallel_withCancel(t *testing.T) {
 	if err = newSh.OpenAndEnable(nil); err != nil {
 		t.Fatal(err)
 	}
-	// cancel wal replay
-	for newSh.cancelFn != nil {
-		newSh.cancelFn()
-	}
+	newSh.cancelWalReplay()
+	// Wait even if replay finished and cleared the cancel function before cancellation.
+	newSh.wal.wait()
 
 	if err = writeData(newSh, rows, false); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(1 * time.Second)
 	require.GreaterOrEqual(t, 800, int(newSh.rowCount))
 
 	if err = closeShard(newSh); err != nil {
@@ -1690,11 +1688,9 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight_WithCancel(t *testing.T) {
 	if err = newSh.OpenAndEnable(nil); err != nil {
 		t.Fatal(err)
 	}
-	// cancel wal replay
-	for newSh.cancelFn != nil {
-		newSh.cancelFn()
-		break
-	}
+	newSh.cancelWalReplay()
+	// Wait even if replay finished and cleared the cancel function before cancellation.
+	newSh.wal.wait()
 
 	err = writeRec(newSh, rec, false)
 	msInfo, err = newSh.activeTbl.GetMsInfo(defaultMeasurementName)
