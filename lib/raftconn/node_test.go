@@ -669,7 +669,7 @@ func (client *MockMetaClient) Measurements(database string, ms influxql.Measurem
 func (client *MockMetaClient) ShowShards(db string, rp string, mst string) models.Rows {
 	return nil
 }
-func (client *MockMetaClient) ShowShardGroups() models.Rows {
+func (client *MockMetaClient) ShowShardGroups(database string) models.Rows {
 	return nil
 }
 func (client *MockMetaClient) ShowSubscriptions() models.Rows {

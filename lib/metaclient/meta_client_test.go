@@ -2700,6 +2700,17 @@ func TestClient_ShowShards(t *testing.T) {
 			wantSize: 3,
 			want:     []uint64{21, 33, 46},
 		},
+		{
+			name:   "test3",
+			fields: c1,
+			args: args{
+				db:  "db0",
+				rp:  "",
+				mst: "",
+			},
+			wantSize: 4,
+			want:     []uint64{1, 21, 33, 46},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -4796,7 +4807,7 @@ func TestMetaClient_Show(t *testing.T) {
 			},
 		}
 		patch1 := gomonkey.ApplyMethod(cacheData, "ShowShards",
-			func(data *meta2.Data) models.Rows {
+			func(data *meta2.Data, database string) models.Rows {
 				return exp
 			})
 		defer patch1.Reset()
@@ -4819,11 +4830,11 @@ func TestMetaClient_Show(t *testing.T) {
 			},
 		}
 		patch1 := gomonkey.ApplyMethod(cacheData, "ShowShardGroups",
-			func(data *meta2.Data) models.Rows {
+			func(data *meta2.Data, database string) models.Rows {
 				return exp
 			})
 		defer patch1.Reset()
-		res := c.ShowShardGroups()
+		res := c.ShowShardGroups("")
 		convey.So(res, convey.ShouldResemble, exp)
 	})
 
