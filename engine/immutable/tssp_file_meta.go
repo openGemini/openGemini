@@ -637,7 +637,7 @@ func (m *ChunkMeta) UnmarshalWithColumns(src []byte, columns []string) ([]byte, 
 	ok := false
 	j := 0
 	for i := range columns {
-		if i > 0 && columns[i] == columns[i-1] {
+		if skipColumnMeta(columns, i) {
 			continue
 		}
 
@@ -653,6 +653,18 @@ func (m *ChunkMeta) UnmarshalWithColumns(src []byte, columns []string) ([]byte, 
 	m.colMeta = m.colMeta[:j]
 	m.columnCount = uint32(j)
 	return src, nil
+}
+
+// skipColumnMeta reports whether the meta of columns[i] should be skipped.
+// Duplicate columns are decoded only once. The time column is always the last column of a chunk,
+// so it is decoded only at the last position of columns, even if the time column queried by
+// count(time) is sorted in front of other columns (e.g. SELECT count(time) FROM mst WHERE a > 0 AND z > 0).
+func skipColumnMeta(columns []string, i int) bool {
+	last := len(columns) - 1
+	if columns[i] == record.TimeField && columns[last] == record.TimeField {
+		return i < last
+	}
+	return i > 0 && columns[i] == columns[i-1]
 }
 
 func (m *ChunkMeta) unmarshalBaseAttr(src []byte, columnCount int) ([]byte, error) {
