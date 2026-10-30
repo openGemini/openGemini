@@ -124,7 +124,8 @@ func NewFullJoinTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataType 
 		trans.nextChunks = append(trans.nextChunks, make(chan Semaphore))
 		trans.inputChunks = append(trans.inputChunks, make(chan Semaphore))
 		trans.lock = append(trans.lock, sync.Mutex{})
-		trans.bufChunks = append(trans.bufChunks, trans.NewChunkElem(NewChunkImpl(inRowDataTypes[i], ""), 0, 0))
+		// Keep columns available when an input closes without producing a chunk.
+		trans.bufChunks = append(trans.bufChunks, trans.NewChunkElem(NewChunkBuilder(inRowDataTypes[i]).NewChunk(""), 0, 0))
 		trans.nextChunksCloseOnce = append(trans.nextChunksCloseOnce, sync.Once{})
 	}
 

@@ -402,3 +402,61 @@ func TestFullJoinTransformDemo4(t *testing.T) {
 	_, err := executor.NewFullJoinTransform(inRowDataTypes, outputRowDataType, joinCase, schema)
 	assert.NotEqual(t, err, nil)
 }
+
+func TestFullJoinTransformEmptyInput(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		left, right bool
+	}{
+		{name: "empty left", right: true},
+		{name: "empty right", left: true},
+		{name: "both empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var left, right []executor.Chunk
+			if tc.left {
+				left = []executor.Chunk{BuildInChunk1("m1")}
+			}
+			if tc.right {
+				right = []executor.Chunk{BuildInChunk1("m2")}
+			}
+			source1 := NewSourceFromMultiChunk(buildInRowDataType(), left)
+			source2 := NewSourceFromMultiChunk(buildInRowDataType(), right)
+			trans, err := executor.NewFullJoinTransform(
+				[]hybridqp.RowDataType{buildInRowDataType(), buildInRowDataType()},
+				buildOutputRowDataType(), buildJoinCase(), buildFullJoinSchema())
+			if !assert.NoError(t, err) {
+				return
+			}
+			var got []executor.Chunk
+			sink := NewSinkFromFunction(buildOutputRowDataType(), func(chunk executor.Chunk) error {
+				got = append(got, chunk.Clone())
+				return nil
+			})
+			executor.Connect(source1.Output, trans.GetInputs()[0])
+			executor.Connect(source2.Output, trans.GetInputs()[1])
+			executor.Connect(trans.GetOutputs()[0], sink.Input)
+			pipeline := executor.NewPipelineExecutor(executor.Processors{source1, source2, trans, sink})
+			defer pipeline.Release()
+			if !assert.NoError(t, pipeline.Execute(context.Background())) {
+				return
+			}
+			if !tc.left && !tc.right {
+				assert.Empty(t, got)
+				return
+			}
+			if !assert.Len(t, got, 1) {
+				return
+			}
+			assert.Equal(t, []int64{1, 2, 3}, got[0].Time())
+			if tc.left {
+				assert.Equal(t, []float64{1, 2, 3}, got[0].Column(0).FloatValues())
+				assert.Equal(t, []string{"f1", "f2", "f3"}, got[0].Column(1).StringValuesV2(nil))
+			}
+			if tc.right {
+				assert.Equal(t, []bool{true, true, true}, got[0].Column(2).BooleanValues())
+				assert.Equal(t, []int64{1, 2, 3}, got[0].Column(3).IntegerValues())
+			}
+		})
+	}
+}
