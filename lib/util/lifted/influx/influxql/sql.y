@@ -3669,9 +3669,9 @@ SHOW_SERIES_CARDINALITY_STATEMENT:
 
 
 SHOW_SHARDS_STATEMENT:
-    SHOW SHARDS
+    SHOW SHARDS ON_DATABASE
     {
-        stmt := &ShowShardsStatement{}
+        stmt := &ShowShardsStatement{Database: $3}
         $$ = stmt
     }
     | SHOW SHARDS FROM TABLE_CASE
@@ -3707,9 +3707,9 @@ ALTER_SHARD_KEY_STATEMENT:
 
 
 SHOW_SHARD_GROUPS_STATEMENT:
-    SHOW SHARD GROUPS
+    SHOW SHARD GROUPS ON_DATABASE
     {
-        stmt := &ShowShardGroupsStatement{}
+        stmt := &ShowShardGroupsStatement{Database: $4}
         $$ = stmt
     }
 

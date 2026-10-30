@@ -214,7 +214,7 @@ type UserManager interface {
 }
 
 type ShardManager interface {
-	ShowShardGroups() models.Rows
+	ShowShardGroups(database string) models.Rows
 	ShardOwner(shardID uint64) (database, policy string, sgi *meta2.ShardGroupInfo)
 	GetAliveShards(database string, sgi *meta2.ShardGroupInfo, isRead bool) []int
 	DropShard(id uint64) error
