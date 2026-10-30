@@ -43,6 +43,7 @@ license-check:
 	fi
 
 go-version-check:
+	bash ./scripts/ci/go_version_check_test.sh
 	bash ./scripts/ci/go_version_check.sh
 
 style-check: install-goimports-reviser
