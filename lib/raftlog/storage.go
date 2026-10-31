@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	raftEntriesDir    = "__raft_entries__"
+	RaftEntriesDir    = "__raft_entries__"
 	allEntriesMaxSize = 64 << 20
 )
 
@@ -53,7 +53,7 @@ type RaftDiskStorage struct {
 
 // Init initializes an instance of DiskStorage.
 func Init(dir string, SyncInterval time.Duration) (*RaftDiskStorage, error) {
-	dir = filepath.Join(dir, raftEntriesDir)
+	dir = filepath.Join(dir, RaftEntriesDir)
 	rds := &RaftDiskStorage{
 		dir:          dir,
 		logger:       logger.NewLogger(errno.ModuleStorageEngine),
@@ -176,6 +176,10 @@ func (rds *RaftDiskStorage) NumEntries() int {
 	}
 }
 
+func (rds *RaftDiskStorage) GetDir() string {
+	return rds.dir
+}
+
 // Entries returns a slice of log entries in the range [lo,hi).
 // MaxSize limits the total size of the log entries returned, but
 // Entries returns at least one entry if any.
@@ -195,6 +199,22 @@ func (rds *RaftDiskStorage) Entries(lo, hi, maxSize uint64) ([]raftpb.Entry, err
 		return nil, raft.ErrUnavailable
 	}
 
+	ents := rds.entryLog.allEntries(lo, hi, maxSize)
+	return ents, nil
+}
+
+func (rds *RaftDiskStorage) AllValidEntries(lo, hi, first, last, maxSize uint64) ([]raftpb.Entry, error) {
+	if lo < first {
+		rds.logger.Error(fmt.Sprintf("AllValidEntries lo: %d < first: %d\n", lo, first))
+		lo = first
+	}
+
+	if hi > last+1 {
+		rds.logger.Error(fmt.Sprintf("AllValidEntries hi: %d > last+1: %d\n", hi, last+1))
+		hi = last + 1
+	}
+	rds.lock.Lock()
+	defer rds.lock.Unlock()
 	ents := rds.entryLog.allEntries(lo, hi, maxSize)
 	return ents, nil
 }
@@ -341,7 +361,7 @@ func (rds *RaftDiskStorage) TrySync() error {
 			return errors.Wrapf(err, "while syncing current file")
 		}
 		rds.firstSync = false
-		rds.logger.Info("rds firstSync")
+		rds.logger.Debug("rds firstSync")
 		return nil
 	}
 	if !rds.syncTaskCount.CompareAndSwap(0, 1) {
@@ -388,4 +408,16 @@ func (rds *RaftDiskStorage) EntrySize() int {
 		ret += file.entry.Size()
 	}
 	return ret
+}
+
+func (rds *RaftDiskStorage) Lock() {
+	rds.lock.Lock()
+}
+
+func (rds *RaftDiskStorage) UnLock() {
+	rds.lock.Unlock()
+}
+
+func (rds *RaftDiskStorage) GetRaftEntryLog() *entryLog {
+	return rds.entryLog
 }

@@ -18,6 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 func firstValue[T util.BasicType](values []T, start, end int, cv *ColVal) (T, int) {
@@ -189,25 +190,26 @@ func minValues[T util.NumberOnly](values []T, start, end int, cv *ColVal) (T, []
 
 func minValue[T util.NumberOnly](values []T, start, end int, cv *ColVal) (T, int) {
 	var defaultValue T
-	if len(values) == 0 {
+	if len(values) == 0 || start >= end || end > cv.Len {
 		return defaultValue, -1
 	}
 
 	var (
-		min        T
+		minV       T
 		skip, vIdx int
 	)
 	row := -1
+
 	if cv.NilCount == 0 {
-		min = values[start]
-		row = start
-		for i := start; i < end; i++ {
-			if min > values[i] {
-				min = values[i]
-				row = i
+		minV = values[end-1]
+		row = end - 1
+		for i, v := range values[start : end-1] {
+			if minV > v {
+				minV = v
+				row = i + start
 			}
 		}
-		return min, row
+		return minV, row
 	}
 
 	if cv.NilCount > 0 {
@@ -221,38 +223,38 @@ func minValue[T util.NumberOnly](values []T, start, end int, cv *ColVal) (T, int
 			continue
 		}
 		if vIdx == skip {
-			min = values[vIdx]
+			minV = values[vIdx]
 			row = i
-		} else if min > values[vIdx] {
-			min = values[vIdx]
+		} else if minV > values[vIdx] {
+			minV = values[vIdx]
 			row = i
 		}
 		vIdx++
 	}
-	return min, row
+	return minV, row
 }
 
 func maxValue[T util.NumberOnly](values []T, start, end int, cv *ColVal) (T, int) {
 	var defaultValue T
-	if len(values) == 0 {
+	if len(values) == 0 || start >= end || end > cv.Len {
 		return defaultValue, -1
 	}
 
 	var (
-		max        T
+		maxV       T
 		skip, vIdx int
 	)
 	row := -1
 	if cv.NilCount == 0 {
-		max = values[start]
-		row = start
-		for i := start; i < end; i++ {
-			if max < values[i] {
-				max = values[i]
-				row = i
+		maxV = values[end-1]
+		row = end - 1
+		for i, v := range values[start : end-1] {
+			if maxV < v {
+				maxV = v
+				row = i + start
 			}
 		}
-		return max, row
+		return maxV, row
 	}
 
 	if cv.NilCount > 0 {
@@ -266,15 +268,15 @@ func maxValue[T util.NumberOnly](values []T, start, end int, cv *ColVal) (T, int
 			continue
 		}
 		if vIdx == skip {
-			max = values[vIdx]
+			maxV = values[vIdx]
 			row = i
-		} else if max < values[vIdx] {
-			max = values[vIdx]
+		} else if maxV < values[vIdx] {
+			maxV = values[vIdx]
 			row = i
 		}
 		vIdx++
 	}
-	return max, row
+	return maxV, row
 }
 
 func updateValue[T util.ExceptString](cv *ColVal, v T, isNil bool, row int) {
@@ -361,4 +363,49 @@ func appendNullReserve[T util.ExceptString](cv *ColVal) {
 	cv.resetBitMap(cv.Len)
 	cv.Len++
 	cv.NilCount++
+}
+
+func CopyLastRow(rec *Record) {
+	for i := range rec.Schema {
+		CopyColValLastRow(&rec.ColVals[i], rec.Schema[i].Type)
+	}
+}
+
+func CopyColValLastRow(col *ColVal, typ int) {
+	if col == nil || col.Len == 0 {
+		return
+	}
+
+	idx := col.Len - 1
+	switch typ {
+	case influx.Field_Type_Int:
+		v, isNil := col.IntegerValue(idx)
+		if isNil {
+			col.AppendIntegerNull()
+		} else {
+			col.AppendIntegers(v)
+		}
+	case influx.Field_Type_Float:
+		v, isNil := col.FloatValue(idx)
+		if isNil {
+			col.AppendFloatNull()
+		} else {
+			col.AppendFloat(v)
+		}
+	case influx.Field_Type_Boolean:
+		v, isNil := col.BooleanValue(idx)
+		if isNil {
+			col.AppendBooleanNull()
+		} else {
+			col.AppendBoolean(v)
+		}
+	case influx.Field_Type_String, influx.Field_Type_Tag:
+		v, isNil := col.StringValueUnsafe(idx)
+		if isNil {
+			col.AppendStringNull()
+		} else {
+			col.AppendString(v)
+		}
+	default:
+	}
 }

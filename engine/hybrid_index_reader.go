@@ -171,7 +171,7 @@ func (r *attachedIndexReader) Next() (executor.IndexFrags, error) {
 			if err = r.skFileReader[j].ReInit(dataFile); err != nil {
 				return nil, err
 			}
-			frs, err = r.ctx.skIndexReader.Scan(r.skFileReader[j], frs)
+			frs, _, err = r.ctx.skIndexReader.Scan(r.skFileReader[j], frs)
 			if err != nil {
 				return nil, err
 			}
@@ -283,9 +283,6 @@ func (r *detachedIndexReader) initFileReader(frags executor.IndexFrags) (comm.Ke
 func (r *detachedIndexReader) Init() (err error) {
 	mst := r.ctx.schema.Options().GetMeasurements()[0]
 	r.dataPath = obs.GetBaseMstPath(r.ctx.shardPath, mst.Name)
-	if immutable.GetDetachedFlushEnabled() {
-		r.localPath = obs.GetLocalMstPath(obs.GetPrefixDataPath(), r.dataPath)
-	}
 	chunkCount, err := immutable.GetMetaIndexChunkCount(r.obsOptions, r.dataPath)
 	if err != nil {
 		return
@@ -464,7 +461,7 @@ func (r *detachedIndexReader) GetBatchFrag() (executor.IndexFrags, error) {
 				frs[k].Start += uint32(pkInfo.StartBlockId)
 				frs[k].End += uint32(pkInfo.StartBlockId)
 			}
-			frs, err = r.ctx.skIndexReader.Scan(r.skFileReader[j], frs)
+			frs, _, err = r.ctx.skIndexReader.Scan(r.skFileReader[j], frs)
 			if err != nil {
 				return nil, err
 			}

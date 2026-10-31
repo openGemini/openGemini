@@ -19,9 +19,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -36,8 +38,13 @@ const (
 	DefaultInnerChunkSize = 1024
 )
 
+var (
+	RunDelayDuration = time.Second * 2
+	SlowCQDuration   = time.Second * 10
+)
+
 type MetaClient interface {
-	SendSql2MetaHeartbeat(host string) error
+	SendCQ2MetaHeartbeat(host string) error
 	WaitForDataChanged() chan struct{}
 	GetMaxCQChangeID() uint64
 	Databases() map[string]*meta.DatabaseInfo
@@ -75,11 +82,17 @@ type Service struct {
 
 	maxCQChangedID uint64 // cache maxCQChangedID to check cq is changed
 	metaChangedCh  chan struct{}
-	cqLeaseChanged chan struct{} // last cq has changed, notify sql node to get cq lease
+	cqLeaseChanged chan struct{} // last cq has changed, notify cq node to get cq lease
 }
 
 // NewService creates a new Service instance named continuousQuery
-func NewService(hostname string, interval time.Duration, number int) *Service {
+func NewService(hostname string, conf config.ContinuousQueryConfig) *Service {
+	RunDelayDuration = time.Duration(conf.RunDelayDuration)
+	SlowCQDuration = time.Duration(conf.SlowCQDuration)
+	interval := time.Duration(conf.RunInterval)
+	logger.GetLogger().Info("continuous config", zap.Duration("delay", RunDelayDuration), zap.Duration("slow", SlowCQDuration),
+		zap.Int("concurrency", conf.MaxProcessCQNumber), zap.Duration("interval", interval))
+
 	s := &Service{
 		hostname: hostname,
 		closing:  make(chan struct{}),
@@ -88,7 +101,7 @@ func NewService(hostname string, interval time.Duration, number int) *Service {
 		reportInterval: DefaultReportTime,
 		lastReportTime: time.Now(),
 
-		maxProcessCQNumber: number,
+		maxProcessCQNumber: conf.MaxProcessCQNumber,
 		cqLeaseChanged:     make(chan struct{}),
 	}
 	s.base.Init("continuousQuery", interval, s.handle)
@@ -120,8 +133,8 @@ func (s *Service) sendHeartbeat2Meta() {
 		case <-s.closing:
 			return
 		case <-ticker.C:
-			if err := s.MetaClient.SendSql2MetaHeartbeat(s.hostname); err != nil {
-				s.logger.Warn("sql node send heartbeat to meta node failed", zap.Error(err))
+			if err := s.MetaClient.SendCQ2MetaHeartbeat(s.hostname); err != nil {
+				s.logger.Warn("cq node send heartbeat to meta node failed", zap.Error(err))
 			}
 		}
 	}
@@ -176,7 +189,7 @@ func (s *Service) getContinuousQueries() []*ContinuousQuery {
 }
 
 func (s *Service) handle() {
-	if syscontrol.IsReadonly() {
+	if syscontrol.IsReadonly() && !syscontrol.IsEnableReadonlyWrite() {
 		return
 	}
 	if !s.init {
@@ -255,8 +268,8 @@ func (s *Service) ExecuteContinuousQuery(cq *ContinuousQuery, now time.Time) (bo
 		return false, res.Err
 	}
 
-	// update cq.lastRun and s.lastRuns
-	cq.lastRun = endTime.Truncate(cq.resampleEvery)
+	// update cq.lastRun and s.lastRuns; delay lastRun to flush index so that nextRun data can be queried
+	cq.lastRun = endTime.Truncate(cq.resampleEvery).Add(RunDelayDuration)
 	s.lastRunsLock.Lock()
 	s.lastRuns[cq.name] = cq.lastRun
 	s.lastRunsLock.Unlock()
@@ -274,16 +287,17 @@ func (s *Service) runContinuousQueryAndWriteResult(cq *ContinuousQuery) *query.R
 	defer close(closing)
 
 	var qDuration *statistics.SQLSlowQueryStatistics
-	if !isInternalDatabase(cq.database) {
+	if !util.IsInternalDatabase(cq.database) {
 		qDuration = statistics.NewSqlSlowQueryStatistics(cq.database)
 		startTime := time.Now()
+		sql := q.String()
 		defer func() {
 			d := time.Since(startTime)
-			if d.Nanoseconds() > time.Second.Nanoseconds()*10 {
+			if SlowCQDuration > 0 && d.Nanoseconds() > SlowCQDuration.Nanoseconds() {
 				qDuration.AddDuration("TotalDuration", d.Nanoseconds())
 				statistics.AppendSqlQueryDuration(qDuration)
+				s.logger.Info("slow continuous query", zap.Duration("duration", d), zap.String("name", cq.name), zap.String("sql", sql))
 			}
-			s.logger.Info("continuous query duration", zap.Duration("duration", d))
 		}()
 	}
 
@@ -321,11 +335,6 @@ func (s *Service) tryReportLastRunTime() {
 		return
 	}
 	s.lastReportTime = time.Now()
-}
-
-// isInternalDatabase returns true if the database is "_internal".
-func isInternalDatabase(dbName string) bool {
-	return dbName == "_internal"
 }
 
 func (s *Service) Close() error {

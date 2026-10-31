@@ -92,6 +92,19 @@ type Config struct {
 	CPUThreshold            int               `toml:"cpu-threshold"`
 	MaxLineSize             int               `toml:"max-line-size"`
 	ResultCache             ResultCacheConfig `toml:"result-cache"`
+	GzipLevel               int               `toml:"gzip-level"`
+	QueryStatEnabled        bool              `toml:"query-stat-enabled"`
+	QueryStatRatio          float64           `toml:"query-stat-ratio"`
+}
+
+var HttpConfig = NewConfig()
+
+func SetHttpConfig(conf Config) {
+	HttpConfig = conf
+}
+
+func GetHttpConfig() *Config {
+	return &HttpConfig
 }
 
 func CombineDomain(domain, addr string) string {
@@ -143,6 +156,8 @@ func NewConfig() Config {
 		ReadBlockSize:           toml.Size(DefaultBlockSize),
 		TimeFilterProtection:    false,
 		MaxLineSize:             DefaultMaxLineSize,
+		GzipLevel:               -1, // gzip.DefaultCompression
+		QueryStatRatio:          1,
 	}
 }
 
@@ -177,6 +192,9 @@ func (c Config) Validate() error {
 	}
 	if c.MaxRowSizeLimit < 0 {
 		return errors.New("http max-row-size-limit can not be negative")
+	}
+	if c.QueryStatRatio <= 0 || c.QueryStatRatio > 1 {
+		return errors.New("http query-stat-ratio value range (0,1]")
 	}
 	return nil
 }

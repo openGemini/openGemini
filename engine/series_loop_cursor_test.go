@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -2939,14 +2940,13 @@ func Test_NewSeriesLoopCursorInSerial(t *testing.T) {
 	}
 }
 
-/*
 func Test_PromqlQuery_CrossShard_Function(t *testing.T) {
 	testDir := t.TempDir()
 	defer func() {
 		_ = fileops.RemoveAll(testDir)
 	}()
 	executor.RegistryTransformCreator(&executor.LogicalReader{}, &ChunkReader{})
-	msNames := []string{"cpu"}
+	msNames := []string{"cpu_prom"}
 	startTime := mustParseTime(time.RFC3339Nano, "2021-01-01T01:00:00Z")
 	pts, minT, _ := GenDataRecord(msNames, 5, 100, time.Millisecond*10, startTime, true, true, true)
 
@@ -2964,6 +2964,7 @@ func Test_PromqlQuery_CrossShard_Function(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
+	sh.waitSnapshot()
 
 	startTime = mustParseTime(time.RFC3339Nano, "2021-01-01T02:00:00Z")
 	pts, _, maxT := GenDataRecord(msNames, 5, 100, time.Millisecond*10, startTime, true, true, true)
@@ -2975,6 +2976,7 @@ func Test_PromqlQuery_CrossShard_Function(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh2.ForceFlush()
+	sh.waitSnapshot()
 	time.Sleep(time.Second * 2)
 
 	var shards []*shard
@@ -3239,7 +3241,6 @@ func Test_PromqlQuery_CrossShard_Function(t *testing.T) {
 		}
 	}
 }
-*/
 
 func Test_NewAggTagSetCursorWithMultiGroup(t *testing.T) {
 	opt := query.ProcessorOptions{}

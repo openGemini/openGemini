@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"io"
 	"os"
+	"sync/atomic"
 
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -42,6 +43,7 @@ type WalFile struct {
 	syncedSize  int64
 
 	option *obs.ObsOptions
+	closed atomic.Bool
 }
 
 func NewWalFile(name string, lock *string) *WalFile {
@@ -55,6 +57,10 @@ func NewWalFile(name string, lock *string) *WalFile {
 
 func (wf *WalFile) setWalObsOptions(option *obs.ObsOptions) {
 	wf.option = option
+}
+
+func (wf *WalFile) IsClosed() bool {
+	return wf.closed.Load()
 }
 
 func (wf *WalFile) OpenReadonly() error {
@@ -72,9 +78,7 @@ func (wf *WalFile) open(flag int) error {
 	// Force modify wf.name,wal files flush to OBS.
 	obsOptions := wf.option
 	if obsOptions != nil {
-		if obsOptions.Enabled {
-			wf.name = fileops.GetRemoteDataPath(obsOptions, wf.name)
-		}
+		wf.name = fileops.GetRemoteDataPath(obsOptions, wf.name)
 	}
 
 	fd, err := fileops.OpenFile(wf.name, flag, 0600, lockOpt, pri)
@@ -122,6 +126,7 @@ func (wf *WalFile) Write(b []byte) (int, error) {
 		mf.Write(b)
 	}
 
+	stat.WALWriteBytesCount.Add(int64(len(b)))
 	n, err := wf.writer.Write(b)
 	wf.writtenSize += int64(n)
 	return n, err
@@ -140,6 +145,7 @@ func (wf *WalFile) Close() error {
 	if wf.fd == nil {
 		return nil
 	}
+	wf.closed.Store(true)
 	return wf.fd.Close()
 }
 

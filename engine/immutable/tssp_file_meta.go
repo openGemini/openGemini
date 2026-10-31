@@ -31,25 +31,23 @@ const (
 	ChunkMetaCompressSnappy = 1
 	ChunkMetaCompressLZ4    = 2
 	ChunkMetaCompressSelf   = 3
-	ChunkMetaCompressEnd    = 4
 )
 
 var chunkMetaCompressMode = ChunkMetaCompressNone
 var zeroPreAgg = make([]byte, 48)
 
 func SetChunkMetaCompressMode(mode int) {
-	if mode < ChunkMetaCompressNone || mode >= ChunkMetaCompressEnd {
-		return
+	if mode != ChunkMetaCompressSelf {
+		// Using a general compression algorithm to compress ChunkMeta will significantly degrade query performance.
+		// Therefore, only self-encoding compression will be supported in the future.
+		mode = ChunkMetaCompressNone
 	}
 	chunkMetaCompressMode = mode
+	GetTsStoreConfig().CompressChunkMeta = IsChunkMetaCompressSelf()
 }
 
 func GetChunkMetaCompressMode() uint8 {
 	return uint8(chunkMetaCompressMode)
-}
-
-func UseIndexCompressWriter() bool {
-	return chunkMetaCompressMode == ChunkMetaCompressSnappy || chunkMetaCompressMode == ChunkMetaCompressLZ4
 }
 
 func IsChunkMetaCompressSelf() bool {
@@ -426,6 +424,18 @@ func (m *ChunkMeta) MinMaxTime() (min int64, max int64) {
 	return m.minTime(), m.maxTime()
 }
 
+func (m *ChunkMeta) SegmentMinMaxTime(i int) (min int64, max int64) {
+	return m.timeRange[i].minTime(), m.timeRange[i].maxTime()
+}
+
+func (m *ChunkMeta) SegmentMinTime(i int) int64 {
+	return m.timeRange[i].minTime()
+}
+
+func (m *ChunkMeta) SegmentMaxTime(i int) int64 {
+	return m.timeRange[i].maxTime()
+}
+
 func (m *ChunkMeta) resize(columns int, segs int) {
 	if cap(m.colMeta) < columns {
 		delta := columns - cap(m.colMeta)
@@ -551,7 +561,7 @@ func (m *ChunkMeta) minBytes() int {
 	// 8-byte attribute: m.size, m.columnCount, m.segCount
 	return 8*2 + 4*3 +
 		MinMaxTimeLen + // least 1 segment
-		ColumnMetaLenMin*2 // least two columns
+		ColumnMetaLenMin // least 1 columns
 }
 
 func (m *ChunkMeta) Size() int {

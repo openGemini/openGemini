@@ -36,10 +36,10 @@ type ReadCache struct {
 	ReadDataCacheEnPct toml.Size `toml:"read-data-cache-limit-pct"`
 }
 
-func NewReadCacheConfig() ReadCache {
+func NewReadCacheConfig() *ReadCache {
 	size, _ := memory.GetMemMonitor().SysMem()
 	memorySize := toml.Size(size * KB)
-	return ReadCache{
+	return &ReadCache{
 		ReadPageSize:       "32kb",
 		ReadMetaPageSize:   []string{},
 		ReadMetaCacheEn:    toml.Size(1),

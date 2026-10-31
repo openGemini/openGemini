@@ -3,7 +3,7 @@ package msgservice.data;
 
 import "lib/util/lifted/influx/meta/proto/meta.proto";
 
-option go_package = ".;msgservice.data";
+option go_package = "../data";
 
 message SeriesKeysRequest {
     required string Db           = 1;
@@ -203,4 +203,48 @@ message DropSeriesRequest {
 
 message DropSeriesResponse {
     optional string Err    = 1;
+}
+
+message ShowLastIndexRequest {
+    required string Database     = 1;
+    repeated uint32 PtIds        = 2;
+}
+
+message SmarterQueryResponse {
+    optional string Err          = 1;
+    optional bytes Data          = 2;
+}
+
+message SmarterQueryRequest {
+    required string Db           = 1;
+    repeated uint32 PtIDs        = 2;
+    optional string Mst          = 3;
+    repeated Field Fields        = 4;
+    optional int64 StartTime     = 5;
+    optional int64 EndTime       = 6;
+    optional int64 Interval      = 7;
+    repeated EqCond Condition    = 8;
+    optional int32 Limit         = 9;
+    optional string RP           = 10;
+    optional int32 Offset        = 11;
+    optional int64 HintType      = 12;
+    optional bytes HintSeriesKeys= 13;
+}
+
+message Field {
+    optional string Call          = 1;
+    optional string Val           = 2;
+    optional uint32 Typ           = 3;
+}
+
+message EqCond {
+    optional string Key           = 1;
+    optional string Val           = 2;
+    optional int64  Op            = 3;
+    optional uint32 Typ           = 4;
+}
+
+message PullRPPTWriteStatusRequest {
+    required string Database = 1;
+    required string RetentionPolicy = 2;
 }

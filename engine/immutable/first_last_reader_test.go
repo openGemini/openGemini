@@ -89,14 +89,14 @@ func TestReadFirstOrLast(t *testing.T) {
 	cm.Validation()
 
 	// first: the first row
-	reader.Init(cm, cr, ref, dst, true)
+	reader.Init(cm, cr, ref, dst, true, false)
 	err = reader.ReadTime(ctx, true, 2)
 	require.NoError(t, err)
 	firstValue, _ := dst.RecMeta.ColMeta[0].First()
 	require.Equal(t, firstValue.(int64), int64(1000000000000))
 
 	// last: the last row
-	reader.Init(cm, cr, ref, dst, false)
+	reader.Init(cm, cr, ref, dst, false, false)
 	err = reader.ReadTime(ctx, true, 2)
 	require.NoError(t, err)
 	lastValue, _ := dst.RecMeta.ColMeta[0].Last()
@@ -104,7 +104,7 @@ func TestReadFirstOrLast(t *testing.T) {
 
 	// last: the middle row
 	reader.Release()
-	reader.Init(cm, cr, ref, dst, false)
+	reader.Init(cm, cr, ref, dst, false, false)
 	ctx.SetTr(util.TimeRange{Min: 1000000000000, Max: 1990000000000})
 	err = reader.ReadTime(ctx, true, 2)
 	require.NoError(t, err)

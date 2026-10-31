@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -205,18 +206,14 @@ func NewMocEngine(infos []*meta.ShardDownSamplePolicyInfo) *mocEngine {
 	}
 }
 
-func (m *mocEngine) StartDownSampleTask(sdsp *meta.ShardDownSamplePolicyInfo, schema []hybridqp.Catalog, log *zap.Logger, meta interface {
-	UpdateShardDownSampleInfo(Ident *meta.ShardIdentifier) error
-}) error {
+func (m *mocEngine) StartDownSampleTask(sdsp *meta.ShardDownSamplePolicyInfo, schema []hybridqp.Catalog, log *zap.Logger, meta engine.MetaDownSample) error {
 	return nil
 }
 
 func (m *mocEngine) UpdateStoreDownSamplePolicies(info *meta.DownSamplePolicyInfo, ident string) {
 }
 
-func (m *mocEngine) GetShardDownSamplePolicyInfos(meta interface {
-	UpdateShardDownSampleInfo(Ident *meta.ShardIdentifier) error
-}) ([]*meta.ShardDownSamplePolicyInfo, error) {
+func (m *mocEngine) GetShardDownSamplePolicyInfos(meta engine.MetaDownSample) ([]*meta.ShardDownSamplePolicyInfo, error) {
 	return m.infos, nil
 }
 

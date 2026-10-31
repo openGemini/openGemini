@@ -1,0 +1,9 @@
+.github
+tests
+images
+docker
+benchmarks
+python
+scripts
+Dockerfile.nightly
+*_test.go

@@ -389,3 +389,20 @@ func TestBuildPKFilePathFromTSSP(t *testing.T) {
 	require.Equal(t, "", BuildPKFilePathFromTSSP(""))
 	require.Equal(t, colstore.AppendPKIndexSuffix("/tmp/abc"), BuildPKFilePathFromTSSP("/tmp/abc"))
 }
+
+func TestRenameIndexFilePathFromTSSP(t *testing.T) {
+	skipIndex := "/tmp/db0/00000000-0000-00000001.some_field.bf"
+	tssp := "/tmp/db0/00000000-0000-00000002.tssp"
+	exp := "/tmp/db0/00000000-0000-00000002.some_field.bf"
+
+	var run = func(old, tssp, exp string) {
+		require.Equal(t, filepath.Clean(exp), filepath.Clean(RenameIndexFilePathFromTSSP(old, tssp)))
+	}
+
+	run(skipIndex, "", skipIndex)
+	run(skipIndex, "/tmp/abc", skipIndex)
+	run(skipIndex, tssp, exp)
+	run(skipIndex+tmpFileSuffix, tssp, exp)
+	run(skipIndex, tssp+tmpFileSuffix, exp+tmpFileSuffix)
+	run(skipIndex+tmpFileSuffix, tssp+tmpFileSuffix, exp+tmpFileSuffix)
+}

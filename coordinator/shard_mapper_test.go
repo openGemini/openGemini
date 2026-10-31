@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	set "github.com/deckarep/golang-set/v2"
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
@@ -47,6 +48,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/prometheus/prometheus/promql/parser"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1847,6 +1849,33 @@ func Test_MapTypeBatchBinOpNilMst(t *testing.T) {
 	if err != nil {
 		t.Fatal()
 	}
+	myFields = map[string]*influxql.FieldNameSpace{
+		"mst1.value": {
+			DataType: influx.Field_Type_Unknown,
+		},
+		"mst1.no_exist": {
+			DataType: influx.Field_Type_Unknown,
+		},
+		"mst1.tag1": {
+			DataType: influx.Field_Type_Unknown,
+		},
+	}
+	dstFields := map[string]*influxql.FieldNameSpace{
+		"mst1.value": {
+			RealName: "value",
+			DataType: influxql.Float,
+		},
+		"mst1.no_exist": {
+			DataType: influxql.Unknown,
+		},
+		"mst1.tag1": {
+			RealName: "tag1",
+			DataType: influxql.Tag,
+		},
+	}
+	err = shardMapping.MapTypeBatch(source1, myFields, schema)
+	assert.NoError(t, err)
+	assert.Equal(t, myFields, dstFields)
 }
 
 func Test_MapShardsInCondition(t *testing.T) {
@@ -2459,4 +2488,35 @@ func Test_MapShardsUnion(t *testing.T) {
 	csming3, err := csm.MapShards(stmt3, ttime, query.SelectOptions{}, nil)
 	assert.NotEqual(t, nil, err)
 	assert.Equal(t, nil, csming3)
+}
+
+func TestShardMappingGetResource(t *testing.T) {
+	tr := influxql.TimeRange{}
+	tmin := time.Unix(0, tr.MinTimeNano())
+	tmax := time.Unix(0, tr.MaxTimeNano())
+	csm := &ClusterShardMapper{}
+	convey.Convey("GetResource_With_NotFound", t, func() {
+		mc := &metaclient.Client{}
+		patch := gomonkey.ApplyMethod(mc, "GetResource", func(mc *metaclient.Client, name string) (map[string]string, bool) {
+			return nil, false
+		})
+		defer patch.Reset()
+		csm.MetaClient = mc
+		csming := NewClusterShardMapping(csm, tmin, tmax)
+		resource := csming.GetResource("")
+		convey.So(0, convey.ShouldEqual, len(resource))
+	})
+
+	convey.Convey("GetResource_With_Exists", t, func() {
+		mc := &metaclient.Client{}
+		properties := map[string]string{"type": "llm"}
+		patch := gomonkey.ApplyMethod(mc, "GetResource", func(mc *metaclient.Client, name string) (map[string]string, bool) {
+			return properties, true
+		})
+		defer patch.Reset()
+		csm.MetaClient = mc
+		csming := NewClusterShardMapping(csm, tmin, tmax)
+		resource := csming.GetResource("")
+		convey.So(properties, convey.ShouldEqual, resource)
+	})
 }

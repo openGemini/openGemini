@@ -69,12 +69,15 @@ type SelectOptions struct {
 
 	HintType hybridqp.HintType
 
-	IncQuery     bool
-	QueryID      string
-	IterID       int32
-	IsArrowQuery bool
-}
+	IncQuery             bool
+	QueryID              string
+	IterID               int32
+	IsArrowQuery         bool
+	IsGetFlightInfoQuery bool
 
+	// QueryType specifies the type of query: "influxql" or "sql"
+	QueryType string
+}
 type LogicalPlanCreator interface {
 	// Creates a simple iterator for use in an InfluxQL Logical.
 	CreateLogicalPlan(ctx context.Context, sources influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error)
@@ -83,6 +86,7 @@ type LogicalPlanCreator interface {
 	LogicalPlanCost(source *influxql.Measurement, opt ProcessorOptions) (hybridqp.LogicalPlanCost, error)
 
 	GetSources(sources influxql.Sources) influxql.Sources
+	GetResource(resource string) map[string]string
 	GetETraits(ctx context.Context, sources influxql.Sources, schema hybridqp.Catalog) ([]hybridqp.Trait, error)
 	GetSeriesKey() []byte
 	GetTagKeys(stmt *influxql.ShowTagValuesStatement) (map[string]map[string]struct{}, error)
@@ -308,6 +312,8 @@ type ProcessorOptions struct {
 	ValueCondition influxql.Expr
 
 	IsArrowQuery bool
+
+	QueryType string
 }
 
 // todo: base on graph query model
@@ -330,6 +336,7 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	opt.AbortChan = sopt.AbortChan
 	opt.RowsChan = sopt.RowsChan
 	opt.IsArrowQuery = sopt.IsArrowQuery
+	opt.QueryType = sopt.QueryType
 	return opt, nil
 }
 
@@ -517,6 +524,10 @@ func (opt *ProcessorOptions) GetStartTime() int64 {
 
 func (opt *ProcessorOptions) GetEndTime() int64 {
 	return opt.EndTime
+}
+
+func (opt *ProcessorOptions) HasTimeCondition() bool {
+	return opt.StartTime != influxql.MinTime || opt.EndTime != influxql.MaxTime
 }
 
 func (opt *ProcessorOptions) ChunkSizeNum() int {
@@ -811,16 +822,7 @@ func (opt *ProcessorOptions) GetMeasurements() []*influxql.Measurement {
 }
 
 func (opt *ProcessorOptions) HaveOnlyCSStore() bool {
-	msts := opt.GetMeasurements()
-	if len(msts) == 0 {
-		return false
-	}
-	for i := range msts {
-		if !msts[i].IsCSStore() {
-			return false
-		}
-	}
-	return true
+	return opt.GetSources().HaveOnlyCSStore()
 }
 
 func (opt *ProcessorOptions) HaveLocalMst() bool {
@@ -959,6 +961,50 @@ func (opt *ProcessorOptions) GetValueCondition() influxql.Expr {
 
 func (opt *ProcessorOptions) SetValueCondition(vc influxql.Expr) {
 	opt.ValueCondition = vc
+}
+
+func (opt *ProcessorOptions) HaveCall() bool {
+	if len(opt.Exprs) == 0 {
+		return false
+	}
+	for _, expr := range opt.Exprs {
+		if _, ok := expr.(*influxql.Call); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (opt *ProcessorOptions) IsSQL() bool {
+	return opt.QueryType == QueryTypeSQL
+}
+
+func (opt *ProcessorOptions) isCountTime() bool {
+	if len(opt.Exprs) != 1 {
+		return false
+	}
+	if call, ok := opt.Exprs[0].(*influxql.Call); !ok || call.Name != "count" ||
+		len(call.Args) != 1 || call.Args[0].(*influxql.VarRef).Val != "time" {
+		return false
+	}
+	return true
+}
+
+// IsOnlyCountTime  check whether all data is queried to use mst-level pre-aggregation.
+func (opt *ProcessorOptions) IsOnlyCountTime() bool {
+	if opt.GetHintType() == hybridqp.ExactStatisticQuery {
+		return false
+	}
+	if !opt.isCountTime() {
+		return false
+	}
+	if opt.HasInterval() {
+		return false
+	}
+	if len(opt.GetOptDimension()) > 0 {
+		return false
+	}
+	return true
 }
 
 func validateTypes(stmt *influxql.SelectStatement) error {

@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"strconv"
 	"time"
+	"unsafe"
 
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
@@ -89,6 +90,14 @@ const MONITORLOGO = `
   |_____|   \______.'|_____||_____|'.___.'|_____|\____||_____|  |_____|   '.___.'|____| |___|
 `
 
+const TASKLOGO = `
+  _____ ____ _____  _    ____  _  __
+ |_   _/ ___|_   _|/ \  / ___|| |/ /
+   | | \___ \ | | / _ \ \___ \| ' / 
+   | |  ___) || |/ ___ \ ___) | . \ 
+   |_| |____/ |_/_/   \_|____/|_|\_\
+`
+
 const MainUsage = `Configure and start the process of openGemini.
 
 Usage: %s [[command]] [arguments]
@@ -134,15 +143,17 @@ arch: %s`
 
 // Options represents the command line options that can be parsed.
 type Options struct {
-	ConfigPath string
-	PIDFile    string
-	Join       string
-	Hostname   string
+	ConfigPath  string
+	PIDFile     string
+	Join        string
+	Hostname    string
+	monitorPass string
 }
 
 var (
 	_ = flag.String("config", "", "-config=config file path")
 	_ = flag.String("pidfile", "", "-pid=pid file path")
+	_ = flag.String("monitorPass", "", "-monitorPass=password for monitor")
 )
 
 // InitParse inits the command line parse flogs
@@ -156,11 +167,14 @@ func ParseFlags(usage func(), args ...string) (Options, error) {
 	var options Options
 	fs := flag.NewFlagSet("", flag.ExitOnError)
 	fs.Usage = usage
+	var mp string
 	fs.StringVar(&options.ConfigPath, "config", "", "")
 	fs.StringVar(&options.PIDFile, "pidfile", "", "")
+	fs.StringVar(&mp, "monitorPass", "", "")
 	if err := fs.Parse(args); err != nil {
 		return Options{}, err
 	}
+	options.monitorPass = ClearArgs(&mp)
 	return options, nil
 }
 
@@ -193,11 +207,12 @@ func WritePIDFile(pidfile string) error {
 }
 
 type ServerInfo struct {
-	App       config.App
-	Version   string
-	Commit    string
-	Branch    string
-	BuildTime string
+	App         config.App
+	Version     string
+	Commit      string
+	Branch      string
+	BuildTime   string
+	MonitorPass *string
 }
 
 func (si *ServerInfo) StatVersion() string {
@@ -219,4 +234,15 @@ func LogStarting(name string, info *ServerInfo) {
 		zap.Int("maxprocs", cpu.GetCpuNum()))
 	//Mark start-up in extra log
 	fmt.Printf("%v %s starting\n", time.Now(), name)
+}
+
+func ClearArgs(shouldBeHidden *string) string {
+	temp := make([]byte, len(*shouldBeHidden))
+	copy(temp, *shouldBeHidden)
+
+	p := *(*unsafe.Pointer)(unsafe.Pointer(shouldBeHidden))
+	for i := 0; i < len(*shouldBeHidden); i++ {
+		*(*uint8)(unsafe.Pointer(uintptr(p) + uintptr(i))) = '*'
+	}
+	return string(temp)
 }

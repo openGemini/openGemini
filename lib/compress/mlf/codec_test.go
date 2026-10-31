@@ -17,11 +17,11 @@ package mlf_test
 import (
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"testing"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/compress/mlf"
-	"github.com/openGemini/openGemini/lib/rand"
 )
 
 func TestCodec(t *testing.T) {
@@ -98,7 +98,7 @@ func TestItemSizes(t *testing.T) {
 		codecValues([][]float64{values})
 	}
 
-	for n := range 50 {
+	for n := range 55 {
 		values := buildData(int64(n))
 		values[10] = 1.11111111222222
 		values[11] = 0
@@ -112,7 +112,7 @@ func buildData(n int64) []float64 {
 	n = int64(math.Pow(2, float64(n)))
 	var values []float64
 	for i := 0; i < 1000; i++ {
-		f := math.Floor((1.2+float64(rand.Int63()%n)/10)*10) / 10
+		f := math.Floor((1.2+float64(rand.Int64()%n)/10)*10) / 10
 		values = append(values, f)
 	}
 

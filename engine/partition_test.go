@@ -15,19 +15,26 @@
 package engine
 
 import (
+	"errors"
 	"os"
 	"path"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
+	"github.com/openGemini/openGemini/lib/interruptsignal"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestParseIndexDir(t *testing.T) {
@@ -68,6 +75,7 @@ func TestParseShardDir(t *testing.T) {
 }
 
 func TestOpenShard(t *testing.T) {
+	config.SetProductType("basic")
 	dir := t.TempDir()
 	dbPTInfo := NewDBPTInfo(defaultDb, defaultPtId, "", "", nil, nil, nil)
 	lockPath := path.Join("", "LOCK")
@@ -206,4 +214,60 @@ func TestHasCoverShard(t *testing.T) {
 	}
 	re := dbpt.HasCoverShard(srcTimeRange, "rp0", 1)
 	require.Equal(t, re, true)
+}
+
+func TestCloseClosedShard(t *testing.T) {
+	dbpt := &DBPTInfo{
+		shards: make(map[uint64]Shard),
+		closed: interruptsignal.NewInterruptSignal(),
+		logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+		wg:     &sync.WaitGroup{},
+		unload: make(chan struct{}),
+	}
+	shard1 := &shard{
+		ident: &meta.ShardIdentifier{
+			ShardID: 1,
+		},
+		cacheClosed: 1,
+	}
+	dbpt.shards[1] = shard1
+	err := shard1.Close()
+	require.Equal(t, err.Error(), "shard closed 1")
+	err = dbpt.closeDBPt()
+	require.Equal(t, err, nil)
+}
+
+func TestRecoverParquetLog(t *testing.T) {
+	convey.Convey("test recover parquet log", t, func() {
+		shards := make(map[uint64]Shard)
+		fakeShard := &shard{ident: &meta.ShardIdentifier{ShardID: 1}}
+		shards[1] = fakeShard
+		dbPT := &DBPTInfo{
+			id:     1,
+			shards: shards,
+			logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+		}
+		convey.Convey("recover success", func() {
+			count := 0
+			p1 := gomonkey.ApplyMethod(fakeShard, "RecoverParquetLog", func(_ *shard) error {
+				count++
+				return nil
+			})
+			defer p1.Reset()
+			dbPT.recoverParquetLog()
+			convey.So(count, convey.ShouldEqual, 1)
+		})
+
+		convey.Convey("recover failed", func() {
+			count := 0
+			p1 := gomonkey.ApplyMethod(fakeShard, "RecoverParquetLog", func(_ *shard) error {
+				count++
+				return errors.New("failed")
+			})
+			defer p1.Reset()
+			dbPT.recoverParquetLog()
+			convey.So(count, convey.ShouldEqual, 1)
+		})
+
+	})
 }

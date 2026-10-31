@@ -34,8 +34,8 @@ type Wal struct {
 	WalReplayBatchSize toml.Size     `toml:"wal-replay-batch-size"`
 }
 
-func NewWalConfig() Wal {
-	return Wal{
+func NewWalConfig() *Wal {
+	return &Wal{
 		WalSyncInterval:    toml.Duration(DefaultWALSyncInterval),
 		WalEnabled:         true,
 		WalReplayParallel:  false,

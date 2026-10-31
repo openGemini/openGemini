@@ -21,9 +21,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/spdy"
-	"github.com/openGemini/openGemini/lib/strings"
 	"github.com/openGemini/openGemini/lib/tracing"
-	"github.com/pingcap/failpoint"
 )
 
 const (
@@ -88,12 +86,6 @@ func NewRaftMsgTransport(nodeId uint64, typ uint8, callback Callback) (*Transpor
 }
 
 func newTransport(node *Node, typ uint8, callback Callback, timeout time.Duration) (*Transport, error) {
-	failpoint.Inject("node-fault", func(val failpoint.Value) {
-		if strings.ContainsInterface(val, node.address) {
-			failpoint.Return(nil, errno.NewError(errno.NoConnectionAvailable, node.nodeID, node.address))
-		}
-	})
-
 	p := node.GetPool()
 	if p == nil || !p.Available() {
 		return nil, errno.NewError(errno.NoConnectionAvailable, node.nodeID, node.address)

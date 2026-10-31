@@ -18,12 +18,29 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/bitmap"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/index"
-	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
+
+var seriesIdIteratorPool = pool.NewUnionPool[SeriesIdIterator](4*cpu.GetCpuNum(), 0, 0,
+	func() *SeriesIdIterator {
+		return &SeriesIdIterator{
+			rec:           &record.Record{},
+			swap:          &record.Record{},
+			sortHelper:    record.NewColumnSortHelper(),
+			metaCtx:       immutable.NewChunkMetaContext(nil),
+			readCtx:       immutable.NewReadContext(true),
+			filterOptions: &immutable.BaseFilterOptions{},
+		}
+	})
+
+func init() {
+	seriesIdIteratorPool.EnableHitRatioStat("SeriesIdIterator")
+}
 
 type SeriesIdIterator struct {
 	order     []immutable.TSSPFile
@@ -45,43 +62,26 @@ type SeriesIdIterator struct {
 
 func NewSeriesIdIterator(order, unordered []immutable.TSSPFile, seriesItr index.SeriesIDIterator, tr util.TimeRange,
 	schema record.Schemas) *SeriesIdIterator {
-	fieldsIdx := make([]int, schema.Len()-1)
-	for i := range fieldsIdx {
-		fieldsIdx[i] = i
-	}
-	filterOption := &immutable.BaseFilterOptions{
-		CondFunctions: &binaryfilterfunc.ConditionImpl{},
-		FieldsIdx:     fieldsIdx,
-		RedIdxMap:     map[int]struct{}{},
-		FiltersMap:    make(map[string]*influxql.FilterMapValue),
-	}
 
-	return &SeriesIdIterator{
-		order:         order,
-		unordered:     unordered,
-		seriesItr:     seriesItr,
-		tr:            tr,
-		schema:        schema,
-		rec:           &record.Record{},
-		swap:          &record.Record{},
-		sortHelper:    record.NewColumnSortHelper(),
-		metaCtx:       immutable.NewChunkMetaContext(schema),
-		readCtx:       immutable.NewReadContext(true),
-		filterOptions: filterOption,
-	}
+	itr := seriesIdIteratorPool.Get()
+	itr.filterOptions.Init(schema.Len() - 1)
+
+	itr.order = order
+	itr.unordered = unordered
+	itr.seriesItr = seriesItr
+	itr.schema = schema
+	itr.tr = tr
+	itr.metaCtx.InitColumns(schema)
+
+	return itr
 }
 
 func (itr *SeriesIdIterator) Close() {
-	itr.seriesItr.Close()
-	itr.readCtx.Release()
-	itr.metaCtx.Release()
-	itr.sortHelper.Release()
-
-	itr.readCtx = nil
-	itr.metaCtx = nil
-	itr.sortHelper = nil
+	util.MustClose(itr.seriesItr)
+	itr.seriesItr = nil
 	itr.order = nil
 	itr.unordered = nil
+	seriesIdIteratorPool.PutWithMemSize(itr, 0)
 }
 
 func (itr *SeriesIdIterator) Next() (uint64, *record.Record, error) {
@@ -94,13 +94,20 @@ func (itr *SeriesIdIterator) Next() (uint64, *record.Record, error) {
 		return 0, nil, nil
 	}
 
-	conditionFunction, err := binaryfilterfunc.NewCondition(nil, seriesIDElem.Expr, itr.schema, nil)
-	if err != nil {
-		return 0, nil, err
+	if seriesIDElem.Expr != nil {
+		conditionFunction, err := binaryfilterfunc.NewCondition(nil, seriesIDElem.Expr, itr.schema, nil)
+		if err != nil {
+			return 0, nil, err
+		}
+		itr.filterOptions.CondFunctions = conditionFunction
+		if itr.filterBitmap == nil {
+			itr.filterBitmap = bitmap.NewFilterBitmap(conditionFunction.NumFilter())
+		} else {
+			itr.filterBitmap.Reinit(conditionFunction.NumFilter())
+		}
+	} else {
+		itr.filterOptions.CondFunctions = nil
 	}
-	filterBitmap := bitmap.NewFilterBitmap(conditionFunction.NumFilter())
-	itr.filterOptions.CondFunctions = conditionFunction
-	itr.filterBitmap = filterBitmap
 
 	rec, err := itr.readRecord(sid)
 	if err != nil {
@@ -162,6 +169,13 @@ func (itr *SeriesIdIterator) readRecordFromTSSPFile(reader immutable.TSSPFile, d
 	swap.ResetWithSchema(itr.schema)
 
 	for i := range meta.SegmentCount() {
+		// data sorted in ascending order
+		if itr.tr.Max < meta.SegmentMinTime(i) {
+			break
+		}
+		if !itr.tr.Overlaps(meta.SegmentMinMaxTime(i)) {
+			continue
+		}
 		swap, err = reader.ReadAt(meta, i, swap, itr.readCtx, ioPriority)
 		if err != nil {
 			return err
@@ -174,11 +188,11 @@ func (itr *SeriesIdIterator) readRecordFromTSSPFile(reader immutable.TSSPFile, d
 		swap = immutable.FilterByTime(swap, itr.tr)
 
 		// filter with condition, only when current sid has filter expr
-		if len(itr.filterBitmap.Bitmap) > 0 {
+		if itr.filterOptions.CondFunctions != nil && itr.filterOptions.CondFunctions.HaveFilter() {
 			swap = immutable.FilterByFieldFuncs(swap, nil, itr.filterOptions, itr.filterBitmap)
 		}
 		if swap == nil || swap.RowNums() == 0 {
-			return nil
+			continue
 		}
 		dst.Merge(swap)
 	}

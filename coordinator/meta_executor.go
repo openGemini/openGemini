@@ -30,7 +30,7 @@ const (
 
 type IMetaExecutor interface {
 	SetTimeOut(timeout time.Duration)
-	EachDBNodes(database string, fn func(nodeID uint64, pts []uint32) error) error
+	EachDBNodes(database string, fn func(nodeID uint64, pts []uint32) error, getNodePtsFn func(string) (map[uint64][]uint32, error)) error
 	Close() error
 }
 
@@ -61,7 +61,7 @@ func (m *MetaExecutor) Close() error {
 	return nil
 }
 
-func (m *MetaExecutor) EachDBNodes(database string, fn func(nodeID uint64, pts []uint32) error) error {
+func (m *MetaExecutor) EachDBNodes(database string, fn func(nodeID uint64, pts []uint32) error, getNodePtsFn func(string) (map[uint64][]uint32, error)) error {
 	if _, err := m.MetaClient.Database(database); err != nil {
 		return err
 	}
@@ -70,7 +70,7 @@ func (m *MetaExecutor) EachDBNodes(database string, fn func(nodeID uint64, pts [
 
 	for {
 		// write-available-first: skip offline pts and tolerate data lost
-		nodePtMap, err := m.MetaClient.GetNodePtsMap(database)
+		nodePtMap, err := getNodePtsFn(database)
 		if err != nil || len(nodePtMap) == 0 {
 			return err
 		}

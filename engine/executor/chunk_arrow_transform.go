@@ -17,6 +17,7 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/apache/arrow/go/v13/arrow"
@@ -36,6 +37,11 @@ const (
 	Algo
 	Conf
 	AlgoType
+)
+
+const (
+	ML_INFER_UDF_NAME = "model_infer"
+	UDF_DETECT        = "_udf_detect"
 )
 
 type fieldInfo struct {
@@ -168,7 +174,15 @@ func copyChunkToRecordWithoutInterval(
 	times := c.Time()
 	tagIdx := c.TagIndex()
 	tags := c.Tags()
-	metric := c.RowDataType().Field(0).Name()
+	fields := c.RowDataType().Fields()
+	sb := strings.Builder{}
+	for i, f := range fields {
+		sb.WriteString(f.Name())
+		if i != len(fields)-1 {
+			sb.WriteString(",")
+		}
+	}
+	metric := sb.String()
 	for i := 0; i < len(tagIdx); i++ {
 		seriesStart := tagIdx[i]
 		var seriesEnd int
@@ -420,6 +434,9 @@ func appendArrowInt64(b *array.RecordBuilder, col Column, fieldIndex, seriesStar
 }
 
 func CopyCastorADArrowRecordToChunk(r arrow.Record, c Chunk, fields map[string]struct{}) error {
+	if r.NumRows() == 0 {
+		return nil
+	}
 	metaData := r.Schema().Metadata()
 	errInfoIdx := metaData.FindKey(string(castor.ErrInfo))
 	if errInfoIdx != -1 {
@@ -575,7 +592,7 @@ func appendChunkInt64(rCol *array.Int64, cCol Column) {
 
 func buildChunkTagsWithFilter(metaData arrow.Metadata) *ChunkTags {
 	// combine tags from both record metadata and chunktags
-	var newTags []influx.Tag
+	var newTags influx.PointTags
 	var validKeys []string
 
 	// build tag from castor algorithm output
@@ -593,7 +610,7 @@ func buildChunkTagsWithFilter(metaData arrow.Metadata) *ChunkTags {
 	if len(newTags) == 0 {
 		return &ChunkTags{}
 	}
-
+	sort.Sort(&newTags)
 	return NewChunkTags(newTags, validKeys)
 }
 

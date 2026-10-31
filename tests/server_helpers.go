@@ -23,9 +23,9 @@ import (
 	"time"
 
 	_ "github.com/influxdata/influxdb/toml"
-	jsoniter "github.com/json-iterator/go"
 	tssql "github.com/openGemini/openGemini/app/ts-sql/sql"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/encoding"
 	_ "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -37,9 +37,9 @@ var verboseServerLogs bool
 var indexType string
 var cleanupData bool
 var seed int64
-var json = jsoniter.ConfigCompatibleWithStandardLibrary
 var SuccessCount int
 var FailCount int
+var json2 = encoding.JSONConfig
 
 // Server represents a test wrapper for run.Server.
 type Server interface {
@@ -256,7 +256,7 @@ func (r Response) MarshalJSON() ([]byte, error) {
 		o.Err = r.Err.Error()
 	}
 
-	return json.Marshal(&o)
+	return json2.Marshal(&o)
 }
 
 // UnmarshalJSON decodes the data into the Response struct.
@@ -266,7 +266,7 @@ func (r *Response) UnmarshalJSON(b []byte) error {
 		Err     string          `json:"error,omitempty"`
 	}
 
-	err := json.Unmarshal(b, &o)
+	err := json2.Unmarshal(b, &o)
 	if err != nil {
 		return err
 	}
@@ -309,10 +309,12 @@ func NewServer(c *Config, isPromServer bool) Server {
 		}
 		return s
 	}
+
+	fmt.Println("Environment variable `URL` not set or is an empty string, server not started.")
 	return nil
 }
 
-// NewServer returns a new instance of Server.
+// NewTSDBServer returns a new instance of Server.
 func NewTSDBServer(c *Config) Server {
 	// If URL exists, create a server that will run against a remote endpoint
 	if url := os.Getenv("TSDBURL"); url != "" {
@@ -329,6 +331,8 @@ func NewTSDBServer(c *Config) Server {
 		}
 		return s
 	}
+
+	fmt.Println("Environment variable `TSDBURL` not set or is an empty string, server not started.")
 	return nil
 }
 
@@ -681,7 +685,7 @@ func NewRetentionPolicy(name string, rf int, shardDuration, duration time.Durati
 }
 
 func maxInt64() string {
-	maxInt64, _ := json.Marshal(^int64(0))
+	maxInt64, _ := json2.Marshal(^int64(0))
 	return string(maxInt64)
 }
 
@@ -789,7 +793,7 @@ func (q *Query) success() bool {
 
 func (q *Query) promSuccess() bool {
 	var promRes promql2influxql.PromResponse
-	json.Unmarshal([]byte(q.act), &promRes)
+	json2.Unmarshal([]byte(q.act), &promRes)
 	data, ok := promRes.Data.(map[string]interface{})
 	if !ok {
 		return false
@@ -1115,6 +1119,12 @@ func writeTestData(s Server, t *Test) error {
 }
 
 func configureLogging(s Server) {
+	// Check the arguments to avoid panic when running tests.
+	if s == nil {
+		fmt.Printf("Server is not initialized: `s` is nil.\n")
+		return
+	}
+
 	// Set the logger to discard unless verbose is on
 	if !verboseServerLogs {
 		s.SetLogOutput(io.Discard)

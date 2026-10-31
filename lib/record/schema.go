@@ -110,3 +110,18 @@ func (sh Schemas) Equal(to Schemas) bool {
 
 	return true
 }
+
+type CustomSchemas Schemas
+
+func (c CustomSchemas) Len() int      { return len(c) }
+func (c CustomSchemas) Swap(i, j int) { c[i], c[j] = c[j], c[i] }
+
+func (c CustomSchemas) Less(i, j int) bool {
+	if c[i].Name == TimeField {
+		return false
+	}
+	if c[j].Name == TimeField {
+		return true
+	}
+	return c[i].Name < c[j].Name
+}

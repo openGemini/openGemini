@@ -8,9 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/bytedance/sonic"
 	"github.com/influxdata/influxdb/models"
-	jsoniter "github.com/json-iterator/go"
 	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
 	"github.com/tinylib/msgp/msgp"
 )
@@ -136,7 +134,7 @@ func (f *sonicJsonFormatter) WriteResponse(w io.Writer, resp Response) error {
 	if f.Pretty {
 		b, err = json2.MarshalIndent(resp, "", "    ")
 	} else {
-		b, err = sonic.Marshal(resp)
+		b, err = json2.Marshal(resp)
 	}
 
 	if err != nil {
@@ -146,7 +144,7 @@ func (f *sonicJsonFormatter) WriteResponse(w io.Writer, resp Response) error {
 		if f.Pretty {
 			b, _ = json2.MarshalIndent(resp, "", "    ")
 		} else {
-			b, _ = sonic.Marshal(resp)
+			b, _ = json2.Marshal(resp)
 		}
 		w.Write(b)
 		w.Write([]byte("\n"))
@@ -168,11 +166,10 @@ type jsonFormatter struct {
 func (f *jsonFormatter) WriteResponse(w io.Writer, resp Response) error {
 	var b []byte
 	var err error
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	if f.Pretty {
-		b, err = json.MarshalIndent(resp, "", "    ")
+		b, err = json2.MarshalIndent(resp, "", "    ")
 	} else {
-		b, err = json.Marshal(resp)
+		b, err = json2.Marshal(resp)
 	}
 
 	if err != nil {
@@ -180,9 +177,9 @@ func (f *jsonFormatter) WriteResponse(w io.Writer, resp Response) error {
 		// ignore any errors in this section, we already have a 'real' error to return
 		resp := Response{Err: unnestedErr}
 		if f.Pretty {
-			b, _ = json.MarshalIndent(resp, "", "    ")
+			b, _ = json2.MarshalIndent(resp, "", "    ")
 		} else {
-			b, _ = json.Marshal(resp)
+			b, _ = json2.Marshal(resp)
 		}
 		w.Write(b)
 		w.Write([]byte("\n"))
@@ -200,11 +197,10 @@ func (f *jsonFormatter) WriteResponse(w io.Writer, resp Response) error {
 func (f *jsonFormatter) WritePromResponse(w io.Writer, resp promql2influxql.Response) error {
 	var b []byte
 	var err error
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	if f.Pretty {
-		b, err = json.MarshalIndent(resp, "", "    ")
+		b, err = json2.MarshalIndent(resp, "", "    ")
 	} else {
-		b, err = json.Marshal(resp)
+		b, err = json2.Marshal(resp)
 	}
 
 	if err != nil {
@@ -212,9 +208,9 @@ func (f *jsonFormatter) WritePromResponse(w io.Writer, resp promql2influxql.Resp
 		// ignore any errors in this section, we already have a 'real' error to return
 		resp := Response{Err: unnestedErr}
 		if f.Pretty {
-			b, _ = json.MarshalIndent(resp, "", "    ")
+			b, _ = json2.MarshalIndent(resp, "", "    ")
 		} else {
-			b, _ = json.Marshal(resp)
+			b, _ = json2.Marshal(resp)
 		}
 		w.Write(b)
 		w.Write([]byte("\n"))

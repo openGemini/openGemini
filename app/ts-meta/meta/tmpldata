@@ -15,10 +15,11 @@
 	"GetMeasurementInfo",
 	"GetMeasurementsInfo",
  	"RegisterQueryIDOffset",
-	"Sql2MetaHeartbeat",
+	"CQ2MetaHeartbeat",
 	"GetContinuousQueryLease",
 	"VerifyDataNodeStatus",
 	"SendSysCtrlToMeta",
 	"ShowCluster",
-	"SendBackupToMeta"
+	"SendBackupToMeta",
+	"GetShardingPlan"
 ]

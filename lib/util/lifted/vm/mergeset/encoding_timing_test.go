@@ -2,9 +2,10 @@ package mergeset
 
 import (
 	"fmt"
+	"sort"
 	"testing"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/openGemini/openGemini/lib/logger"
 )
 
 func BenchmarkInmemoryBlockMarshal(b *testing.B) {
@@ -16,7 +17,7 @@ func BenchmarkInmemoryBlockMarshal(b *testing.B) {
 			b.Fatalf("cannot add more than %d items", i)
 		}
 	}
-	ibSrc.sort()
+	sort.Sort(&ibSrc)
 
 	b.ResetTimer()
 	b.SetBytes(itemsCount)
@@ -28,7 +29,7 @@ func BenchmarkInmemoryBlockMarshal(b *testing.B) {
 		for pb.Next() {
 			firstItem, commonPrefix, n, _ = ibSrc.MarshalUnsortedData(&sb, firstItem[:0], commonPrefix[:0], 0)
 			if int(n) != itemsCount {
-				logger.Panicf("invalid number of items marshaled; got %d; want %d", n, itemsCount)
+				logger.GetLogger().Panic(fmt.Sprintf("invalid number of items marshaled; got %d; want %d", n, itemsCount))
 			}
 		}
 	})
@@ -52,7 +53,7 @@ func BenchmarkInmemoryBlockUnmarshal(b *testing.B) {
 		var ib inmemoryBlock
 		for pb.Next() {
 			if err := ib.UnmarshalData(&sbSrc, firstItem, commonPrefix, itemsCount, mt); err != nil {
-				logger.Panicf("cannot unmarshal inmemoryBlock: %s", err)
+				logger.GetLogger().Panic(fmt.Sprintf("cannot unmarshal inmemoryBlock: %s", err))
 			}
 		}
 	})

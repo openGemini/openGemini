@@ -35,8 +35,8 @@ func TestHttpConfig(t *testing.T) {
 
 	cfg.Username = ""
 	name, pwd = cfg.BasicAuth()
-	assert.Equal(t, name, "")
-	assert.Equal(t, pwd, "")
+	assert.Equal(t, name, "monitor")
+	assert.Equal(t, pwd, cfg.Password)
 }
 
 func TestSetBasicAuth(t *testing.T) {

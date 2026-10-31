@@ -481,7 +481,6 @@ type MockTableStore struct {
 	FreeSequencerFn          func() bool
 	SetImmTableTypeFn        func(engineType config.EngineType)
 	SetMstInfoFn             func(name string, mstInfo *meta.MeasurementInfo)
-	SetAccumulateMetaIndexFn func(name string, aMetaIndex *AccumulateMetaIndex)
 	GetMstInfoFn             func(name string) (*meta.MeasurementInfo, bool)
 	SeriesTotalFn            func() uint64
 	SetLockPathFn            func(lock *string)
@@ -624,9 +623,7 @@ func (s *MockTableStore) SetImmTableType(engineType config.EngineType) {
 func (s *MockTableStore) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) {
 	s.SetMstInfoFn(name, mstInfo)
 }
-func (s *MockTableStore) SetAccumulateMetaIndex(name string, aMetaIndex *AccumulateMetaIndex) {
-	s.SetAccumulateMetaIndexFn(name, aMetaIndex)
-}
+
 func (s *MockTableStore) GetMstInfo(name string) (*meta.MeasurementInfo, bool) {
 	return s.GetMstInfoFn(name)
 }

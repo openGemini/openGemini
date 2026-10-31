@@ -22,100 +22,111 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 )
 
+func tempBackupDir(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "backup_dir")
+}
+
 func TestFileCopyError(t *testing.T) {
+	backupDir := tempBackupDir(t)
 	t.Run("1", func(t *testing.T) {
-		err := FileCopy("/tmp/openGemini/backup_dir", "")
+		err := FileCopy(backupDir, "")
 		if err == nil {
 			t.Fatal()
 		}
 	})
 	t.Run("2", func(t *testing.T) {
-		CreateFile("/tmp/openGemini/backup_dir/abc.ss")
-		err := FileCopy("/tmp/openGemini/backup_dir", "")
+		CreateFile(filepath.Join(backupDir, "abc.ss"))
+		err := FileCopy(backupDir, "")
 		if err == nil {
 			t.Fatal()
 		}
-		os.RemoveAll("/tmp/openGemini/backup_dir")
+		os.RemoveAll(backupDir)
 	})
 	t.Run("3", func(t *testing.T) {
-		filePath := "/tmp/openGemini/backup_dir/data/data/db0/0/rp0/0_0_0_0/tssp/abc_0000/00000476-0001-00000000.tssp"
+		filePath := filepath.Join(backupDir, "data/data/db0/0/rp0/0_0_0_0/tssp/abc_0000/00000476-0001-00000000.tssp")
 		CreateFile(filePath)
 		err := FileCopy(filePath, "")
 		if err == nil {
 			t.Fatal()
 		}
-		os.RemoveAll("/tmp/openGemini/backup_dir")
+		os.RemoveAll(backupDir)
 	})
 }
 
 func TestFolderCopy(t *testing.T) {
+	backupDir := tempBackupDir(t)
 	t.Run("1", func(t *testing.T) {
-		err := FolderCopy("/tmp/openGemini/backup_dir", "")
+		err := FolderCopy(backupDir, "")
 		if err == nil {
 			t.Fatal()
 		}
 	})
 	t.Run("2", func(t *testing.T) {
-		CreateFile("/tmp/openGemini/backup_dir/abc.ss")
-		err := FolderCopy("/tmp/openGemini/backup_dir", "")
+		CreateFile(filepath.Join(backupDir, "abc.ss"))
+		err := FolderCopy(backupDir, "")
 		if err == nil {
 			t.Fatal()
 		}
-		os.RemoveAll("/tmp/openGemini/backup_dir")
+		os.RemoveAll(backupDir)
 	})
 }
 
 func TestFileMoveError(t *testing.T) {
+	backupDir := tempBackupDir(t)
 	t.Run("1", func(t *testing.T) {
-		err := FileMove("/tmp/openGemini/backup_dir", "")
+		err := FileMove(backupDir, "")
 		if err == nil {
 			t.Fatal()
 		}
 	})
 	t.Run("2", func(t *testing.T) {
-		CreateFile("/tmp/openGemini/backup_dir/abc.ss")
-		err := FileMove("/tmp/openGemini/backup_dir", "")
+		CreateFile(filepath.Join(backupDir, "abc.ss"))
+		err := FileMove(backupDir, "")
 		if err == nil {
 			t.Fatal()
 		}
-		os.RemoveAll("/tmp/openGemini/backup_dir")
+		os.RemoveAll(backupDir)
 	})
 	t.Run("3", func(t *testing.T) {
-		filePath := "/tmp/openGemini/backup_dir/data/data/db0/0/rp0/0_0_0_0/tssp/abc_0000/00000476-0001-00000000.tssp"
+		filePath := filepath.Join(backupDir, "data/data/db0/0/rp0/0_0_0_0/tssp/abc_0000/00000476-0001-00000000.tssp")
 		CreateFile(filePath)
 		err := FileMove(filePath, "")
 		if err == nil {
 			t.Fatal()
 		}
-		os.RemoveAll("/tmp/openGemini/backup_dir")
+		os.RemoveAll(backupDir)
 	})
 }
 
 func TestFolderMove(t *testing.T) {
+	backupDir := tempBackupDir(t)
 	t.Run("1", func(t *testing.T) {
-		err := FolderMove("/tmp/openGemini/backup_dir", "")
+		err := FolderMove(backupDir, "")
 		if err == nil {
 			t.Fatal()
 		}
 	})
 	t.Run("2", func(t *testing.T) {
-		CreateFile("/tmp/openGemini/backup_dir/abc.ss")
-		err := FolderMove("/tmp/openGemini/backup_dir", "")
+		CreateFile(filepath.Join(backupDir, "abc.ss"))
+		err := FolderMove(backupDir, "")
 		if err == nil {
 			t.Fatal()
 		}
-		os.RemoveAll("/tmp/openGemini/backup_dir")
+		os.RemoveAll(backupDir)
 	})
 }
 
 func TestReadBackupLogFile(t *testing.T) {
-	CreateFile("/tmp/openGemini/backup_dir/abc.ss")
+	backupDir := tempBackupDir(t)
+	logPath := filepath.Join(backupDir, "abc.ss")
+	CreateFile(logPath)
 
-	err := ReadBackupLogFile("/tmp/openGemini/backup_dir/abc.ss", nil)
+	err := ReadBackupLogFile(logPath, nil)
 	if err == nil {
 		t.Fatal()
 	}
-	os.RemoveAll("/tmp/openGemini/backup_dir")
+	os.RemoveAll(backupDir)
 }
 
 func CreateFile(path string) {

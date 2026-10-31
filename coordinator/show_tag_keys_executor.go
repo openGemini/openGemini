@@ -85,7 +85,7 @@ func (e *ShowTagKeysExecutor) Execute(stmt *influxql.ShowTagKeysStatement) (nets
 			}
 		}
 		return err
-	})
+	}, e.mc.GetNodePtsMap)
 	if err != nil {
 		e.logger.Error("failed to show tag keys", zap.Error(err))
 		return nil, err

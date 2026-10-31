@@ -20,18 +20,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
-func TestRowsPoolTypeError(t *testing.T) {
-	num := 10
-	ch := make(chan interface{}, 1)
-	RowsPool.Put(ch)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("Expected panic to occur")
-		}
-	}()
-	GetRows(num)
-}
-
 func TestRowsPool(t *testing.T) {
 	num := 10
 	rows := GetRows(num)
@@ -59,5 +47,11 @@ func TestRowsPool(t *testing.T) {
 	PutRows(rows)
 	if len(*rows) != 0 {
 		t.Errorf("Expected 0 rows, but got %d", len(*rows))
+	}
+	for i := 0; i < 100; i++ {
+		PutRows(rows)
+	}
+	for i := 0; i < 100; i++ {
+		GetRows(num)
 	}
 }

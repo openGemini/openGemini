@@ -51,15 +51,18 @@ type fileLoopCursor struct {
 	maxTime   int64
 	currSid   uint64
 	currIndex int
+	rowCnt    int
 
 	isCutSchema  bool
 	newCursor    bool
 	initFirst    bool
 	memTableInit bool
 	preAgg       bool
+	stop         bool
 
 	ridIdx        map[int]struct{}
 	mergeRecIters map[uint64][]*SeriesIter
+	fullColIdx    map[int]struct{}
 
 	ctx          *idKeyCursorContext
 	span         *tracing.Span
@@ -117,6 +120,9 @@ func NewFileLoopCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *exec
 		FilesInfoPool: NewSeriesInfoPool(fileInfoNum),
 	}
 	sc.fileLoopCursorFunctions = &fileLoopCursorFunctions{}
+	if ctx.isLastFieldQuery {
+		sc.fullColIdx = make(map[int]struct{})
+	}
 	return sc
 }
 
@@ -299,7 +305,7 @@ func (s *fileLoopCursor) ReadAggDataNormal() (*record.Record, *comm.FileInfo, er
 	}
 
 	var e error
-	for s.index < len(s.ctx.readers.Orders) {
+	for s.index < len(s.ctx.readers.Orders) && !s.stop {
 		if s.ctx.IsAborted() {
 			return nil, nil, nil
 		}
@@ -324,6 +330,14 @@ func (s *fileLoopCursor) ReadAggDataNormal() (*record.Record, *comm.FileInfo, er
 			s.index++
 			continue
 		}
+		s.rowCnt += re.record.RowNums()
+		if s.ctx.isLastRowQuery {
+			// last row is used to obtain the latest data point each fields.
+			s.stop = s.rowCnt > 0
+		} else if s.ctx.isLastFieldQuery {
+			// last field is used to obtain the latest data point with a value for each field.
+			s.fullColIdx, s.stop = re.record.IsFullAllCol(s.fullColIdx)
+		}
 		rec := s.recPool.Get()
 		if s.isCutSchema {
 			rec.AppendRecForSeries(re.record, 0, re.record.RowNums(), s.ridIdx)
@@ -339,10 +353,10 @@ func (s *fileLoopCursor) ReadAggDataNormal() (*record.Record, *comm.FileInfo, er
 }
 
 func (s *fileLoopCursor) getFile() immutable.TSSPFile {
-	if s.ctx.querySchema.Options().IsAscending() {
-		return s.ctx.readers.Orders[s.index]
+	if !s.ctx.querySchema.Options().IsAscending() || s.ctx.isLastRowQuery || s.ctx.isLastFieldQuery {
+		return s.ctx.readers.Orders[len(s.ctx.readers.Orders)-s.index-1]
 	}
-	return s.ctx.readers.Orders[len(s.ctx.readers.Orders)-s.index-1]
+	return s.ctx.readers.Orders[s.index]
 }
 
 func (s *fileLoopCursor) initCurrAggCursor(file immutable.TSSPFile) error {
@@ -401,27 +415,46 @@ func (s *fileLoopCursor) EndSpan() {
 
 }
 
-func (s *fileLoopCursor) initMemitrs() {
-	s.mergeRecIters, s.minTime, s.maxTime = s.shardP.getAllSeriesMemtableRecord(s.ctx, s.schema, s.tagSetInfo, s.start, s.step)
+func (s *fileLoopCursor) initMemitrs() (int64, error) {
+	var flushWriteTime int64
+	var err error
+	s.mergeRecIters, s.minTime, s.maxTime, flushWriteTime, err = s.shardP.getAllSeriesMemtableRecord(s.ctx, s.schema, s.tagSetInfo, s.start, s.step)
+	return flushWriteTime, err
 }
 
 /*
 Init out of order and memtable in mergeRecIters which key is sid.
 */
 func (s *fileLoopCursor) initMergeIters() error {
-	s.initMemitrs()
+	flushWriteTime, err := s.initMemitrs()
+	if err != nil {
+		return err
+	}
 	defer s.updateQueryTime()
-	if len(s.ctx.readers.OutOfOrders) < 1 {
+	if s.ctx.isLastRowQuery && s.ctx.tr.Min <= flushWriteTime && flushWriteTime <= s.ctx.tr.Max {
+		// the flush write time is set to query time range for last row
+		s.ctx.tr.Min, s.ctx.tr.Max = flushWriteTime, flushWriteTime
+	}
+	if len(s.ctx.readers.OutOfOrders) < 1 || (s.ctx.isLastRowQuery && len(s.mergeRecIters) > 0) {
 		return nil
 	}
 	isInit := false
 	var curCursor *fileCursor
-	var err error
 	var tm time.Time
 	if s.span != nil {
 		tm = time.Now()
 	}
 	for i := len(s.ctx.readers.OutOfOrders) - 1; i >= 0; i-- {
+		if s.ctx.isLastRowQuery {
+			// Out-of-order files are pruned based on the flush write time for last row
+			contain, err := s.ctx.readers.OutOfOrders[i].ContainsByTime(s.ctx.tr)
+			if err != nil {
+				return err
+			}
+			if !contain {
+				continue
+			}
+		}
 		if !isInit {
 			curCursor, err = newFileCursor(s.ctx, s.span, s.schema, s.tagSetInfo, s.start, s.step, s.ctx.readers.OutOfOrders[i], nil)
 			if err != nil {
@@ -600,6 +633,12 @@ func NewAggTagSetCursor(schema *executor.QuerySchema, ctx *idKeyCursorContext, i
 	return c
 }
 
+func (s *AggTagSetCursor) InitOps(ops []*comm.CallOption, schema record.Schemas) {
+	s.aggOps = ops
+	s.SetSchema(schema)
+	s.aggFunctionsInit()
+}
+
 func (s *AggTagSetCursor) SetOps(ops []*comm.CallOption) {
 	s.baseCursorInfo.keyCursor.SetOps(ops)
 }
@@ -627,7 +666,7 @@ func (s *AggTagSetCursor) buildAggFuncs() {
 			s.buildMaxFuncs(i)
 		case "first":
 			s.buildFirstFuncs(i)
-		case "last":
+		case "last", "last_row":
 			s.buildLastFuncs(i)
 		case "sum":
 			s.buildSumFuncs(i)
@@ -649,7 +688,7 @@ func (s *AggTagSetCursor) buildAggFunc() {
 		s.buildMaxFunc()
 	case "first":
 		s.buildFirstFunc()
-	case "last":
+	case "last", "last_row":
 		s.buildLastFunc()
 	case "sum":
 		s.buildSumFunc()
@@ -1097,6 +1136,10 @@ func (s *AggTagSetCursor) getTimes() []int64 {
 
 func (s *AggTagSetCursor) TagAuxHandler(re *record.Record, start, end int) {
 	for i := range s.baseCursorInfo.ctx.auxTags {
+		if s.baseCursorInfo.ctx.auxTags[i] == influxql.DefaultLabels {
+			executor.AuxTagKeyHandler(s.auxColIndex[i], s.baseCursorInfo.currSeriesInfo.GetSeriesTags(), re, start, end)
+			continue
+		}
 		for j := start; j < end; j++ {
 			pTag := (*s.baseCursorInfo.currSeriesInfo.GetSeriesTags()).FindPointTag(s.baseCursorInfo.ctx.auxTags[i])
 			if pTag != nil {
@@ -1210,14 +1253,14 @@ func (s *PreAggTagSetCursor) SinkPlan(plan hybridqp.QueryNode) {
 func (s *PreAggTagSetCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 	var err error
 	s.baseAggCursorInfo.recordBuf, s.baseAggCursorInfo.fileInfo, err = s.baseCursorInfo.keyCursor.NextAggData()
-	s.ops = s.baseCursorInfo.ctx.decs.GetOps()
-	if s.baseAggCursorInfo.recordBuf == nil {
-		return nil, nil, nil
-	}
-	s.baseCursorInfo.currSeriesInfo = s.baseAggCursorInfo.fileInfo.SeriesInfo
 	if err != nil {
 		return nil, nil, err
 	}
+	if s.baseAggCursorInfo.recordBuf == nil {
+		return nil, nil, nil
+	}
+	s.ops = s.baseCursorInfo.ctx.decs.GetOps()
+	s.baseCursorInfo.currSeriesInfo = s.baseAggCursorInfo.fileInfo.SeriesInfo
 	rec := s.baseAggCursorInfo.recordBuf
 	s.baseCursorInfo.RecordResult = rec.Copy(true, nil, rec.Schema)
 	if e := s.RecordInitPreAgg(); e != nil {

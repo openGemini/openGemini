@@ -112,7 +112,7 @@ func (fl *fileLoader) Load(dir, mst string, isOrder bool) {
 		}
 
 		switch filepath.Ext(itemName) {
-		case tsspFileSuffix:
+		case TsspFileSuffix:
 			fl.loadTsspFile(filepath.Join(dir, itemName), mst, isOrder, false)
 		default:
 			fl.removeTmpFile(filepath.Join(dir, itemName)) // skip invalid file, remove if it is a temp file
@@ -296,7 +296,7 @@ func (fl *fileLoader) removeFile(file string) {
 	fl.lg.Info("remove file", zap.String("path", file), zap.Error(err))
 }
 
-func (fl *fileLoader) openPKIndexFile(file string) *colstore.PKInfo {
+func (fl *fileLoader) openPKIndexFile(mst, file string) *colstore.PKInfo {
 	file = BuildPKFilePathFromTSSP(file)
 	_, ok := fl.pkFiles[file]
 	if !ok {
@@ -330,7 +330,12 @@ func (fl *fileLoader) openPKIndexFile(file string) *colstore.PKInfo {
 		mark = fragment.NewIndexFragmentFixedSize(uint32(rec.RowNums()-1), uint64(fl.maxRowsPerSegment))
 	}
 
-	return colstore.NewPKInfo(rec, mark, tcLocation)
+	pkType := ""
+	m, ok := colstore.MstManagerIns().Get(fl.mst.db, fl.mst.rp, mst)
+	if ok {
+		pkType = m.ColStoreInfo().GetPKType()
+	}
+	return colstore.NewPKInfo(rec, mark, pkType, tcLocation)
 }
 
 func (fl *fileLoader) openTSSPFile(file, mst string, isOrder bool) {
@@ -353,7 +358,7 @@ func (fl *fileLoader) openTSSPFile(file, mst string, isOrder bool) {
 		return
 	}
 
-	pkInfo := fl.openPKIndexFile(file)
+	pkInfo := fl.openPKIndexFile(mst, file)
 	f.SetPkInfo(pkInfo)
 	fl.addTSSPFile(file, mst, isOrder, f)
 }

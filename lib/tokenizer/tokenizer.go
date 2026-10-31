@@ -19,7 +19,9 @@ import (
 	"encoding/binary"
 	"math/bits"
 
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/index"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
@@ -113,6 +115,7 @@ type SimpleTokenizer struct {
 	seed       uint64
 	start      int
 	end        int
+	wordBytes  []byte
 }
 
 type SimpleUtf8Tokenizer struct {
@@ -216,8 +219,58 @@ func (t *SimpleTokenizer) Next() bool {
 	return false
 }
 
+func (t *SimpleTokenizer) AllWordBytes(input []byte, offsets, lens []int32) ([][]byte, bool) {
+	allWordsBytes := make([][]byte, 0, len(offsets)*10)
+	hasEmptyString := false
+	for i := range offsets {
+		if lens[i] == 0 {
+			hasEmptyString = true
+		}
+		t.InitInput(input[offsets[i] : offsets[i]+lens[i]])
+		for t.hasNextWord() {
+			allWordsBytes = append(allWordsBytes, t.wordBytes)
+		}
+	}
+	return allWordsBytes, hasEmptyString
+}
+
+func (t *SimpleTokenizer) hasNextWord() bool {
+	for t.start < t.end {
+		if t.splitTable[(t.input)[t.start]] > 0 {
+			t.start++
+			continue
+		}
+		tStart := t.start
+		for (t.start < t.end) && (t.splitTable[(t.input)[t.start]] == 0) {
+			t.start++
+		}
+		t.wordBytes = t.input[tStart:t.start]
+		return true
+	}
+	return false
+}
+
 func (t *SimpleTokenizer) CurrentHash() uint64 {
 	return t.hashValue
+}
+
+func (t *SimpleTokenizer) Reset() {
+	t.hashValue = uint64(0)
+}
+
+var splitTable, _ = BuildSplitTable(CONTENT_SPLITTER)
+var tokenizerPool = pool.NewUnionPool(cpu.GetCpuNum(), 0, 0, func() *SimpleTokenizer {
+	return NewSimpleTokenizer(splitTable)
+})
+
+func GetTokenizerFromPool() *SimpleTokenizer {
+	v := tokenizerPool.Get()
+	return v
+}
+
+func PutTokenizerToPool(tk *SimpleTokenizer) {
+	tk.Reset()
+	tokenizerPool.PutWithMemSize(tk, 0)
 }
 
 func (t *SimpleUtf8Tokenizer) Next() bool {

@@ -62,10 +62,16 @@ type ColumnBuilder struct {
 	encodeMode EncodeColumnMode
 	coder      *encoding.CoderContext
 	log        *Log.Logger
+
+	timeDisorder bool //For column store, data may not be sorted by time
 }
 
 func NewColumnBuilder() *ColumnBuilder {
 	return &ColumnBuilder{coder: encoding.NewCoderContext()}
+}
+
+func (b *ColumnBuilder) MarkTimeDisorder() {
+	b.timeDisorder = true
 }
 
 func (b *ColumnBuilder) SetEncodeMode(detached bool) {

@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -70,6 +70,7 @@ type MockMetaClient struct {
 	GetReplicaNFn        func(database string) (int, error)
 	GetSgEndTimeFn       func(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error)
 	UpdateSchemaByCmdFn  func(cmd *proto2.UpdateSchemaCommand) error
+	ShardOwnerFn         func(shardID uint64) (database, policy string, sgi *meta2.ShardGroupInfo)
 	metaclient.Client
 }
 
@@ -251,6 +252,9 @@ func (mmc *MockMetaClient) GetStreamInfos() map[string]*meta2.StreamInfo {
 }
 
 func (c *MockMetaClient) ShardOwner(shardID uint64) (database, policy string, sgi *meta2.ShardGroupInfo) {
+	if c.ShardOwnerFn != nil {
+		return c.ShardOwnerFn(shardID)
+	}
 	return "db", "rp", &meta2.ShardGroupInfo{}
 }
 
@@ -810,7 +814,6 @@ func TestPointsWriter_updateCleanSchemaIfNeeded3(t *testing.T) {
 	}
 	var errors = []string{
 		"tag key can't be time, measurement is 'mst'",
-		"duplicate tag tk1",
 	}
 	pw := NewPointsWriter(time.Second)
 	pw.MetaClient = mc
@@ -832,8 +835,6 @@ func TestPointsWriter_updateCleanSchemaIfNeeded3(t *testing.T) {
 
 	buf := bytes.NewBuffer(nil)
 	buf.WriteString(`mst,time="tv1" f1=1.1 1`)
-	buf.WriteByte('\n')
-	buf.WriteString(`mst,tk1="tv1",tk1="tv1" f1=1.1 1`)
 	buf.WriteByte('\n')
 	unmarshal(buf.Bytes(), callback)
 }
@@ -1313,6 +1314,33 @@ func TestPointsWriter_TimeRangeLimit(t *testing.T) {
 	assert.EqualError(t, err, exp)
 }
 
+func TestPointsWriter_MstBlacklist(t *testing.T) {
+	streamDistribution = diffDis
+	pw := NewPointsWriter(time.Second * 10)
+	defer pw.Close()
+	pw.MetaClient = NewMockMetaClient()
+	pw.TSDBStore = NewMockNetStore()
+	rows := make([]influx.Row, 10)
+
+	var run = func(list []string, hasError bool) {
+		pw.ApplyMstBlacklist(list)
+		rows = generate.GenerateRows(10, rows)
+		err := pw.writePointRows("db0", "rp0", rows)
+
+		if hasError {
+			exp := "partial write: " + errno.NewError(errno.MstOnBlacklist, "mst0").Error() + " dropped=10"
+			require.EqualError(t, err, exp)
+			return
+		}
+
+		require.NoError(t, err)
+	}
+	run(nil, false)
+	run([]string{"mst0"}, true)
+	run([]string{"mst0", "mst1"}, true)
+	run([]string{"mst2", "mst3", "mst4", "mst5", "mst6", "mst7"}, false)
+}
+
 func TestPointsWriter_WritePointRows_DuplicateFields_TypeConflict(t *testing.T) {
 	streamDistribution = diffDis
 	pw := NewPointsWriter(time.Second * 10)
@@ -1710,7 +1738,8 @@ func TestName(t *testing.T) {
 }
 
 type MockLocalStore struct {
-	err error
+	client *MockMetaClient
+	err    error
 }
 
 func (s *MockLocalStore) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
@@ -1718,6 +1747,9 @@ func (s *MockLocalStore) WriteRows(db, rp string, ptId uint32, shardID uint64, r
 }
 
 func (s *MockLocalStore) GetMetaClient() metaclient.MetaClient {
+	if s.client != nil {
+		return s.client
+	}
 	return &MockMetaClient{}
 }
 
@@ -1737,6 +1769,20 @@ func TestPointsWriter_routeAndMapOriginRows_MapToStreamMstFail(t *testing.T) {
 	partialErr, dropped, err := writer.routeAndMapOriginRows("db", "rp", rows, ctx)
 	require.Equal(t, 1, dropped)
 	require.EqualError(t, partialErr, "the stream destination measurement cannot be written. measurement name is dst_mst")
+	require.NoError(t, err)
+}
+
+func TestPointsWriter_routeAndMapOriginRows_DuplicateTagMstFail(t *testing.T) {
+	ctx := &injestionCtx{}
+	rows := []influx.Row{
+		{Name: "dst_mst", Tags: influx.PointTags{{Key: "xx"}, {Key: "xx"}}},
+	}
+	writer := &PointsWriter{
+		logger: logger.NewLogger(errno.NodeSql).SetZapLogger(zap.NewNop()),
+	}
+	partialErr, dropped, err := writer.routeAndMapOriginRows("db", "rp", rows, ctx)
+	require.Equal(t, 1, dropped)
+	require.EqualError(t, partialErr, "duplicate tags xx")
 	require.NoError(t, err)
 }
 
@@ -1842,4 +1888,207 @@ func TestWriteRows(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+
+	t.Run("5", func(t *testing.T) {
+		mockStore := &MockLocalStore{
+			client: &MockMetaClient{
+				ShardOwnerFn: func(shardID uint64) (database string, policy string, sgi *meta2.ShardGroupInfo) {
+					return "", "", nil
+				},
+			},
+		}
+		store := NewLocalStore(mockStore, nil, nil)
+		ctx := &netstorage.WriteContext{
+			Shard: &meta2.ShardInfo{
+				Owners: []uint32{0},
+			},
+			Rows: []influx.Row{{
+				Timestamp: 100,
+				Name:      "mst",
+				Tags: influx.PointTags{
+					influx.Tag{
+						Key:   "tid",
+						Value: "t1",
+					},
+				},
+				Fields: influx.Fields{
+					influx.Field{
+						Key:      "value",
+						NumValue: 1,
+						StrValue: "",
+						Type:     influx.Field_Type_Float,
+					},
+				},
+			}},
+		}
+		err := store.WriteRows(ctx, 0, 0, "wrongDbName", "", 0)
+		assert.Equal(t, err.Error(), "shard(id=0) meta not found")
+	})
+}
+
+func TestPointsWriter_TimeRangeLimit_WithShardsList(t *testing.T) {
+	streamDistribution = diffDis
+	pw := NewPointsWriter(time.Second * 10)
+	pw.MetaClient = NewMockMetaClientWithShardLists()
+	pw.TSDBStore = NewMockNetStore()
+	rows := make([]influx.Row, 10)
+
+	pw.ApplyTimeRangeLimit(nil)
+	pw.ApplyTimeRangeLimit([]toml.Duration{0, 0})
+	go pw.ApplyTimeRangeLimit([]toml.Duration{toml.Duration(time.Hour * 24), toml.Duration(time.Hour * 24)})
+
+	time.Sleep(time.Second / 10)
+	rows = generate.GenerateRows(10, rows)
+	rows[0].Timestamp = time.Now().Add(-time.Hour * 30).UnixNano()
+
+	err := pw.writePointRows("db0", "rp0", rows)
+	pw.Close()
+
+	exp := "partial write: " + errno.NewError(errno.WritePointOutOfRP).Error() + " dropped=1"
+	assert.EqualError(t, err, exp)
+}
+
+func NewMockMetaClient2() *MockMetaClient {
+	mc := &MockMetaClient{}
+	rpInfo := NewRetentionPolicy("rp0", time.Hour, engineType)
+	rpInfo.Measurements = make(map[string]*meta2.MeasurementInfo)
+	rpInfo.Measurements["mst0"] = meta2.NewMeasurementInfo("mst0", influx.GetOriginMstName("mst0"), engineType, 0)
+	rpInfo.Measurements["mst0"].InitNumOfShards = 1
+	rpInfo.Measurements["mst0"].ShardIdexes = make(map[uint64][]int)
+	rpInfo.Measurements["mst1"] = meta2.NewMeasurementInfo("mst1", influx.GetOriginMstName("mst2"), engineType, 0)
+	rpInfo.Measurements["mst1"].InitNumOfShards = 1
+	rpInfo.Measurements["mst1"].ShardIdexes = make(map[uint64][]int)
+	var dbInfo *meta2.DatabaseInfo
+	dbInfo = &meta2.DatabaseInfo{Name: "db0", RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{"rp0": rpInfo},
+		ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tk1", "tk2"}}}
+
+	mc.DatabaseFn = func(database string) (*meta2.DatabaseInfo, error) {
+		return dbInfo, nil
+	}
+	mc.RetentionPolicyFn = func(database, rp string) (*meta2.RetentionPolicyInfo, error) {
+		return rpInfo, nil
+	}
+
+	mc.CreateShardGroupFn = func(database, policy string, timestamp time.Time, version uint32, engineType config.EngineType) (*meta2.ShardGroupInfo, error) {
+		for i := range rpInfo.ShardGroups {
+			if timestamp.Equal(rpInfo.ShardGroups[i].StartTime) || timestamp.After(rpInfo.ShardGroups[i].StartTime) && timestamp.Before(rpInfo.ShardGroups[i].EndTime) {
+				return &rpInfo.ShardGroups[i], nil
+			}
+		}
+		shards := []meta2.ShardInfo{}
+		owners := make([]uint32, 1)
+		owners[0] = 0
+
+		shards = append(shards, meta2.ShardInfo{ID: nextShardID(), Owners: owners})
+		newShardsGroup := meta2.ShardGroupInfo{ID: nextShardID(),
+			StartTime:  timestamp,
+			EndTime:    timestamp.Add(time.Hour),
+			Shards:     shards,
+			EngineType: engineType,
+		}
+		rpInfo.ShardGroups = append(rpInfo.ShardGroups, newShardsGroup)
+		rpInfo.Measurements["mst0"].ShardIdexes[newShardsGroup.ID] = []int{0}
+		return &newShardsGroup, nil
+	}
+
+	mc.CreateMeasurementFn = func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, numOfShards int32, indexR *influxql.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error) {
+		return rpInfo.Measurements["mst0"], nil
+	}
+	mc.MeasurementFn = func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
+		if mstName == "mst2" {
+			return nil, errors.New("test error")
+		}
+		return rpInfo.Measurements[mstName], nil
+	}
+	mc.UpdateSchemaFn = func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {
+		return nil
+	}
+	mc.DBPtViewFn = func(database string) (meta2.DBPtInfos, error) {
+		return []meta2.PtInfo{{PtId: 0, Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online}}, nil
+	}
+	mc.DBRepGroupsFn = func(database string) []meta2.ReplicaGroup {
+		return nil
+	}
+	mc.GetReplicaNFn = func(database string) (int, error) {
+		return 1, nil
+	}
+	mc.GetAliveShardsFn = func(database string, sgi *meta2.ShardGroupInfo, isRead bool) []int {
+		ptView, _ := mc.DBPtViewFn(database)
+		idxes := make([]int, 0, len(ptView))
+		for i := range sgi.Shards {
+			if ptView[sgi.Shards[i].Owners[0]].Status == meta2.Online {
+				idxes = append(idxes, i)
+			}
+		}
+		return idxes
+	}
+	return mc
+}
+
+func TestPointsWriter_updateShardGroupAndShardKey(t *testing.T) {
+	streamDistribution = diffDis
+	pw := NewPointsWriter(time.Second * 10)
+	pw.MetaClient = NewMockMetaClient2()
+	pw.TSDBStore = NewMockNetStore()
+	ctx := getInjestionCtx()
+	database := "db0"
+	retentionPolicy := "rp0"
+	err := ctx.checkDBRP(database, retentionPolicy, pw)
+	ctx.writeHelper = newWriteHelper(pw)
+	ctx.ms, err = pw.MetaClient.Measurement(database, retentionPolicy, "mst0")
+	assert.NoError(t, err)
+	rows := make([]influx.Row, 10)
+	rows = generate.GenerateRows(10, rows)
+	rows[0].Timestamp = time.Now().Add(-time.Hour * 30).UnixNano()
+
+	t.Run("updateShardGroupAndShardKey", func(t *testing.T) {
+		err, _, _ = pw.updateShardGroupAndShardKey(database, retentionPolicy, &(rows[0]), ctx, false, nil, 0, false)
+		assert.NoError(t, err)
+		mst, err := pw.MetaClient.Measurement("db0", "rp0", "mst0")
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(mst.ShardIdexes))
+	})
+
+	ctx.ms, err = pw.MetaClient.Measurement(database, retentionPolicy, "mst1")
+	assert.NoError(t, err)
+	t.Run("updateShardGroupAndShardKey_Err", func(t *testing.T) {
+		err, _, _ = pw.updateShardGroupAndShardKey(database, retentionPolicy, &(rows[1]), ctx, false, nil, 0, false)
+		assert.Error(t, err)
+	})
+
+}
+
+func TestSteam_updateShardGroupAndShardKey(t *testing.T) {
+	pw := NewPointsWriter(time.Second * 10)
+	pw.MetaClient = NewMockMetaClient2()
+	pw.TSDBStore = NewMockNetStore()
+	s := NewStream(pw.TSDBStore, pw.MetaClient, logger.NewLogger(errno.ModuleCoordinator), time.Second*10)
+	database := "db0"
+	retentionPolicy := "rp0"
+	ctx := GetStreamCtx()
+	defer PutStreamCtx(ctx)
+	err := ctx.checkDBRP(database, retentionPolicy, s)
+	ctx.writeHelper = newWriteHelper(pw)
+	ctx.ms, err = pw.MetaClient.Measurement(database, retentionPolicy, "mst0")
+	rows := make([]influx.Row, 10)
+	rows = generate.GenerateRows(10, rows)
+	rows[0].Timestamp = time.Now().Add(-time.Hour * 30).UnixNano()
+	rows[0].ColumnToIndex = map[string]int{"tk1": 0, "tk2": 1}
+	rows[1].Timestamp = time.Now().Add(time.Hour * 30).UnixNano()
+	rows[1].ColumnToIndex = map[string]int{"tk1": 0, "tk2": 1}
+
+	t.Run("updateShardGroupAndShardKey", func(t *testing.T) {
+		err, _, _ = s.updateShardGroupAndShardKey(database, retentionPolicy, &(rows[0]), ctx, []string{"tk1", "tk2"})
+		assert.NoError(t, err)
+		mst, err := pw.MetaClient.Measurement("db0", "rp0", "mst0")
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(mst.ShardIdexes))
+	})
+	ctx.ms, err = pw.MetaClient.Measurement(database, retentionPolicy, "mst1")
+	assert.NoError(t, err)
+	t.Run("updateShardGroupAndShardKey_Err", func(t *testing.T) {
+		err, _, _ = s.updateShardGroupAndShardKey(database, retentionPolicy, &(rows[1]), ctx, []string{"tk1", "tk2"})
+		assert.Error(t, err)
+	})
+
 }

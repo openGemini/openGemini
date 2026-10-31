@@ -142,6 +142,10 @@ func NewIndexWriter(lockPath *string, filePath string) (*IndexWriter, error) {
 	return indexWriter, nil
 }
 
+func (b *IndexWriter) FileName() string {
+	return b.fd.Name()
+}
+
 func (b *IndexWriter) WriteData(data []byte) error {
 	var num int
 	var err error

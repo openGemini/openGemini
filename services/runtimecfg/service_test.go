@@ -68,7 +68,8 @@ func TestLoadRuntimeConfigShouldLoadEmptyFile(t *testing.T) {
 `)
 	actual, err := loadRuntimeConfig(yamlFile)
 	require.NoError(t, err)
-	require.Equal(t, &runtimeConfig{TenantLimits: make(map[string]*config.Limits)}, actual)
+	require.False(t, actual == nil)
+	require.Equal(t, 0, len(actual.TenantLimits))
 }
 
 func TestRuntimeCfgServiceLoadLimitCfg(t *testing.T) {

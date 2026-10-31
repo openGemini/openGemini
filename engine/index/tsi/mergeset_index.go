@@ -22,17 +22,18 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"text/tabwriter"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/bits-and-blooms/bloom/v3"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/dictmap"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	indextype "github.com/openGemini/openGemini/lib/index"
@@ -41,6 +42,7 @@ import (
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/index"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -48,7 +50,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/uint64set"
-	"github.com/savsgio/dictpool"
 	"go.uber.org/zap"
 )
 
@@ -72,13 +73,17 @@ const (
 	kvSeparatorChar  = 2
 
 	compositeTagKeyPrefix = '\xfe'
-	//maxTSIDsPerRow        = 64
+
 	MergeSetDirName        = "mergeset"
 	PruneWithSetTagValSize = 10
 )
 
 const (
 	SeriesNumPerTagSetForExcept = 1
+)
+
+const (
+	DefaultTagsNumPerSeriesKey = 16
 )
 
 var tagFilterKeyGen uint64
@@ -351,8 +356,7 @@ func (idx *MergeSetIndex) Open() error {
 	tb.SetFlushBfCallback(idx.flushBloomFilter)
 	idx.tb = tb
 
-	idx.cache = newIndexCache(idx.config.TSIDCacheSize, idx.config.SKeyCacheSize, idx.config.TagCacheSize,
-		idx.config.TagFilterCostCacheSize, idx.path, syscontrol.IsIndexReadCachePersistent(), idx.config.CacheCompressEnable)
+	idx.cache = newIndexCache(idx.path, syscontrol.IsIndexReadCachePersistent())
 
 	idx.StorageIndex.initQueues(idx)
 	idx.run()
@@ -449,7 +453,9 @@ func (idx *MergeSetIndex) WriteTagCols(tagCol *TagCol) {
 }
 
 func (idx *MergeSetIndex) run() {
-	idx.StorageIndex.run(idx)
+	if !config.ShelfModeEnabled() {
+		idx.StorageIndex.run(idx)
+	}
 }
 
 func (idx *MergeSetIndex) SetIndexBuilder(builder *IndexBuilder) {
@@ -678,7 +684,7 @@ func (idx *MergeSetIndex) getSeriesIdBySeriesKey(seriesKeyWithVersion []byte) (u
 	return 0, nil
 }
 
-func (idx *MergeSetIndex) CreateIndexIfNotExists(mmRows *dictpool.Dict) error {
+func (idx *MergeSetIndex) CreateIndexIfNotExists(mmRows dictmap.DictMap[string, *[]influx.Row]) error {
 	vkey := kbPool.Get()
 	defer kbPool.Put(vkey)
 	vname := kbPool.Get()
@@ -688,13 +694,8 @@ func (idx *MergeSetIndex) CreateIndexIfNotExists(mmRows *dictpool.Dict) error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	for mmIdx := range mmRows.D {
-		rows, ok := mmRows.D[mmIdx].Value.(*[]influx.Row)
-		if !ok {
-			return fmt.Errorf("create index failed due to rows are not belong to type row")
-		}
-
-		vname.B = append(vname.B[:0], []byte(mmRows.D[mmIdx].Key)...)
+	for k, rows := range mmRows {
+		vname.B = append(vname.B[:0], []byte(k)...)
 		for rowIdx := range *rows {
 			if (*rows)[rowIdx].SeriesId != 0 {
 				continue
@@ -858,26 +859,47 @@ func (idx *MergeSetIndex) decode(ii *mergeindex.IndexItems, seriesKey []byte, na
 	if enableTagArray {
 		tagMap := make(map[string]map[string]struct{})
 		for _, tags := range tagArray {
-			for i := range tags {
-				if len(tags[i].Value) == 0 {
+			for _, tag := range tags {
+				if len(tag.Value) == 0 {
 					continue
 				}
-				if _, ok := tagMap[tags[i].Key]; !ok {
-					tagMap[tags[i].Key] = make(map[string]struct{})
+				if _, ok := tagMap[tag.Key]; !ok {
+					tagMap[tag.Key] = make(map[string]struct{})
 				}
-				if _, ok := tagMap[tags[i].Key][tags[i].Value]; ok {
+				if _, ok := tagMap[tag.Key][tag.Value]; ok {
 					continue
 				} else {
-					tagMap[tags[i].Key][tags[i].Value] = struct{}{}
+					tagMap[tag.Key][tag.Value] = struct{}{}
 				}
-				ii.B = idx.marshalTagToTSIDs(compositeKey.B, ii.B, name, tags[i], tsid)
+				ii.B = idx.marshalTagToTSIDs(compositeKey.B, ii.B, name, tag.Key, tag.Value, tsid)
 				ii.Next()
 			}
 		}
 	} else {
-		for i := range tags {
-			ii.B = idx.marshalTagToTSIDs(compositeKey.B, ii.B, name, tags[i], tsid)
-			ii.Next()
+		for _, tag := range tags {
+			if tag.Key == influxql.DefaultLabels {
+				value := tag.Value
+				var appendTagValue = func(tagKeyValue string) {
+					index := strings.Index(tagKeyValue, influxql.DefaultLabelValueSplit)
+					if index < 0 {
+						return
+					}
+					ii.B = idx.marshalTagToTSIDs(compositeKey.B, ii.B, name, tagKeyValue[:index], tagKeyValue[index+len(influxql.DefaultLabelValueSplit):], tsid)
+					ii.Next()
+				}
+				for {
+					m := strings.Index(value, influxql.DefaultLabelKeySplit)
+					if m < 0 {
+						break
+					}
+					appendTagValue(value[:m])
+					value = value[m+len(influxql.DefaultLabelKeySplit):]
+				}
+				appendTagValue(value)
+			} else {
+				ii.B = idx.marshalTagToTSIDs(compositeKey.B, ii.B, name, tag.Key, tag.Value, tsid)
+				ii.Next()
+			}
 		}
 	}
 
@@ -901,11 +923,11 @@ func (idx *MergeSetIndex) marshalTagToTagValues(tmpB []byte, dstB []byte, name [
 }
 
 // Create Tag -> TSID index
-func (idx *MergeSetIndex) marshalTagToTSIDs(tmpB []byte, dstB []byte, name []byte, tag influx.Tag, tsid uint64) []byte {
-	tmpB = marshalCompositeTagKey(tmpB[:0], name, []byte(tag.Key))
+func (idx *MergeSetIndex) marshalTagToTSIDs(tmpB []byte, dstB []byte, name []byte, tagKey string, tagValue string, tsid uint64) []byte {
+	tmpB = marshalCompositeTagKey(tmpB[:0], name, util.Str2bytes(tagKey))
 	dstB = append(dstB, nsPrefixTagToTSIDs)
 	dstB = marshalTagValue(dstB, tmpB)
-	dstB = marshalTagValue(dstB, []byte(tag.Value))
+	dstB = marshalTagValue(dstB, util.Str2bytes(tagValue))
 	dstB = encoding.MarshalUint64(dstB, tsid)
 	return dstB
 }
@@ -1423,7 +1445,7 @@ func (idx *MergeSetIndex) SearchTagValuesCardinality(name, tagKey []byte) (uint6
 	is := idx.getIndexSearch()
 	defer idx.putIndexSearch(is)
 
-	tagValueMap, err := is.searchTagValuesBySingleKey(name, tagKey, nil, nil)
+	tagValueMap, err := is.searchTagValuesBySingleKey(name, tagKey, nil, nil, nil, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -1627,7 +1649,7 @@ func mergeIndexRowsForColumnStore(data []byte, items []mergeset.Item, isArrowFli
 	return data, items
 }
 
-// LoadDeletedTSIDs Only called by delIndex when powered on
+// LoadDeletedTSIDs Only called by delIndex when powered on or clear index
 func (idx *MergeSetIndex) LoadDeletedTSIDs() error {
 	if err := idx.Open(); err != nil {
 		return err
@@ -1637,9 +1659,19 @@ func (idx *MergeSetIndex) LoadDeletedTSIDs() error {
 	if tsid, err := isDelete.getAllTSID(); err != nil {
 		return err
 	} else {
+		idx.deletedTSIDsLock.Lock()
+		defer idx.deletedTSIDsLock.Unlock()
 		idx.deletedTSIDs.Store(tsid)
 	}
 	return nil
+}
+
+func (idx *MergeSetIndex) SetLabelForDeletePart() {
+	idx.tb.SetLabelForDeletePart()
+}
+
+func (idx *MergeSetIndex) RemoveDeletedPart() {
+	idx.tb.RemoveDeletedPart()
 }
 
 func (idx *MergeSetIndex) DeleteTSIDs(name []byte, condition influxql.Expr, tr TimeRange) error {
@@ -1685,7 +1717,7 @@ func (idx *MergeSetIndex) WriteDeleteTsids(tsids []uint64) error {
 
 func (idx *MergeSetIndex) GetDeletedTSIDs() *uint64set.Set {
 	if idx.DeleteMergeSet() == nil {
-		return &uint64set.Set{}
+		return nil
 	}
 	return idx.DeleteMergeSet().deletedTSIDs.Load().(*uint64set.Set)
 }

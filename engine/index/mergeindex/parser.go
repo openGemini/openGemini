@@ -18,8 +18,9 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/uint64set"
 	"go.uber.org/zap"
@@ -33,7 +34,7 @@ type ItemParser interface {
 	TSIDsLen() int
 	ParseTSIDs()
 	HasCommonTSIDs(filter *uint64set.Set) bool
-	IsExpectedTag(deletedTSIDs *uint64set.Set, eligibleTSIDs *uint64set.Set) (bool, uint64)
+	IsExpectedTag(deletedTSIDs *uint64set.Set, eligibleTSIDs *uint64set.Set, regexVal *influxql.RegexLiteral, tagVal []byte, op influxql.Token) (bool, uint64)
 	EqualPrefix(x ItemParser) bool
 	GetTSIDs() []uint64
 }
@@ -90,14 +91,15 @@ func (brp *BasicRowParser) HasCommonTSIDs(filter *uint64set.Set) bool {
 	return false
 }
 
-func (brp *BasicRowParser) IsExpectedTag(deletedTSIDs *uint64set.Set, eligibleTSIDs *uint64set.Set) (bool, uint64) {
+func (brp *BasicRowParser) IsExpectedTag(deletedTSIDs *uint64set.Set, eligibleTSIDs *uint64set.Set, regexVal *influxql.RegexLiteral,
+	tagVal []byte, op influxql.Token) (bool, uint64) {
 	if eligibleTSIDs != nil && eligibleTSIDs.Len() == 0 {
 		return false, 0
 	}
 
 	brp.ParseTSIDs()
 	for _, tsid := range brp.TSIDs {
-		if !deletedTSIDs.Has(tsid) && (eligibleTSIDs == nil || eligibleTSIDs.Has(tsid)) {
+		if !deletedTSIDs.Has(tsid) && (eligibleTSIDs == nil || eligibleTSIDs.Has(tsid)) && (regexVal == nil || regexVal.Match(tagVal, op)) {
 			return true, tsid
 		}
 	}
@@ -124,6 +126,24 @@ func (brp *BasicRowParser) ParseTSIDs() {
 		tsids[i] = tsid
 		tail = tail[8:]
 	}
+}
+
+func (brp *BasicRowParser) ParseTSIDsAndGetFilteredLen(deleted *uint64set.Set) uint64 {
+	if deleted.Len() == 0 {
+		return uint64(brp.TSIDsLen())
+	}
+	tail := brp.tail
+	n := len(tail) / 8
+	var seriesCount uint64
+	for i := 0; i < n; i++ {
+		tsid := encoding.UnmarshalUint64(tail)
+		tail = tail[8:]
+		if deleted.Has(tsid) {
+			continue
+		}
+		seriesCount++
+	}
+	return seriesCount
 }
 
 func (brp *BasicRowParser) TSIDsLen() int {

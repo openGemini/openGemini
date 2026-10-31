@@ -19,10 +19,12 @@ import (
 	"testing"
 
 	"github.com/agiledragon/gomonkey/v2"
+	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/msgservice"
+	"github.com/openGemini/openGemini/lib/scheduler"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -93,4 +95,44 @@ func TestSysProcessor_Handle(t *testing.T) {
 	p := NewSysProcessor(nil)
 	err := p.Handle(w, data)
 	assert.EqualError(t, err, "invalid data type, exp: *msgservice.SysCtrlRequest, got: *msgservice.DDLMessage")
+}
+
+func TestTaskProcessor_Handle(t *testing.T) {
+	w := &MockNewResponser{}
+	data := msgservice.NewTaskMessage(msgservice.GetTaskRequestMessage, &msgservice.GetTaskRequest{Type: scheduler.CompactTask})
+	s := &storage.Storage{}
+
+	s.SetEngine(&MockMEngine{})
+	p := NewTaskProcessor(s)
+	err := p.Handle(w, data)
+	assert.Nil(t, err)
+
+	w = &MockNewResponser{}
+	data = msgservice.NewTaskMessage(msgservice.GetTaskRequestMessage, &msgservice.GetTaskRequest{Type: -1})
+	err = p.Handle(w, data)
+	assert.Nil(t, err)
+}
+
+func TestTaskProcessor_HandleError(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		w := &MockNewResponser{}
+		//data := msgservice.NewTaskMessage(msgservice.UnknownMessage, &msgservice.GetTaskRequest{})
+		s := &storage.Storage{}
+
+		s.SetEngine(&MockMEngine{})
+		p := NewTaskProcessor(s)
+		err := p.Handle(w, []byte{})
+		assert.Error(t, err)
+	})
+	t.Run("2", func(t *testing.T) {
+		w := &MockNewResponser{}
+		data := msgservice.NewTaskMessage(msgservice.UnknownMessage, &msgservice.GetTaskRequest{})
+		s := &storage.Storage{}
+
+		s.SetEngine(&MockMEngine{})
+		p := NewTaskProcessor(s)
+		err := p.Handle(w, data)
+		assert.Error(t, err)
+	})
+
 }

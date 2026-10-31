@@ -11,5 +11,10 @@
     "KillQuery",
     "ShowTagKeys",
     "RaftMessages",
-    "DropSeries"
+    "DropSeries",
+    "ShowLastIndex",
+    "SmarterQuery",
+    "PullRPPTWriteStatus",
+    "GetTask",
+    "SendTaskResult"
 ]

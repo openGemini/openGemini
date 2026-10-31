@@ -20,6 +20,10 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 )
 
+const (
+	TSSPFileNameSize = len("00000000-0000-00000000")
+)
+
 func SumFilesSize(files []TSSPFile) int64 {
 	var size int64 = 0
 	for _, f := range files {
@@ -39,4 +43,26 @@ func BuildPKFilePathFromTSSP(path string) string {
 	}
 
 	return colstore.AppendPKIndexSuffix(path[:len(path)-len(ext)])
+}
+
+func RenameIndexFilePathFromTSSP(old string, tsspFile string) string {
+	if len(old) == 0 || len(tsspFile) == 0 {
+		return old
+	}
+
+	oldDir := filepath.Dir(old)
+	oldBase := filepath.Base(old)
+	tsspBase := filepath.Base(tsspFile)
+
+	if len(tsspBase) < TSSPFileNameSize || len(oldBase) < TSSPFileNameSize {
+		return old
+	}
+
+	if IsTempleFile(oldBase) && !IsTempleFile(tsspBase) {
+		oldBase = RemoveTmpSuffix(oldBase)
+	} else if !IsTempleFile(oldBase) && IsTempleFile(tsspBase) {
+		oldBase += tmpFileSuffix
+	}
+
+	return filepath.Join(oldDir, tsspBase[:TSSPFileNameSize]+oldBase[TSSPFileNameSize:])
 }

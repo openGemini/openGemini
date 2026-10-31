@@ -47,13 +47,13 @@ func NewPageCacheReader(t *Trailer, r *tsspFileReader) *PageCacheReader {
 
 func (pcr *PageCacheReader) Init() {
 	pcr.startOffset = pcr.trailer.dataOffset
-	pcr.endOffset, _ = pcr.trailer.metaOffsetSize()
+	pcr.endOffset, _ = pcr.trailer.metaIndexOffsetSize()
 	pcr.maxPageId, pcr.maxPageOffset = pcr.GetMaxPageIdAndOffset()
 }
 
 // get all cache pageIds containning bytes from start to start + size
 func (pcr *PageCacheReader) GetCachePageIdsAndOffsets(start int64, size uint32) ([]int64, []int64, error) {
-	end := (start + int64(size))
+	end := start + int64(size)
 	if start < pcr.startOffset || start >= pcr.endOffset || end < pcr.startOffset || end > pcr.endOffset {
 		return nil, nil, fmt.Errorf("invalid read offset of GetCachePageIdsAndOffsets() start:%v end:%v startOffset:%v endOffset:%v", start, end, pcr.startOffset, pcr.endOffset)
 	}

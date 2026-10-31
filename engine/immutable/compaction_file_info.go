@@ -35,16 +35,30 @@ import (
 )
 
 type CompactedFileInfo struct {
-	Name    string // measurement name with version
-	IsOrder bool
-	OldFile []string
-	NewFile []string
+	Name        string // measurement name with version
+	BasePath    string
+	IsOrder     bool
+	IsNonStream bool
+	Lock        *string
+	OldFile     []string
+	NewFile     []string
+	ToLevel     uint16
 }
 
-func (info CompactedFileInfo) marshal(dst []byte) []byte {
+func (info CompactedFileInfo) Marshal(dst []byte) []byte {
 	dst = numberenc.MarshalUint16Append(dst, uint16(len(info.Name)))
 	dst = append(dst, info.Name...)
+	dst = numberenc.MarshalUint16Append(dst, uint16(len(info.BasePath)))
+	dst = append(dst, info.BasePath...)
 	dst = numberenc.MarshalBool(dst, info.IsOrder)
+	dst = numberenc.MarshalBool(dst, info.IsNonStream)
+	if info.Lock != nil {
+		dst = numberenc.MarshalBool(dst, true)
+		dst = numberenc.MarshalUint16Append(dst, uint16(len(*info.Lock)))
+		dst = append(dst, *info.Lock...)
+	} else {
+		dst = numberenc.MarshalBool(dst, false)
+	}
 	dst = numberenc.MarshalUint16Append(dst, uint16(len(info.OldFile)))
 	for i := range info.OldFile {
 		dst = numberenc.MarshalUint16Append(dst, uint16(len(info.OldFile[i])))
@@ -56,6 +70,7 @@ func (info CompactedFileInfo) marshal(dst []byte) []byte {
 		dst = numberenc.MarshalUint16Append(dst, uint16(len(info.NewFile[i])))
 		dst = append(dst, info.NewFile[i]...)
 	}
+	dst = numberenc.MarshalUint16Append(dst, info.ToLevel)
 
 	return dst
 }
@@ -66,7 +81,7 @@ func (info *CompactedFileInfo) reset() {
 	info.NewFile = info.NewFile[:0]
 }
 
-func (info *CompactedFileInfo) unmarshal(src []byte) error {
+func (info *CompactedFileInfo) Unmarshal(src []byte) error {
 	if len(src) < 2 {
 		return fmt.Errorf("too small data for name length, %v", len(src))
 	}
@@ -76,7 +91,25 @@ func (info *CompactedFileInfo) unmarshal(src []byte) error {
 		return fmt.Errorf("too small data for name, %v < %v", len(src), l+3)
 	}
 	info.Name, src = util.Bytes2str(src[:l]), src[l:]
+	l = int(numberenc.UnmarshalUint16(src))
+	src = src[2:]
+	if len(src) < l {
+		return fmt.Errorf("too small data for basePath, %v < %v", len(src), l)
+	}
+	info.BasePath, src = util.Bytes2str(src[:l]), src[l:]
 	info.IsOrder, src = numberenc.UnmarshalBool(src[0]), src[1:]
+	info.IsNonStream, src = numberenc.UnmarshalBool(src[0]), src[1:]
+	isNotNil, src := numberenc.UnmarshalBool(src[0]), src[1:]
+	if isNotNil {
+		var lock string
+		l = int(numberenc.UnmarshalUint16(src))
+		src = src[2:]
+		if len(src) < l {
+			return fmt.Errorf("too small data for name, %v < %v", len(src), l)
+		}
+		lock, src = util.Bytes2str(src[:l]), src[l:]
+		info.Lock = &lock
+	}
 
 	l, src = int(numberenc.UnmarshalUint16(src)), src[2:]
 	if cap(info.OldFile) < l {
@@ -115,6 +148,7 @@ func (info *CompactedFileInfo) unmarshal(src []byte) error {
 		}
 		info.NewFile[i], src = util.Bytes2str(src[:l]), src[l:]
 	}
+	info.ToLevel = numberenc.UnmarshalUint16(src)
 
 	return nil
 }
@@ -133,22 +167,7 @@ func GenLogFileName(logSeq *uint64) string {
 	return fmt.Sprintf("%08x-%08x", buf[:8], buf[8:])
 }
 
-func (m *MmsTables) writeCompactedFileInfo(name string, oldFiles, newFiles []TSSPFile, shardDir string, isOrder bool) (string, error) {
-	info := &CompactedFileInfo{
-		Name:    name,
-		IsOrder: isOrder,
-		OldFile: make([]string, len(oldFiles)),
-		NewFile: make([]string, len(newFiles)),
-	}
-
-	for i, f := range oldFiles {
-		info.OldFile[i] = filepath.Base(f.Path())
-	}
-
-	for i, f := range newFiles {
-		info.NewFile[i] = filepath.Base(f.Path())
-	}
-
+func (m *MmsTables) writeCompactedFileInfo(info *CompactedFileInfo, shardDir string) (string, error) {
 	fDir := filepath.Join(shardDir, compactLogDir)
 	lock := fileops.FileLockOption(*m.lock)
 	if err := fileops.MkdirAll(fDir, 0750, lock); err != nil {
@@ -160,7 +179,7 @@ func (m *MmsTables) writeCompactedFileInfo(name string, oldFiles, newFiles []TSS
 	buf := bufferpool.Get()
 	defer bufferpool.Put(buf)
 
-	buf = info.marshal(buf[:0])
+	buf = info.Marshal(buf[:0])
 	buf = append(buf, compLogMagic...)
 
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
@@ -224,7 +243,7 @@ func readCompactLogFile(name string, info *CompactedFileInfo) error {
 		return ErrDirtyLog
 	}
 
-	if err = info.unmarshal(buf); err != nil {
+	if err = info.Unmarshal(buf); err != nil {
 		log.Error("unmarshal compact log fail", zap.String("name", name), zap.Error(err))
 		return err
 	}

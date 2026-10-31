@@ -23,8 +23,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 )
@@ -38,9 +38,10 @@ const (
 type QueryType int
 
 const (
-	Match        QueryType = 1
-	Match_Phrase QueryType = 2
-	Fuzzy        QueryType = 3
+	Match          QueryType = 1
+	Match_Phrase   QueryType = 2
+	Fuzzy          QueryType = 3
+	UnMatch_Phrase QueryType = 4
 )
 
 type RowFilter struct {
@@ -789,7 +790,7 @@ func (idx *TokenIndex) Search(t QueryType, queryStr string, sids []uint64) (*Inv
 	switch t {
 	case Match:
 		invert, err = idx.Match(queryStr, sids)
-	case Match_Phrase:
+	case Match_Phrase, UnMatch_Phrase:
 		invert, err = idx.MatchPhrase(queryStr, sids)
 	case Fuzzy:
 		invert, err = idx.Fuzzy(queryStr, sids)

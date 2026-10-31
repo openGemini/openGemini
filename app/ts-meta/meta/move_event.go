@@ -23,8 +23,8 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	mproto "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 type MoveEvent struct {
@@ -60,10 +60,10 @@ func NewMoveEvent(pt *meta.DbPtInfo, src, dst uint64, aliveConnId uint64, isUser
 func (e *MoveEvent) marshalEvent() *mproto.MigrateEventInfo {
 	return &mproto.MigrateEventInfo{
 		EventId:       proto.String(e.eventId),
-		EventType:     proto.Int(int(e.eventType)),
+		EventType:     proto.Int32(int32(e.eventType)),
 		Pti:           e.pt.Marshal(),
-		CurrState:     proto.Int(e.getCurrState()),
-		PreState:      proto.Int(e.getPreState()),
+		CurrState:     proto.Int32(int32(e.getCurrState())),
+		PreState:      proto.Int32(int32(e.getPreState())),
 		Src:           proto.Uint64(e.getSrc()),
 		Dest:          proto.Uint64(e.getDst()),
 		OpId:          proto.Uint64(e.getOpId()),

@@ -4,8 +4,11 @@
     "Items":[
         "StreamIn",
         "StreamInNum",
-        "StreamFilter",
-        "StreamFilterNum"
+        "StreamFilterIn",
+        "StreamFilterInNum",
+        "StreamFilterOut",
+        "StreamFilterOutNum",
+        "StreamReplayInNum"
     ],
     "EnablePush":"Y",
     "PushDuration":"Y"

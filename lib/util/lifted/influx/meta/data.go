@@ -41,15 +41,20 @@ import (
 
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
+	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/smart_query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -79,6 +84,9 @@ const (
 
 	// QueryIDSpan is the default id range span.
 	QueryIDSpan = 100000000 // 100 million
+
+	// -1 for numOfShards means AUTO
+	AlterShardsNumAuto = -1
 )
 
 const (
@@ -218,7 +226,7 @@ type Data struct {
 	MaxIndexGroupID                uint64
 	MaxIndexID                     uint64
 	MaxEventOpId                   uint64
-	MaxDownSampleID                uint64
+	MaxTaskID                      uint64
 	MaxStreamID                    uint64
 	MaxConnID                      uint64
 	MaxSubscriptionID              uint64 // +1 for any changes to subscriptions
@@ -231,6 +239,11 @@ type Data struct {
 	UpdateNodeTmpIndexCommandStart uint64 // start of all UpdateNodeTmpIndexCommand
 
 	SQLite *SQLiteWrapper
+	// Resource management path, map[resourceName]map[propertyKey]propertyValue
+	Resources map[string]*ResourceInfo // such as: {"openPangu": {"type": "llm", "llm.provider_type": "huawei", "llm.model_name": "openPangu"}}
+
+	// Task management path, map[Type]map[taskName]map[propertyKey]propertyValue
+	TaskGroups map[string]*TaskGroup // such as: {"export": {"dailyExport": {"db": "db0", "source": "select * from mst"}}}
 }
 
 var DataLogger *zap.Logger
@@ -396,6 +409,12 @@ func init() {
 		proto2.Command_UpdateMetaNodeStatusCommand:      {},
 		proto2.Command_ReplaceMergeShardsCommand:        {},
 		proto2.Command_RecoverMetaData:                  {},
+		proto2.Command_AlterShardsNumCommand:            {},
+		proto2.Command_CreateResourceCommand:            {},
+		proto2.Command_DropResourceCommand:              {},
+		proto2.Command_CreateTaskCommand:                {},
+		proto2.Command_DropTaskCommand:                  {},
+		proto2.Command_UpdateShardingPlanCommand:        {},
 	}
 }
 
@@ -477,7 +496,7 @@ func (data *Data) GetOps(oldIndex uint64) ([]string, GetOpsState) {
 	}
 }
 
-func (data *Data) AddCmdAsOpToOpMap(op proto2.Command, newIndex uint64) {
+func (data *Data) AddCmdAsOpToOpMap(op *proto2.Command, newIndex uint64) {
 	if data.OpsMap == nil {
 		return
 	}
@@ -494,7 +513,7 @@ func (data *Data) AddCmdAsOpToOpMap(op proto2.Command, newIndex uint64) {
 		preOp := data.OpsMap[data.OpsMapMaxIndex]
 		preOp.nextOpIndex = newIndex
 	}
-	data.OpsMap[newIndex] = &Op{com: &op}
+	data.OpsMap[newIndex] = &Op{com: op}
 	if newIndex < data.OpsMapMinIndex {
 		data.OpsMapMinIndex = newIndex
 	}
@@ -844,6 +863,7 @@ func (data *Data) CreateShardGroupWithBounds(db string, rp *RetentionPolicyInfo,
 	sgi.StartTime = startTime.UTC()
 	lastSg := &rp.ShardGroups[len(rp.ShardGroups)-1]
 	sgi.EndTime = lastSg.EndTime.UTC()
+	sgi.Timezone = lastSg.Timezone
 	sgi.EngineType = engineType
 
 	igi := rp.IndexGroups[len(rp.IndexGroups)-1]
@@ -962,9 +982,6 @@ func (data *Data) CreateMeasurement(database string, rpName string, mst string,
 
 	var hInfo *ColStoreInfo
 	if colStoreInfo != nil {
-		if rp.ReplicaN > 1 {
-			return errno.NewError(errno.ConflictWithRep)
-		}
 		hInfo = &ColStoreInfo{}
 		hInfo.Unmarshal(colStoreInfo)
 	}
@@ -1020,12 +1037,95 @@ func (data *Data) AlterShardKey(database string, rpName string, mst string, shar
 	ski.ShardGroup = data.MaxShardGroupID + 1
 	// rp max shard group ID is less than last shardKey effective shard group ID means do not create new sg after last shardKey change
 	// so that last shardKey is useless just overwrite
-	if len(rp.ShardGroups) == 0 || rp.maxShardGroupID() < shardKeyInfo.ShardGroup {
+	if len(rp.ShardGroups) == 0 || rp.MaxShardGroupID() < shardKeyInfo.ShardGroup {
 		msti.ShardKeys[len(msti.ShardKeys)-1] = *ski
 		return nil
 	}
 
 	msti.ShardKeys = append(msti.ShardKeys, *ski)
+	return nil
+}
+
+func (data *Data) AlterShardsNum(database string, rpName string, mst string, numOfShards int32) error {
+	rp, err := data.RetentionPolicy(database, rpName)
+	if err != nil {
+		return err
+	}
+	msti := rp.Measurement(mst)
+	if msti == nil || msti.MarkDeleted {
+		return ErrMeasurementNotFound
+	}
+	if numOfShards == AlterShardsNumAuto {
+		numOfShards = data.NumOfShards
+	}
+	maxShardNum := int32(data.ClusterPtNum)
+	var shardKeyInfo *ShardKeyInfo
+	if len(msti.ShardKeys) > 0 {
+		shardKeyInfo = &msti.ShardKeys[len(msti.ShardKeys)-1]
+	}
+	if shardKeyInfo != nil && shardKeyInfo.Type == HASH { // only works for hash sharding.
+		// numOfShards 0 means map to all shards
+		if numOfShards >= maxShardNum {
+			numOfShards = 0
+		}
+		msti.InitNumOfShards = numOfShards
+		DataLogger.Info("number of shards altered", zap.Int32("numOfShards", numOfShards), zap.String("mst", mst))
+	} else {
+		DataLogger.Error("alter shards num only works for hash sharding", zap.String("mst", mst))
+	}
+	return nil
+}
+
+func (data *Data) SetResource(name string, info *proto2.ResourceInfo) {
+	if data.Resources == nil {
+		data.Resources = make(map[string]*ResourceInfo)
+	}
+	ri := &ResourceInfo{}
+	ri.Unmarshal(info)
+	data.Resources[name] = ri
+}
+
+func (data *Data) CreateResource(name string, info *proto2.ResourceInfo) error {
+	data.SetResource(name, info)
+	return nil
+}
+
+func (data *Data) DropResource(name string) error {
+	delete(data.Resources, name)
+	return nil
+}
+
+func (data *Data) SetTask(info *proto2.TaskInfo) {
+	if data.TaskGroups == nil {
+		data.TaskGroups = make(map[string]*TaskGroup)
+	}
+	ti := &TaskInfo{}
+	ti.Unmarshal(info)
+	ti.ID = data.MaxTaskID
+	data.MaxTaskID++
+	if data.TaskGroups[ti.Type] == nil {
+		data.TaskGroups[ti.Type] = &TaskGroup{
+			Tasks: make(map[string]*TaskInfo),
+		}
+	}
+	data.TaskGroups[ti.Type].Tasks[ti.Name] = ti
+}
+
+func (data *Data) CreateTask(info *proto2.TaskInfo) error {
+	data.SetTask(info)
+	return nil
+}
+
+func (data *Data) DropTask(taskName, taskType string) error {
+	if data.TaskGroups == nil {
+		return nil
+	}
+	taskGroup, ok := data.TaskGroups[taskType]
+	if !ok || taskGroup.Tasks == nil {
+		return nil
+	}
+
+	delete(taskGroup.Tasks, taskName)
 	return nil
 }
 
@@ -1354,6 +1454,34 @@ func (data *Data) SetDataNode(nodeID uint64, host, tcpHost string) error {
 }
 
 func (data *Data) DeleteDataNode(id uint64) error {
+	return nil
+}
+
+func (data *Data) ClearUselessDataNode(dataHosts []string) error {
+	newDataNodes := make([]DataNode, len(data.DataNodes))
+	index := 0
+	inused := 0
+	for _, node := range data.DataNodes {
+		flag := false
+		for _, host := range dataHosts {
+			if host == node.TCPHost {
+				newDataNodes[index] = node
+				index++
+				inused++
+				flag = true
+				break
+			}
+		}
+		if !flag && node.Status != serf.StatusFailed {
+			newDataNodes[index] = node
+			index++
+		}
+	}
+	if inused != len(dataHosts) {
+		return fmt.Errorf("not all inused data nodes have matched")
+	}
+
+	data.DataNodes = newDataNodes[:index]
 	return nil
 }
 
@@ -1942,26 +2070,31 @@ func (data *Data) ShowShardsFromMst(db string, rp string, mst string) models.Row
 			}
 		}
 	} else {
-		sgIDToShards := make(map[uint64][]ShardInfo)
 		for _, shardGroup := range shardGroups {
 			if shardGroup.Deleted() {
 				continue
 			}
-			if _, ok := shardIdxes[shardGroup.ID]; ok {
-				sgIDToShards[shardGroup.ID] = shardGroup.Shards
-			}
-		}
-		for shardGroup, shardIdx := range shardIdxes {
-			for _, shard := range shardIdx {
-				if _, ok := sgIDToShards[shardGroup]; !ok {
-					continue
+			idxes := GetShardIdxes(shardIdxes, shardGroup.ID)
+			shard := shardGroup.Shards
+			if len(idxes) > 0 {
+				for _, idx := range idxes {
+					row.Values = append(row.Values, []interface{}{
+						shard[idx].ID,
+						db,
+						rp,
+						mst,
+						shardGroup.ID,
+					})
 				}
+				continue
+			}
+			for _, shardInfo := range shard {
 				row.Values = append(row.Values, []interface{}{
-					sgIDToShards[shardGroup][shard].ID,
+					shardInfo.ID,
 					db,
 					rp,
 					mst,
-					shardGroup,
+					shardGroup.ID,
 				})
 			}
 		}
@@ -1980,15 +2113,20 @@ func (data *Data) ShowShards() models.Rows {
 				if sg.Deleted() {
 					return
 				}
+				timezone, err := time.LoadLocation(sg.Timezone)
+				if err != nil {
+					DataLogger.Warn("Invalid timezone for shard group, fallback to UTC", zap.Uint64("sgId", sg.ID), zap.String("timezone", sg.Timezone), zap.Error(err))
+					timezone = time.UTC
+				}
 				sg.walkShards(func(sh *ShardInfo) {
 					row.Values = append(row.Values, []interface{}{
 						sh.ID,
 						db.Name,
 						rp.Name,
 						sg.ID,
-						sg.StartTime.UTC().Format(time.RFC3339),
-						sg.EndTime.UTC().Format(time.RFC3339),
-						sg.EndTime.Add(rp.Duration).UTC().Format(time.RFC3339),
+						sg.StartTime.In(timezone).Format(time.RFC3339),
+						sg.EndTime.In(timezone).Format(time.RFC3339),
+						sg.EndTime.Add(rp.Duration).In(timezone).Format(time.RFC3339),
 						joinUint64(data.GetDbPtOwners(db.Name, sh.Owners)),
 						TierToString(sh.Tier),
 						sh.DownSampleLevel,
@@ -2020,14 +2158,19 @@ func (data *Data) ShowShardGroups() models.Rows {
 				if sg.Deleted() {
 					return
 				}
+				timezone, err := time.LoadLocation(sg.Timezone)
+				if err != nil {
+					DataLogger.Warn("Invalid timezone for shard group, fallback to UTC", zap.Uint64("sgId", sg.ID), zap.String("timezone", sg.Timezone), zap.Error(err))
+					timezone = time.UTC
+				}
 
 				row.Values = append(row.Values, []interface{}{
 					sg.ID,
 					db.Name,
 					rp.Name,
-					sg.StartTime.UTC().Format(time.RFC3339),
-					sg.EndTime.UTC().Format(time.RFC3339),
-					sg.EndTime.Add(rp.Duration).UTC().Format(time.RFC3339),
+					sg.StartTime.In(timezone).Format(time.RFC3339),
+					sg.EndTime.In(timezone).Format(time.RFC3339),
+					sg.EndTime.Add(rp.Duration).In(timezone).Format(time.RFC3339),
 				})
 			})
 		})
@@ -2375,20 +2518,93 @@ func (data *Data) ShardGroupByTimestampAndEngineType(database, policy string, ti
 	return rpi.ShardGroupByTimestampAndEngineType(timestamp, engineType), nil
 }
 
-func (data *Data) mapShardsToMst(database string, rpi *RetentionPolicyInfo, sgi *ShardGroupInfo) {
-	var numOfShards int32
+func (data *Data) mapShardsToMst(database string, rpi *RetentionPolicyInfo, sgi *ShardGroupInfo, shardingPlans map[string][]int) {
+	clusterPtNum := data.ClusterPtNum
 	for mstName, mstInfo := range rpi.Measurements {
-		if mstInfo.InitNumOfShards == 0 { // Default
+		shardingPlan := shardingPlans[mstName]
+		if mstInfo.InitNumOfShards == 0 && len(shardingPlan) == 0 {
+			if len(mstInfo.ShardIdexes) != 0 {
+				insertShardIdxesIfNeeded(mstInfo.ShardIdexes, sgi.ID, rpi.MaxShardGroupID(), nil)
+			}
 			continue
-		} else {
-			numOfShards = mstInfo.InitNumOfShards
 		}
-		if mstInfo.ShardIdexes != nil {
-			mstInfo.ShardIdexes[sgi.ID] = mapShards(mstName, sgi.Shards, numOfShards)
+
+		var numOfShards int32
+		if mstInfo.InitNumOfShards > 0 {
+			numOfShards = mstInfo.InitNumOfShards
 		} else {
-			DataLogger.Error("mapShardsToMst err", zap.String("mstName", mstName), zap.Int32("InitNumOfShards", mstInfo.InitNumOfShards))
+			numOfShards = int32(clusterPtNum)
+		}
+
+		if mstInfo.ShardIdexes == nil {
+			mstInfo.ShardIdexes = make(map[uint64][]int)
+		}
+
+		var nextShardIdxes []int
+		if int32(len(shardingPlan)) != numOfShards {
+			if numOfShards == int32(clusterPtNum) {
+				nextShardIdxes = nil
+			} else {
+				nextShardIdxes = mapShards(mstName, sgi.Shards, numOfShards)
+			}
+		} else {
+			nextShardIdxes = shardingPlan
+		}
+		insertShardIdxesIfNeeded(mstInfo.ShardIdexes, sgi.ID, rpi.MaxShardGroupID(), nextShardIdxes)
+	}
+}
+
+func insertShardIdxesIfNeeded(shardIdxes map[uint64][]int, sgId uint64, prevSgId uint64, idxes []int) {
+	// If shard indexes map is empty, directly add the new entry
+	if len(shardIdxes) == 0 {
+		shardIdxes[sgId] = idxes
+		return
+	}
+
+	// Get previous shard indexes to compare
+	prevIdxes := GetShardIdxes(shardIdxes, prevSgId)
+
+	// Only update if the new indexes are different from previous ones
+	if !slicesEqual(prevIdxes, idxes) {
+		shardIdxes[sgId] = idxes
+	}
+}
+
+// GetShardIdxes retrieves shard indexes for a given shard group ID.
+// If the exact ID is not found, it returns the indexes from the closest previous shard group.
+func GetShardIdxes(shardIdxes map[uint64][]int, sgId uint64) []int {
+	if len(shardIdxes) == 0 {
+		return nil
+	}
+
+	// Try to get the exact shard group ID first
+	if idxes, ok := shardIdxes[sgId]; ok {
+		return idxes
+	}
+
+	// If not found, find the most recent previous shard group
+	var prevSgId *uint64
+	for idx := range shardIdxes {
+		if idx < sgId && (prevSgId == nil || idx > *prevSgId) {
+			prevSgId = &idx
 		}
 	}
+	if prevSgId == nil {
+		return nil
+	}
+	return shardIdxes[*prevSgId]
+}
+
+func slicesEqual(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // This method could be improved later.
@@ -2437,15 +2653,19 @@ func (data *Data) createShards(database string, sgi *ShardGroupInfo, igi *IndexG
 	}
 }
 
-func (data *Data) newShardGroup(rpi *RetentionPolicyInfo, timestamp time.Time, engineType config.EngineType, version uint32) *ShardGroupInfo {
-	startTime := timestamp.Truncate(rpi.ShardGroupDuration)
+func (data *Data) newShardGroup(rpi *RetentionPolicyInfo, timestamp time.Time, engineType config.EngineType, version uint32, igi *IndexGroupInfo) *ShardGroupInfo {
+	startTime, endTime := data.getShardGroupTimeRange(timestamp, rpi, engineType, igi)
+	if startTime.Compare(endTime) >= 0 {
+		return nil
+	}
 	data.MaxShardGroupID++
 	sgi := ShardGroupInfo{
 		ID:         data.MaxShardGroupID,
 		StartTime:  startTime.UTC(),
-		EndTime:    startTime.Add(rpi.ShardGroupDuration).UTC(),
+		EndTime:    endTime.UTC(),
 		EngineType: engineType,
 		Version:    version,
+		Timezone:   igi.Timezone,
 	}
 	if sgi.EndTime.After(time.Unix(0, models.MaxNanoTime)) {
 		// Shard group range is [start, end) so add one to the max time.
@@ -2454,8 +2674,85 @@ func (data *Data) newShardGroup(rpi *RetentionPolicyInfo, timestamp time.Time, e
 	return &sgi
 }
 
+func (data *Data) getShardGroupTimeRange(timestamp time.Time, rpi *RetentionPolicyInfo, engineType config.EngineType, igi *IndexGroupInfo) (startTime time.Time, endTime time.Time) {
+	dayDuration := time.Hour * 24
+	if engineType != config.TSSTORE || rpi.ShardGroupDuration.Nanoseconds()%dayDuration.Nanoseconds() != 0 {
+		startTime = timestamp.Truncate(rpi.ShardGroupDuration)
+		endTime = startTime.Add(rpi.ShardGroupDuration).UTC()
+	} else {
+		// calculate time offset between specific time zone and UTC
+		timeZone := igi.Timezone
+		loc, err := time.LoadLocation(timeZone)
+		if err != nil {
+			loc = time.UTC
+		}
+		t := timestamp.In(loc)
+		_, offsetSeconds := t.Zone()
+		offset := time.Duration(offsetSeconds) * time.Second
+		startTime = timestamp.Add(offset).Truncate(rpi.ShardGroupDuration).Add(-offset).UTC()
+		endTime = startTime.Add(rpi.ShardGroupDuration).UTC()
+	}
+	if startTime.Before(igi.StartTime) {
+		startTime = igi.StartTime
+	}
+	if endTime.After(igi.EndTime) {
+		endTime = igi.EndTime
+	}
+	// truncate start time and end time if overlap with current shard group
+	for i := 0; i < len(rpi.ShardGroups); i++ {
+		sgi := &rpi.ShardGroups[i]
+		if sgi.EngineType != engineType || sgi.Deleted() {
+			continue
+		}
+		if !timestamp.Before(sgi.EndTime) && sgi.EndTime.After(startTime) {
+			// startTime < shard.EndTime <= timestamp
+			startTime = sgi.EndTime
+		}
+		if sgi.StartTime.After(timestamp) && sgi.StartTime.Before(endTime) {
+			// timestamp < shard.StartTime < endTime
+			endTime = sgi.StartTime
+		}
+	}
+	return
+}
+
+func (data *Data) getIndexGroupTimeRange(timestamp time.Time, rpi *RetentionPolicyInfo, engineType config.EngineType, timeZone string) (startTime time.Time, endTime time.Time) {
+	dayDuration := time.Hour * 24
+	if engineType != config.TSSTORE || rpi.IndexGroupDuration.Nanoseconds()%dayDuration.Nanoseconds() != 0 {
+		startTime = timestamp.Truncate(rpi.IndexGroupDuration)
+		endTime = startTime.Add(rpi.IndexGroupDuration).UTC()
+	} else {
+		// calculate time offset between specific time zone and UTC
+		loc, err := time.LoadLocation(timeZone)
+		if err != nil {
+			loc = time.UTC
+		}
+		t := timestamp.In(loc)
+		_, offsetSeconds := t.Zone()
+		offset := time.Duration(offsetSeconds) * time.Second
+		startTime = timestamp.Add(offset).Truncate(rpi.IndexGroupDuration).Add(-offset).UTC()
+		endTime = startTime.Add(rpi.IndexGroupDuration).UTC()
+	}
+	// truncate start time and end time if overlap with current index group
+	for i := 0; i < len(rpi.IndexGroups); i++ {
+		igi := &rpi.IndexGroups[i]
+		if igi.EngineType != engineType || igi.Deleted() {
+			continue
+		}
+		if !timestamp.Before(igi.EndTime) && igi.EndTime.After(startTime) {
+			// startTime < index.EndTime <= timestamp
+			startTime = igi.EndTime
+		}
+		if igi.StartTime.After(timestamp) && igi.StartTime.Before(endTime) {
+			// timestamp < index.StartTime < endTime
+			endTime = igi.StartTime
+		}
+	}
+	return
+}
+
 // CreateShardGroup creates a shard group on a database and policy for a given timestamp.
-func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time, tier uint64, engineType config.EngineType, version uint32) error {
+func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time, tier uint64, engineType config.EngineType, version uint32, timeZone string, shardingPlans map[string][]int) error {
 	if err := data.checkStoreReady(); err != nil {
 		return err
 	}
@@ -2482,17 +2779,24 @@ func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time,
 
 	//check index group contain this shard group
 	ptNum := data.GetClusterPtNum()
-	igi := data.createIndexGroupIfNeeded(rpi, timestamp, engineType, ptNum)
 
+	igi := data.createIndexGroupIfNeeded(rpi, timestamp, engineType, ptNum, timeZone)
+	if igi == nil {
+		return nil
+	}
 	// Create the shard group.
-	sgi := data.newShardGroup(rpi, timestamp, engineType, version)
+	sgi := data.newShardGroup(rpi, timestamp, engineType, version, igi)
+
+	if sgi == nil {
+		return nil
+	}
 
 	// Create shards on the group.
 	data.createShards(database, sgi, igi, rpi, msti, tier)
 
 	// Map shards to measurements, only works for hash sharding.
 	if msti.ShardKeys[0].Type == HASH {
-		data.mapShardsToMst(database, rpi, sgi)
+		data.mapShardsToMst(database, rpi, sgi, shardingPlans)
 	}
 
 	// Retention policy has a new shard group, so update the policy. Shard
@@ -2504,12 +2808,21 @@ func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time,
 	return nil
 }
 
-func (data *Data) CreateIndexGroup(rpi *RetentionPolicyInfo, timestamp time.Time, engineType config.EngineType, ptNum uint32) *IndexGroupInfo {
+func (data *Data) CreateIndexGroup(rpi *RetentionPolicyInfo, timestamp time.Time, engineType config.EngineType, ptNum uint32, timeZone string, parentInfo *IndexGroupInfo) *IndexGroupInfo {
 	data.MaxIndexGroupID++
 	igi := IndexGroupInfo{}
 	igi.ID = data.MaxIndexGroupID
-	igi.StartTime = timestamp.Truncate(rpi.IndexGroupDuration).UTC()
-	igi.EndTime = igi.StartTime.Add(rpi.IndexGroupDuration).UTC()
+	if parentInfo == nil {
+		igi.StartTime, igi.EndTime = data.getIndexGroupTimeRange(timestamp, rpi, engineType, timeZone)
+		igi.Timezone = timeZone
+	} else {
+		igi.StartTime = parentInfo.StartTime
+		igi.EndTime = parentInfo.EndTime
+		igi.Timezone = parentInfo.Timezone
+	}
+	if igi.StartTime.Compare(igi.EndTime) >= 0 {
+		return nil
+	}
 	if igi.EndTime.After(time.Unix(0, models.MaxNanoTime)) {
 		igi.EndTime = time.Unix(0, models.MaxNanoTime+1)
 	}
@@ -2524,21 +2837,24 @@ func (data *Data) CreateIndexGroup(rpi *RetentionPolicyInfo, timestamp time.Time
 	return &igi
 }
 
-func (data *Data) createIndexGroupIfNeeded(rpi *RetentionPolicyInfo, timestamp time.Time, engineType config.EngineType, ptNum uint32) *IndexGroupInfo {
+func (data *Data) createIndexGroupIfNeeded(rpi *RetentionPolicyInfo, timestamp time.Time, engineType config.EngineType, ptNum uint32, timeZone string) *IndexGroupInfo {
 	if len(rpi.IndexGroups) == 0 {
-		return data.CreateIndexGroup(rpi, timestamp, engineType, ptNum)
+		return data.CreateIndexGroup(rpi, timestamp, engineType, ptNum, timeZone, nil)
 	}
 
 	var igIdx int
+
+	var parentInfo *IndexGroupInfo
 	for igIdx = len(rpi.IndexGroups) - 1; igIdx >= 0; igIdx-- {
 		if rpi.IndexGroups[igIdx].EngineType == engineType && rpi.IndexGroups[igIdx].Contains(timestamp) {
+			parentInfo = &rpi.IndexGroups[igIdx]
 			break
 		}
 	}
 	if igIdx >= 0 && len(rpi.IndexGroups[igIdx].Indexes) >= int(ptNum) {
 		return &rpi.IndexGroups[igIdx]
 	}
-	return data.CreateIndexGroup(rpi, timestamp, engineType, ptNum)
+	return data.CreateIndexGroup(rpi, timestamp, engineType, ptNum, timeZone, parentInfo)
 }
 
 func (data *Data) expandDBPtView(database string, ptNum uint32, newNode *DataNode) {
@@ -2589,7 +2905,7 @@ func (data *Data) ExpandGroups() {
 
 			rp.WalkShardGroups(func(sg *ShardGroupInfo) {
 				for i := len(sg.Shards); i < int(ptNum); i++ {
-					igi := data.createIndexGroupIfNeeded(rp, sg.StartTime, sg.EngineType, ptNum)
+					igi := data.createIndexGroupIfNeeded(rp, sg.StartTime, sg.EngineType, ptNum, sg.Timezone)
 					data.MaxShardID++
 					sg.Shards = append(sg.Shards, ShardInfo{ID: data.MaxShardID, Owners: []uint32{uint32(i)}, IndexID: igi.Indexes[i].ID, Tier: sg.Shards[i-1].Tier})
 				}
@@ -3023,7 +3339,7 @@ func (data *Data) MarshalBase() *proto2.Data {
 		TakeOverEnabled: proto.Bool(data.TakeOverEnabled),
 		BalancerEnabled: proto.Bool(data.BalancerEnabled),
 
-		MaxDownSampleID:   proto.Uint64(data.MaxDownSampleID),
+		MaxDownSampleID:   proto.Uint64(data.MaxTaskID),
 		MaxStreamID:       proto.Uint64(data.MaxStreamID),
 		MaxConnId:         proto.Uint64(data.MaxConnID),
 		MaxSubscriptionID: proto.Uint64(data.MaxSubscriptionID),
@@ -3095,6 +3411,26 @@ func (data *Data) MarshalBase() *proto2.Data {
 			pb.ReplicaGroups[dbname] = replication
 		}
 	}
+
+	if len(data.Resources) > 0 {
+		pb.Resources = make(map[string]*proto2.ResourceInfo, len(data.Resources))
+		for k, v := range data.Resources {
+			pb.Resources[k] = v.Marshal()
+		}
+	}
+
+	if len(data.TaskGroups) > 0 {
+		pb.TaskGroups = make(map[string]*proto2.TaskGroup, len(data.TaskGroups))
+		for k, v := range data.TaskGroups {
+			pb.TaskGroups[k] = &proto2.TaskGroup{
+				Tasks: make(map[string]*proto2.TaskInfo, len(v.Tasks)),
+			}
+			for taskName, taskInfo := range v.Tasks {
+				pb.TaskGroups[k].Tasks[taskName] = taskInfo.Marshal()
+			}
+		}
+	}
+
 	return pb
 }
 
@@ -3121,7 +3457,7 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 	data.MaxEventOpId = pb.GetMaxEventOpId()
 	data.TakeOverEnabled = pb.GetTakeOverEnabled()
 	data.BalancerEnabled = pb.GetBalancerEnabled()
-	data.MaxDownSampleID = pb.GetMaxDownSampleID()
+	data.MaxTaskID = pb.GetMaxDownSampleID()
 	data.MaxStreamID = pb.GetMaxStreamID()
 	data.MaxConnID = pb.GetMaxConnId()
 	data.MaxSubscriptionID = pb.GetMaxSubscriptionID()
@@ -3189,14 +3525,36 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 		data.QueryIDInit[SQLHost(host)] = pb.QueryIDInit[host]
 	}
 
-	if len(pb.ReplicaGroups) == 0 {
-		return
+	if len(pb.ReplicaGroups) > 0 {
+		data.ReplicaGroups = make(map[string][]ReplicaGroup, len(pb.ReplicaGroups))
+		for dbname, rgs := range pb.ReplicaGroups {
+			data.ReplicaGroups[dbname] = make([]ReplicaGroup, len(rgs.Groups))
+			for i := range rgs.Groups {
+				data.ReplicaGroups[dbname][i].unmarshal(rgs.Groups[i])
+			}
+		}
 	}
-	data.ReplicaGroups = make(map[string][]ReplicaGroup, len(pb.ReplicaGroups))
-	for dbname, rgs := range pb.ReplicaGroups {
-		data.ReplicaGroups[dbname] = make([]ReplicaGroup, len(rgs.Groups))
-		for i := range rgs.Groups {
-			data.ReplicaGroups[dbname][i].unmarshal(rgs.Groups[i])
+
+	if len(pb.Resources) > 0 {
+		data.Resources = make(map[string]*ResourceInfo, len(pb.Resources))
+		for k, v := range pb.Resources {
+			info := &ResourceInfo{}
+			info.Unmarshal(v)
+			data.Resources[k] = info
+		}
+	}
+
+	if len(pb.TaskGroups) > 0 {
+		data.TaskGroups = make(map[string]*TaskGroup, len(pb.TaskGroups))
+		for k, v := range pb.TaskGroups {
+			data.TaskGroups[k] = &TaskGroup{
+				Tasks: make(map[string]*TaskInfo, len(v.Tasks)),
+			}
+			for taskName, taskInfo := range v.Tasks {
+				ti := &TaskInfo{}
+				ti.Unmarshal(taskInfo)
+				data.TaskGroups[k].Tasks[taskName] = ti
+			}
 		}
 	}
 }
@@ -3558,7 +3916,7 @@ func (pt *DbPtInfo) Marshal() *proto2.DbPt {
 	pb.DBBriefInfo = &proto2.DatabaseBriefInfo{
 		Name:           proto.String(pt.Db),
 		EnableTagArray: proto.Bool(pt.DBBriefInfo.EnableTagArray),
-		Replicas:       proto.Int(pt.DBBriefInfo.Replicas),
+		Replicas:       proto.Int32(int32(pt.DBBriefInfo.Replicas)),
 	}
 	return pb
 }
@@ -3798,8 +4156,8 @@ func (data *Data) CloneMigrateEvents() map[string]*MigrateEventInfo {
 
 func (data *Data) CreateDownSamplePolicy(database, rpName string, info *DownSamplePolicyInfo) error {
 	d := data.Database(database)
-	id := data.MaxDownSampleID
-	data.MaxDownSampleID++
+	id := data.MaxTaskID
+	data.MaxTaskID++
 	info.TaskID = id
 	d.RetentionPolicies[rpName].DownSamplePolicyInfo = info
 	d.RetentionPolicies[rpName].Duration = info.Duration
@@ -4386,6 +4744,83 @@ func (data *Data) ReplaceMergeShards(db, rp string, ptId uint32, shardIds []uint
 	return nil
 }
 
+func (data *Data) GetResource(name string) (*ResourceInfo, bool) {
+	res, ok := data.Resources[name]
+	return res, ok
+}
+
+func (data *Data) GetResources() []string {
+	if len(data.Resources) == 0 {
+		return nil
+	}
+	res := make([]string, 0, len(data.Resources))
+	for k := range data.Resources {
+		res = append(res, k)
+	}
+	sort.Strings(res)
+	return res
+}
+
+func (data *Data) GetTask(taskName string, taskType string) (*TaskInfo, bool) {
+	taskGroup, ok := data.TaskGroups[taskType]
+	if !ok {
+		return nil, ok
+	}
+	res, ok := taskGroup.Tasks[taskName]
+	return res, ok
+}
+
+func (data *Data) GetTasks(taskType string) []string {
+	if len(data.TaskGroups) == 0 {
+		return nil
+	}
+	taskGroup, ok := data.TaskGroups[taskType]
+	if !ok {
+		return nil
+	}
+	res := make([]string, 0, len(taskGroup.Tasks))
+	for k := range taskGroup.Tasks {
+		res = append(res, k)
+	}
+	sort.Strings(res)
+	return res
+}
+
+func (data *Data) GetAllTasksCount() int {
+	count := 0
+	for _, taskGroup := range data.TaskGroups {
+		if taskGroup != nil && taskGroup.Tasks != nil {
+			count += len(taskGroup.Tasks)
+		}
+	}
+	return count
+}
+
+func (data *Data) UpdateShardingPlans(plans []*proto2.RPPTShardingPlan) error {
+	for _, p := range plans {
+		plan := RPPTShardingPlan{}
+		plan.Unmarshal(p)
+		db := plan.DB
+		rp := plan.RP
+		idxes := plan.Idxes
+		rpi, err := data.RetentionPolicy(db, rp)
+		if err != nil {
+			return err
+		}
+		for mst, shardingIdxes := range idxes {
+			msti, ok := rpi.Measurements[mst]
+			if !ok {
+				return ErrMeasurementNotFound
+			}
+			if msti.MarkDeleted {
+				return ErrMeasurementIsBeingDelete
+			}
+			msti.ShardingPlan = shardingIdxes
+		}
+	}
+	return nil
+}
+
 // MarshalTime converts t to nanoseconds since epoch. A zero time returns 0.
 func MarshalTime(t time.Time) int64 {
 	if t.IsZero() {
@@ -4421,6 +4856,46 @@ func ValidShardKey(shardKeys []string) error {
 		return ErrInvalidShardKey
 	}
 	return nil
+}
+
+func RewriteIndexList(stmt *influxql.CreateMeasurementStatement) {
+	indexTypes := make([]string, 0)
+	indexList := make([][]string, 0)
+	indexParams := make([][]influxql.Expr, 0)
+	existIndexMap := make(map[string]int)
+
+	for i, typ := range stmt.IndexType {
+		list := stmt.IndexList[i]
+		if item, exists := existIndexMap[typ]; exists {
+			indexList[item] = append(indexList[item], list...)
+			existIndexMap[typ] = item
+		} else {
+			existIndexMap[typ] = i
+			indexTypes = append(indexTypes, typ)
+			indexList = append(indexList, stmt.IndexList[i])
+			indexParams = append(indexParams, stmt.IndexParams[i])
+		}
+	}
+	indexList = DeduplicationOfIndexList(indexList)
+	stmt.IndexType = indexTypes
+	stmt.IndexList = indexList
+	stmt.IndexParams = indexParams
+}
+
+func DeduplicationOfIndexList(indexList [][]string) [][]string {
+	for i, index := range indexList {
+		seen := make(map[string]struct{})
+		cols := make([]string, 0)
+		for _, item := range index {
+			if _, ok := seen[item]; ok {
+				continue
+			}
+			cols = append(cols, item)
+			seen[item] = struct{}{}
+		}
+		indexList[i] = cols
+	}
+	return indexList
 }
 
 func GetInt64Duration(duration *time.Duration) *int64 {
@@ -4466,4 +4941,236 @@ func GenNodeMap(data, metaInfo *Data) (map[uint64]uint64, error) {
 	}
 
 	return nodeMap, nil
+}
+
+type ResourceInfo struct {
+	Name       string
+	Properties map[string]string
+}
+
+func (ri *ResourceInfo) Marshal() *proto2.ResourceInfo {
+	pb := &proto2.ResourceInfo{
+		Name:       proto.String(ri.Name),
+		Properties: make(map[string]string, len(ri.Properties)),
+	}
+	for k, v := range ri.Properties {
+		pb.Properties[k] = v
+	}
+	return pb
+}
+
+func (ri *ResourceInfo) Unmarshal(pb *proto2.ResourceInfo) {
+	ri.Name = pb.GetName()
+	ri.Properties = make(map[string]string, len(pb.GetProperties()))
+	for k, v := range pb.GetProperties() {
+		ri.Properties[k] = v
+	}
+}
+
+type TaskGroup struct {
+	Tasks map[string]*TaskInfo
+}
+
+type TaskInfo struct {
+	ID         uint64
+	Name       string
+	Type       string
+	Properties map[string]string
+}
+
+func (ti *TaskInfo) Marshal() *proto2.TaskInfo {
+	pb := &proto2.TaskInfo{
+		ID:         proto.Uint64(ti.ID),
+		Name:       proto.String(ti.Name),
+		Type:       proto.String(ti.Type),
+		Properties: make(map[string]string, len(ti.Properties)),
+	}
+	for k, v := range ti.Properties {
+		pb.Properties[k] = v
+	}
+	return pb
+}
+
+func (ti *TaskInfo) Unmarshal(pb *proto2.TaskInfo) {
+	ti.ID = pb.GetID()
+	ti.Name = pb.GetName()
+	ti.Type = pb.GetType()
+	ti.Properties = make(map[string]string, len(pb.GetProperties()))
+	for k, v := range pb.GetProperties() {
+		ti.Properties[k] = v
+	}
+}
+
+type RPPTShardingPlan struct {
+	DB    string
+	RP    string
+	Idxes map[string][]int
+}
+
+// Marshal serializes RPPTShardingPlan to a protobuf representation.
+func (p *RPPTShardingPlan) Marshal() *proto2.RPPTShardingPlan {
+	pb := &proto2.RPPTShardingPlan{
+		Db: proto.String(p.DB),
+		Rp: proto.String(p.RP),
+	}
+
+	if len(p.Idxes) > 0 {
+		pb.Idxes = make(map[string]*proto2.Idxes, len(p.Idxes))
+		for key, values := range p.Idxes {
+			idxes := &proto2.Idxes{
+				Idx: make([]int32, len(values)),
+			}
+			for i, v := range values {
+				idxes.Idx[i] = int32(v)
+			}
+			pb.Idxes[key] = idxes
+		}
+	}
+
+	return pb
+}
+
+// Unmarshal deserializes from a protobuf representation.
+func (p *RPPTShardingPlan) Unmarshal(pb *proto2.RPPTShardingPlan) {
+	p.DB = pb.GetDb()
+	p.RP = pb.GetRp()
+
+	if len(pb.GetIdxes()) > 0 {
+		p.Idxes = make(map[string][]int, len(pb.GetIdxes()))
+		for key, idxes := range pb.GetIdxes() {
+			values := make([]int, len(idxes.GetIdx()))
+			for i, v := range idxes.GetIdx() {
+				values[i] = int(v)
+			}
+			p.Idxes[key] = values
+		}
+	} else {
+		p.Idxes = make(map[string][]int)
+	}
+}
+
+func (p *RPPTShardingPlan) MarshalBinaryPlans() ([]byte, error) {
+	pb := p.Marshal()
+	return proto.Marshal(pb)
+}
+
+func (p *RPPTShardingPlan) UnmarshalBinaryPlans(buf []byte) error {
+	pb := &proto2.RPPTShardingPlan{}
+	if err := proto.Unmarshal(buf, pb); err != nil {
+		return err
+	}
+	p.Unmarshal(pb)
+	return nil
+}
+
+func (data *Data) CheckAndWriteSmartStmtSchema(stmt *smart_query.SmartSelectStatement) error {
+	db, ok := data.Databases[stmt.Source.Database]
+	if !ok {
+		return errno.NewError(errno.DatabaseNotFound, stmt.Source.Database)
+	}
+	if stmt.Source.RetentionPolicy == "" {
+		stmt.Source.RetentionPolicy = DefaultRetentionPolicyName
+	}
+	rp, ok := db.RetentionPolicies[stmt.Source.RetentionPolicy]
+	if !ok {
+		return errno.NewError(errno.RpNotFound, stmt.Source.RetentionPolicy)
+	}
+	mstInfo, ok := rp.Measurements[stmt.Source.NameVersion]
+	if !ok {
+		return errno.NewError(errno.ErrMeasurementNotFound, stmt.Source.Name)
+	}
+	for i, field := range stmt.Fields {
+		if field.Call == "count" && field.Val == record.TimeField {
+			stmt.Fields[i].Typ = influxql.Integer
+			continue
+		}
+		typ, ok := mstInfo.Schema.GetTyp(field.Val)
+		if !ok {
+			return errno.NewError(errno.FieldNotFound, field.Val)
+		}
+		stmt.Fields[i].Typ = record.ToInfluxqlTypes(int(typ))
+	}
+	for i, field := range stmt.Condition.Cond {
+		typ, ok := mstInfo.Schema.GetTyp(field.Key)
+		if !ok {
+			return errno.NewError(errno.FieldNotFound, field.Key)
+		}
+		stmt.Condition.Cond[i].Typ = record.ToInfluxqlTypes(int(typ))
+	}
+	return nil
+}
+
+func (data *Data) GetSmartStmtETraits(stmt *smart_query.SmartSelectStatement, startTime time.Time, endTime time.Time) ([]smart_query.SmartRemoteQuery, error) {
+	sgs, err := data.ShardGroupsByTimeRange(stmt.Source.Database, stmt.Source.RetentionPolicy, startTime, endTime)
+	if err != nil {
+		return nil, err
+	}
+	ptView := data.DBPtView(stmt.Source.Database)
+	if ptView == nil {
+		return nil, errno.NewError(errno.PtNotFound)
+	}
+	rqs := make([]smart_query.SmartRemoteQuery, 0)
+	nodeToPtMap := make(map[uint64][]uint64, 0)
+	for _, sg := range sgs {
+		if len(stmt.Condition.Cond) == 1 {
+			if data.isPreciseRouting(stmt, sg.ID) {
+				shardKeyAndValue := bufferpool.GetPoints()
+				shardKeyAndValue = shardKeyAndValue[:0]
+				shardKeyAndValue = append(shardKeyAndValue, stmt.Condition.Cond[0].Key...)
+				shardKeyAndValue = append(shardKeyAndValue, "="...)
+				shardKeyAndValue = append(shardKeyAndValue, stmt.Condition.Cond[0].Val...)
+				s := sg.Shards[HashID(shardKeyAndValue)%uint64(len(sg.Shards))]
+				ptId := s.Owners[0]
+				nodeID := ptView[ptId].Owner.NodeID
+				shardId := s.ID
+				nodeToPtMap[nodeID<<32|uint64(ptId)] = []uint64{shardId}
+				bufferpool.Put(shardKeyAndValue)
+				if stmt.HintType == int64(hybridqp.FullSeriesQuery) {
+					tags := make(influx.PointTags, len(stmt.Condition.Cond))
+					for i, tag := range stmt.Condition.Cond {
+						tags[i].Key = tag.Key
+						tags[i].Value = tag.Val
+					}
+					sort.Sort(&tags)
+					r := influx.Row{Name: stmt.Source.NameVersion, Tags: tags}
+					r.UnmarshalIndexKeys(nil)
+					stmt.HintSeriesKey = r.IndexKey
+				}
+				continue
+			}
+		}
+		for _, s := range sg.Shards {
+			ptId := s.Owners[0]
+			nodeID := ptView[ptId].Owner.NodeID
+			shardId := s.ID
+			key := nodeID<<32 | uint64(ptId)
+			_, ok := nodeToPtMap[key]
+			if ok {
+				nodeToPtMap[key] = append(nodeToPtMap[key], shardId)
+			} else {
+				nodeToPtMap[key] = []uint64{shardId}
+			}
+		}
+	}
+	for key, rq := range nodeToPtMap {
+		nodeId := key >> 32
+		ptId := key & math.MaxInt32
+		rqs = append(rqs, smart_query.SmartRemoteQuery{
+			NodeID:   nodeId,
+			PtID:     uint32(ptId),
+			ShardIDs: rq,
+		})
+	}
+	return rqs, nil
+}
+
+func (data *Data) isPreciseRouting(stmt *smart_query.SmartSelectStatement, shardID uint64) bool {
+	if stmt.HintType == int64(hybridqp.FullSeriesQuery) {
+		return true
+	}
+	shardKeyInfo := data.Databases[stmt.Source.Database].GetShardKey(shardID)
+	if shardKeyInfo != nil && shardKeyInfo.ShardKey[0] == stmt.Condition.Cond[0].Key {
+		return true
+	}
+	return false
 }

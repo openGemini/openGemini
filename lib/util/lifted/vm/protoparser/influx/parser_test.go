@@ -9,11 +9,12 @@ Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 */
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -243,6 +244,30 @@ func TestUnmarshalRows_With_TagArray(t *testing.T) {
 	rows, tagsPool, fieldsPool = f(rows[:0], req, tagsPool[:0], fieldsPool[:0], 0)
 }
 
+func BenchmarkName(b *testing.B) {
+	tags := PointTags{}
+	for i := 0; i < 10; i++ {
+		tags = append(tags, Tag{Key: fmt.Sprintf("tag%v", i), Value: fmt.Sprintf("v%v", i)})
+	}
+	r := Row{Tags: tags}
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < r.Tags.Len(); j++ {
+			r.CheckDuplicateTag(j)
+		}
+	}
+}
+
+func BenchmarkName1(b *testing.B) {
+	tags := PointTags{}
+	for i := 0; i < 10; i++ {
+		tags = append(tags, Tag{Key: fmt.Sprintf("tag%v", i), Value: fmt.Sprintf("v%v", i)})
+	}
+	r := Row{Tags: tags}
+	for i := 0; i < b.N; i++ {
+		r.CheckDuplicateTags()
+	}
+}
+
 func TestUnmarshalRows_With_TagArray_Error(t *testing.T) {
 	enableTagArray := true
 	var err error
@@ -276,7 +301,7 @@ func TestUnmarshalRows_With_TagArray_Error(t *testing.T) {
 
 	req = "cpu,hostname=host_0,arch=a[x64,x86],hostName=\"service1\",usage_user=58i,usage_system=2,usage_idle=true 1622851200000000000\n"
 	rows, tagsPool, fieldsPool, err = f(rows[:0], req, tagsPool[:0], fieldsPool[:0], 0)
-	if !strings.Contains(err.Error(), "parse fail, point without fields is unsupported") {
+	if !strings.Contains(err.Error(), "unable to parse points, point without fields is unsupported") {
 		t.Fatalf("unexpected result for unmarshalRows %q", req)
 	}
 

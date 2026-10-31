@@ -15,12 +15,13 @@
 package textindex
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"math/bits"
 	"sort"
 	"strings"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
@@ -33,6 +34,7 @@ import (
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/encoding/lz4"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"go.uber.org/zap"
@@ -61,6 +63,7 @@ func GetPartHeaders(path, file, field string, obsOpts *obs.ObsOptions) ([]*PartH
 	}
 	dr := fileops.NewFileReader(fd, nil)
 	defer dr.Close()
+	dr.SetCacheEn(false)
 	fileSize, err := dr.Size()
 	if err != nil {
 		return nil, err
@@ -111,6 +114,7 @@ func (r *BlockHeadReader) ReadBlockHeaders(partHeader *PartHeader) ([]BlockHeade
 	}
 	dr := fileops.NewFileReader(fd, nil)
 	defer dr.Close()
+	dr.SetCacheEn(false)
 	blockBuf := make([]byte, 0, partHeader.BlockHeaderSize)
 	blockBuf, err = dr.ReadAt(int64(partHeader.BlockHeaderOffset), partHeader.BlockHeaderSize, &blockBuf, fileops.IO_PRIORITY_HIGH)
 	if err != nil {
@@ -276,6 +280,42 @@ func (c *BitsetContainer) Serialize() []uint32 {
 	return rows
 }
 
+func (c *BitsetContainer) GetCounts(rowIds []uint32, counts []int64) {
+	i, rowIdLen := 0, len(rowIds)
+	if rowIdLen == 0 {
+		return
+	}
+	size := uint32(math.MaxUint32)
+	if rowIdLen > 1 {
+		size = rowIds[1]
+	}
+	base := uint32(c.ContainerKey) << 16
+	for k := 0; k < len(c.Bitset); k++ {
+		bitset := c.Bitset[k]
+		start := base
+		for bitset != 0 {
+			for i < rowIdLen-1 && start >= rowIds[i+1] {
+				i++
+				if i < rowIdLen-1 {
+					size = rowIds[i+1] - rowIds[i]
+				} else {
+					size = math.MaxUint32
+				}
+			}
+			interval := 64 - (start - base)
+			if size < interval {
+				interval = size
+			}
+			bit := bitset & ((uint64(1) << interval) - 1)
+			counts[i] += int64(bits.OnesCount64(bit))
+			bitset >>= interval
+			start += interval
+			size -= interval
+		}
+		base += 64
+	}
+}
+
 type ArrayContainer struct {
 	ContainerHead
 	Rows []uint16
@@ -400,6 +440,18 @@ func (c *ArrayContainer) Serialize() []uint32 {
 		rows[i] = base + uint32(c.Rows[i])
 	}
 	return rows
+}
+
+func (c *ArrayContainer) GetCounts(rowIds []uint32, counts []int64) {
+	k, rowIdLen := 0, len(rowIds)
+	base := uint32(c.ContainerKey) << 16
+	for i := 0; i < len(c.Rows); i++ {
+		id := base + uint32(c.Rows[i])
+		for k < rowIdLen-1 && id >= rowIds[k+1] {
+			k++
+		}
+		counts[k]++
+	}
 }
 
 type RunPair struct {
@@ -557,11 +609,46 @@ func (c *RunContainer) Serialize() []uint32 {
 	return rows
 }
 
+func (c *RunContainer) GetCounts(rowIds []uint32, counts []int64) {
+	i, rowIdLen := 0, len(rowIds)
+	if rowIdLen == 0 {
+		return
+	}
+	size := uint32(math.MaxUint32)
+	if rowIdLen > 1 {
+		size = rowIds[1]
+	}
+	base := uint32(c.ContainerKey) << 16
+	for k := 0; k < len(c.Runs); k++ {
+		length, value := c.Runs[k].Len, base+uint32(c.Runs[k].Value)
+		start := value
+		for length > 0 {
+			for i < rowIdLen-1 && value >= rowIds[i+1] {
+				i++
+				if i < rowIdLen-1 {
+					size = rowIds[i+1] - rowIds[i]
+				} else {
+					size = math.MaxUint32
+				}
+			}
+			interval := uint32(c.Runs[k].Len) - (value - start)
+			if size < interval {
+				interval = size
+			}
+			counts[i] += int64(interval)
+			length -= uint16(interval)
+			value += interval
+			size -= interval
+		}
+	}
+}
+
 type Container interface {
 	Key() uint16
 	And(a Container) Container
 	Unmarshal(src []byte) ([]byte, error)
 	Serialize() []uint32
+	GetCounts(rowIds []uint32, counts []int64)
 }
 
 type GroupContainers []Container
@@ -590,6 +677,22 @@ func (cntrs GroupContainers) TransToPostingContainer(header *PartHeader) *Postin
 		}
 	}
 	return postingCntr
+}
+
+func (cntrs GroupContainers) TransToCounts(header *PartHeader) []int64 {
+	segRangeLen := 1
+	for i := 1; i < len(header.SegmentRange); i++ {
+		if header.SegmentRange[i] <= header.SegmentRange[i-1] {
+			break
+		} else {
+			segRangeLen = i + 1
+		}
+	}
+	counts := make([]int64, segRangeLen)
+	for i := 0; i < len(cntrs); i++ {
+		cntrs[i].GetCounts(header.SegmentRange[:segRangeLen], counts)
+	}
+	return counts
 }
 
 func IntersectContainers(cntrs0, cntrs1 []Container) []Container {
@@ -789,7 +892,9 @@ func (r *BlockDataReader) Open() error {
 	if err != nil {
 		return err
 	}
-	r.bdh = fileops.NewFileReader(fd, nil)
+	fr := fileops.NewFileReader(fd, nil)
+	fr.SetCacheEn(false)
+	r.bdh = fr
 	return nil
 }
 
@@ -827,14 +932,14 @@ func NewPostingContainer(size int) *PostingContainer {
 
 type PartContainer struct {
 	bhs        []BlockHeader
-	blockCache map[uint64]*BlockReadData    // map-key is BlockHeader.KeysOffset
-	containers map[string]*PostingContainer // token -> PostingList
+	blockCache map[uint64]*BlockReadData // map-key is BlockHeader.KeysOffset
+	counts     map[string][]int64        // token -> CountList
 }
 
 func NewPartContainers() *PartContainer {
 	return &PartContainer{
 		blockCache: make(map[uint64]*BlockReadData),
-		containers: make(map[string]*PostingContainer, 0),
+		counts:     make(map[string][]int64, 0),
 	}
 }
 
@@ -953,7 +1058,14 @@ func (r *TextIndexFilterReader) FilterByPostinglist(partContainer *PartContainer
 	return containers, nil
 }
 
-func (r *TextIndexFilterReader) IsExist(segId uint32, queryStr string) (bool, error) {
+func (r *TextIndexFilterReader) UnMatchphaseHandle(header *PartHeader, counts []int64, segOff int) bool {
+	if segOff >= len(counts)-1 {
+		return true
+	}
+	return !(counts[segOff] == int64(header.SegmentRange[segOff+1]-header.SegmentRange[segOff]))
+}
+
+func (r *TextIndexFilterReader) IsExist(segId uint32, queryStr string, elem *rpn.SKRPNElement) (bool, error) {
 	// get the partContainer
 	var err error
 	partId := int(segId) / segmentCntInPart
@@ -966,25 +1078,25 @@ func (r *TextIndexFilterReader) IsExist(segId uint32, queryStr string) (bool, er
 		}
 	}
 	// filter by cache
-	postingContainer, ok := partContainer.containers[queryStr]
+	counts, ok := partContainer.counts[queryStr]
 	if ok {
-		return segOff < len(postingContainer.SegCntrs) && len(postingContainer.SegCntrs[segOff].RowIds) != 0, nil
+		return r.getRowCount(counts, segOff) > 0, nil
 	}
 	// tokinzer and read posting list from disk
 	queryStrs := r.tokenizer.Split(queryStr)
 	if len(queryStrs) == 0 {
-		return false, nil
+		return elem.Op == influxql.UNMATCHPHRASE, nil
 	}
 	var res GroupContainers
 	for i := 0; i < len(queryStrs); i++ {
 		// filter by partHeaders
-		if !r.partHeaders[partId].Contain(queryStrs[i]) {
-			return false, nil
+		if partId < len(r.partHeaders) && !r.partHeaders[partId].Contain(queryStrs[i]) {
+			return elem.Op == influxql.UNMATCHPHRASE, nil
 		}
 		// filter by postinglist
 		containers, err := r.FilterByPostinglist(partContainer, queryStrs[i])
 		if err != nil || len(containers) == 0 {
-			return false, err
+			return elem.Op == influxql.UNMATCHPHRASE, nil
 		}
 		if len(res) == 0 {
 			res = containers
@@ -992,12 +1104,36 @@ func (r *TextIndexFilterReader) IsExist(segId uint32, queryStr string) (bool, er
 			res = IntersectContainers(res, containers)
 		}
 		if len(res) == 0 {
-			return false, nil
+			return elem.Op == influxql.UNMATCHPHRASE, nil
 		}
 	}
-	postingContainer = res.TransToPostingContainer(r.partHeaders[partId])
-	partContainer.containers[queryStr] = postingContainer
-	return len(postingContainer.SegCntrs[segOff].RowIds) != 0, nil
+	counts = res.TransToCounts(r.partHeaders[partId])
+	partContainer.counts[queryStr] = counts
+	if elem.Op == influxql.UNMATCHPHRASE {
+		return r.UnMatchphaseHandle(r.partHeaders[partId], counts, segOff), nil
+	} else {
+		return r.getRowCount(counts, segOff) > 0, nil
+	}
+
+}
+
+func (r *TextIndexFilterReader) GetRowCount(segId uint32, queryStr string) (int64, error) {
+	partContainer, ok := r.postingCache[int(segId)/segmentCntInPart]
+	if !ok {
+		return 0, errors.New("part container not found")
+	}
+	counts, ok := partContainer.counts[queryStr]
+	if !ok {
+		return 0, errors.New("counts not found in part container")
+	}
+	return r.getRowCount(counts, int(segId)%segmentCntInPart), nil
+}
+
+func (r *TextIndexFilterReader) getRowCount(counts []int64, segOff int) int64 {
+	if segOff >= len(counts) || counts[segOff] == 0 {
+		return 0
+	}
+	return counts[segOff]
 }
 
 type TextIndexFilterReaders struct {
@@ -1038,12 +1174,28 @@ func (r *TextIndexFilterReaders) StartSpan(span *tracing.Span) {
 }
 
 func (r *TextIndexFilterReaders) IsExist(blockId int64, elem *rpn.SKRPNElement) (bool, error) {
+	reader, queryStr, err := r.initReaderAndQuery(blockId, elem)
+	if err != nil {
+		return false, err
+	}
+	return reader.IsExist(uint32(blockId), queryStr, elem)
+}
+
+func (r *TextIndexFilterReaders) GetRowCount(blockId int64, elem *rpn.SKRPNElement) (int64, error) {
+	reader, queryStr, err := r.initReaderAndQuery(blockId, elem)
+	if err != nil {
+		return 0, err
+	}
+	return reader.GetRowCount(uint32(blockId), queryStr)
+}
+
+func (r *TextIndexFilterReaders) initReaderAndQuery(blockId int64, elem *rpn.SKRPNElement) (*TextIndexFilterReader, string, error) {
 	if elem == nil {
-		return false, fmt.Errorf("the input SKRPNElement is nil")
+		return nil, "", fmt.Errorf("the input SKRPNElement is nil")
 	}
 	idx := r.schemas.FieldIndex(elem.Key)
 	if idx < 0 {
-		return false, fmt.Errorf("can not find the index for the filed:%s", elem.Key)
+		return nil, "", fmt.Errorf("can not find the index for the filed:%s", elem.Key)
 	}
 
 	var err error
@@ -1052,17 +1204,17 @@ func (r *TextIndexFilterReaders) IsExist(blockId int64, elem *rpn.SKRPNElement) 
 		opt := r.ir.FindIndexOption(uint32(index.Text), elem.Key)
 		reader, err = NewTextIndexFilterReader(r.path, r.file, elem.Key, r.obsOpts, opt)
 		if err != nil {
-			return false, err
+			return nil, "", err
 		}
 		r.readers[idx] = reader
 	}
 
 	queryStr, ok := elem.Value.(string)
 	if !ok {
-		return false, fmt.Errorf("compare value of text index should be string")
+		return nil, "", fmt.Errorf("compare value of text index should be string")
 	}
 
-	return reader.IsExist(uint32(blockId), queryStr)
+	return r.readers[idx], queryStr, nil
 }
 
 type TsspFile interface {
@@ -1095,6 +1247,10 @@ func NewTextIndexReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybr
 // MayBeInFragment determines whether a fragment in a file meets the query condition.
 func (r *TextIndexReader) MayBeInFragment(fragId uint32) (bool, error) {
 	return r.sk.IsExist(int64(fragId), r.readers)
+}
+
+func (r *TextIndexReader) GetFragmentRowCount(fragId uint32) (int64, error) {
+	return r.sk.GetRowCount(int64(fragId), r.readers)
 }
 
 func (r *TextIndexReader) StartSpan(span *tracing.Span) {

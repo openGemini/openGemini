@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/agiledragon/gomonkey/v2"
-	"github.com/golang/snappy"
+	"github.com/klauspost/compress/snappy"
 	"github.com/openGemini/openGemini/coordinator"
 	config2 "github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -35,7 +35,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd/config"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/lib/validation"
 	"github.com/prometheus/common/model"
@@ -129,7 +128,7 @@ func TestHandlerPromWriteTimeSeries(t *testing.T) {
 			},
 		}
 		// Create write request
-		data, err := proto.Marshal(&prompb.WriteRequest{Timeseries: timeseries})
+		data, err := (&prompb.WriteRequest{Timeseries: timeseries}).XXX_Marshal(nil, true)
 		require.NoError(t, err)
 		compressed := snappy.Encode(nil, data)
 
@@ -160,7 +159,7 @@ func TestHandlerPromWriteTimeSeries(t *testing.T) {
 			},
 		}
 		// Create write request
-		data, err := proto.Marshal(&prompb.WriteRequest{Timeseries: timeseries})
+		data, err := (&prompb.WriteRequest{Timeseries: timeseries}).XXX_Marshal(nil, true)
 		require.NoError(t, err)
 		compressed := snappy.Encode(nil, data)
 
@@ -174,7 +173,7 @@ func TestHandlerPromWriteTimeSeries(t *testing.T) {
 	t.Run("input empty", func(t *testing.T) {
 		timeseries := []prompb.TimeSeries{}
 		// Create write request
-		data, err := proto.Marshal(&prompb.WriteRequest{Timeseries: timeseries})
+		data, err := (&prompb.WriteRequest{Timeseries: timeseries}).XXX_Marshal(nil, true)
 		require.NoError(t, err)
 		compressed := snappy.Encode(nil, data)
 
@@ -200,7 +199,7 @@ func TestHandlerPromWriteMetadata(t *testing.T) {
 			{MetricFamilyName: "go_goroutines_and_routines_and_routines", Type: prompb.MetricMetadata_COUNTER, Help: "Number of goroutines.", Unit: ""}, // long metric name
 		}
 		// Create write request
-		data, err := proto.Marshal(&prompb.WriteRequest{Metadata: metadata})
+		data, err := (&prompb.WriteRequest{Metadata: metadata}).XXX_Marshal(nil, true)
 		require.NoError(t, err)
 		compressed := snappy.Encode(nil, data)
 
@@ -217,7 +216,7 @@ func TestHandlerPromWriteMetadata(t *testing.T) {
 			{MetricFamilyName: "go_goroutines_and_routines_and_routines", Type: prompb.MetricMetadata_COUNTER, Help: "Number_goroutines", Unit: ""}, // long metric name
 		}
 		// Create write request
-		data, err := proto.Marshal(&prompb.WriteRequest{Metadata: metadata})
+		data, err := (&prompb.WriteRequest{Metadata: metadata}).XXX_Marshal(nil, true)
 		require.NoError(t, err)
 		compressed := snappy.Encode(nil, data)
 
@@ -231,7 +230,7 @@ func TestHandlerPromWriteMetadata(t *testing.T) {
 	t.Run("input empty", func(t *testing.T) {
 		metadata := []prompb.MetricMetadata{}
 		// Create write request
-		data, err := proto.Marshal(&prompb.WriteRequest{Metadata: metadata})
+		data, err := (&prompb.WriteRequest{Metadata: metadata}).XXX_Marshal(nil, true)
 		require.NoError(t, err)
 		compressed := snappy.Encode(nil, data)
 
@@ -295,7 +294,7 @@ func TestHandlerPromRead(t *testing.T) {
 			},
 		}
 		// Create read request
-		data, err := proto.Marshal(&prompb.ReadRequest{Queries: queries})
+		data, err := (&prompb.ReadRequest{Queries: queries}).XXX_Marshal(nil, true)
 		require.NoError(t, err)
 		compressed := snappy.Encode(nil, data)
 
@@ -309,7 +308,7 @@ func TestHandlerPromRead(t *testing.T) {
 	t.Run("input empty", func(t *testing.T) {
 		queries := []*prompb.Query{}
 		// Create read request
-		data, err := proto.Marshal(&prompb.ReadRequest{Queries: queries})
+		data, err := (&prompb.ReadRequest{Queries: queries}).XXX_Marshal(nil, true)
 		require.NoError(t, err)
 		compressed := snappy.Encode(nil, data)
 

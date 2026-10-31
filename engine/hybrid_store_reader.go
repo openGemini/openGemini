@@ -501,9 +501,13 @@ func (r *HybridStoreReader) runLimit(rec *record.Record, ch executor.Chunk, rowC
 }
 
 func (r *HybridStoreReader) tranRecToChunk(rec *record.Record) (executor.Chunk, error) {
+	mstName, err := getMstName(r.schema)
+	if err != nil {
+		return nil, err
+	}
 	chunk := r.chunkPool.GetChunk()
 	// for multi-table query, each plan is created for each table at the coordinator. Only one table exists in the reader.
-	chunk.SetName(influx.GetOriginMstName(r.schema.GetSourcesNames()[0]))
+	chunk.SetName(mstName)
 	times := rec.Times()
 	for i, column := range chunk.Columns() {
 		if column.DataType() == influxql.Unknown {

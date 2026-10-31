@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -44,6 +45,8 @@ type WalFile struct {
 	writer      *bufio.Writer
 	writtenSize int64
 	syncedSize  int64
+
+	closed atomic.Bool
 }
 
 func NewWalFile(name string, lock *string) *WalFile {
@@ -57,6 +60,10 @@ func NewWalFile(name string, lock *string) *WalFile {
 
 func (wf *WalFile) setWalObsOptions(option *obs.ObsOptions) {
 
+}
+
+func (wf *WalFile) IsClosed() bool {
+	return wf.closed.Load()
 }
 
 func (wf *WalFile) OpenReadonly() error {
@@ -160,6 +167,7 @@ func (wf *WalFile) Flush() error {
 }
 
 func (wf *WalFile) Close() error {
+	wf.closed.Store(true)
 	util.MustClose(wf.fdRead)
 	util.MustClose(wf.fdWrite)
 	return nil

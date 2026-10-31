@@ -111,3 +111,29 @@ func (m *StringHashMap) peek(id uint64) []byte {
 	length := m.startOffsets.get(id+1) - startOffset
 	return m.keys.peek(startOffset, length)
 }
+
+// clear resets the StringHashMap to its initial empty state while preserving capacity
+// and load factor for memory reuse. This allows efficient reuse of allocated
+// memory instead of creating new StringHashMaps repeatedly.
+//
+// Fields that are reset:
+// - hashmap
+// - keys: all key data cleared
+// - startOffsets: all start offsets reset
+func (m *StringHashMap) Clear() {
+	// Call the base hashmap clear method to reset common fields
+	m.hashmap.clear()
+
+	// Clear StringHashMap specific fields
+	int64PageNum := m.hashCapacity >> int64PageShift
+
+	// Clear start offsets (keep only the first offset at 0)
+	for i := 0; i < int(int64PageNum); i++ {
+		copy(m.startOffsets[i], zeroInt64Page)
+	}
+
+	// Clear keys data
+	for i := 0; i < len(m.keys); i++ {
+		copy(m.keys[i], zeroBytePage)
+	}
+}

@@ -56,11 +56,11 @@ func (rs RuleSet) AddAll(ruleSet RuleSet) {
 }
 
 type RuleInstruction struct {
-	ruleCatatory OptRuleCatagory
+	ruleCatatory OptRuleCategory
 	ruleSet      RuleSet
 }
 
-func NewRuleInstruction(ruleCatatory OptRuleCatagory) *RuleInstruction {
+func NewRuleInstruction(ruleCatatory OptRuleCategory) *RuleInstruction {
 	return &RuleInstruction{
 		ruleCatatory: ruleCatatory,
 		ruleSet:      nil,
@@ -79,7 +79,7 @@ func (g *RuleInstruction) Execute(planner HeuPlanner) {
 	planner.ExecuteInstruction(g)
 }
 
-func (g *RuleInstruction) RuleCatagory() OptRuleCatagory {
+func (g *RuleInstruction) RuleCategory() OptRuleCategory {
 	return g.ruleCatatory
 }
 
@@ -637,7 +637,7 @@ func (p *HeuPlannerImpl) executeRuleInstruction(instruction *RuleInstruction) {
 		instruction.ruleSet = make(RuleSet)
 		for _, rule := range p.mapDescToRule {
 			// all rule
-			if rule.Catagory() == instruction.RuleCatagory() {
+			if rule.Category() == instruction.RuleCategory() {
 				instruction.ruleSet.Add(rule)
 			}
 		}
@@ -946,7 +946,7 @@ func IsSubTreeEqual(node hybridqp.QueryNode, comparedNode hybridqp.QueryNode) bo
 }
 
 func initSqlHeuInstruction() {
-	rules := []OptRuleCatagory{
+	rules := []OptRuleCategory{
 		RULE_SUBQUERY,
 		RULE_PUSHDOWN_LIMIT,
 		RULE_PUSHDOWN_AGG,
@@ -986,7 +986,7 @@ func initSqlHeuInstruction() {
 			if instruction.ruleSet == nil {
 				instruction.ruleSet = make(RuleSet)
 			}
-			if rule.Catagory() == instruction.RuleCatagory() {
+			if rule.Category() == instruction.RuleCategory() {
 				instruction.ruleSet.Add(rule)
 				break
 			}
@@ -995,7 +995,7 @@ func initSqlHeuInstruction() {
 }
 
 func initStoreHeuInstruction() {
-	rules := []OptRuleCatagory{
+	rules := []OptRuleCategory{
 		RULE_SPREAD_AGG,
 	}
 	for _, r := range rules {
@@ -1014,7 +1014,7 @@ func initStoreHeuInstruction() {
 			if instruction.ruleSet == nil {
 				instruction.ruleSet = make(RuleSet)
 			}
-			if rule.Catagory() == instruction.RuleCatagory() {
+			if rule.Category() == instruction.RuleCategory() {
 				instruction.ruleSet.Add(rule)
 				break
 			}

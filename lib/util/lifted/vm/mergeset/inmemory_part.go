@@ -1,10 +1,12 @@
 package mergeset
 
 import (
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"fmt"
+
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 )
 
@@ -86,7 +88,7 @@ func (mp *inmemoryPart) NewPart() *part {
 	size := mp.size()
 	p, err := newPart(&ph, "", size, mp.metaindexData.NewReader(), &mp.indexData, &mp.itemsData, &mp.lensData)
 	if err != nil {
-		logger.Panicf("BUG: cannot create a part from inmemoryPart: %s", err)
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: cannot create a part from inmemoryPart: %s", err))
 	}
 	return p
 }

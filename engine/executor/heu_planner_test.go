@@ -35,7 +35,7 @@ func NewMockAToBRule(operand executor.OptRuleOperand, description string) *MockA
 	return mr
 }
 
-func (r *MockAToBRule) Catagory() executor.OptRuleCatagory {
+func (r *MockAToBRule) Category() executor.OptRuleCategory {
 	return executor.RULE_TEST
 }
 
@@ -54,7 +54,7 @@ func (r *MockAToBRule) Equals(rhs executor.OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -80,7 +80,7 @@ func NewMockMergeBRule(operand executor.OptRuleOperand, description string) *Moc
 	return mr
 }
 
-func (r *MockMergeBRule) Catagory() executor.OptRuleCatagory {
+func (r *MockMergeBRule) Category() executor.OptRuleCategory {
 	return executor.RULE_TEST
 }
 
@@ -99,7 +99,7 @@ func (r *MockMergeBRule) Equals(rhs executor.OptRule) bool {
 		return true
 	}
 
-	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+	if r.Category() == rr.Category() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
 		return true
 	}
 
@@ -411,7 +411,7 @@ func TestFindBestExpWithMockAToBRule(t *testing.T) {
 	atoBRule := NewMockAToBRule(builder.Operand(), "")
 
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_TEST)
+	pb.AddRuleCategory(executor.RULE_TEST)
 
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(atoBRule)
@@ -459,7 +459,7 @@ func TestFindBestExpWithMockMergeBRule(t *testing.T) {
 	mergeBRule := NewMockMergeBRule(builder.Operand(), "")
 
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_TEST)
+	pb.AddRuleCategory(executor.RULE_TEST)
 
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(mergeBRule)
@@ -513,7 +513,7 @@ func TestFindBestExpWithManyRules(t *testing.T) {
 	mergeBRule := NewMockMergeBRule(builder.Operand(), "")
 
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_TEST)
+	pb.AddRuleCategory(executor.RULE_TEST)
 
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(mergeBRule)

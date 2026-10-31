@@ -22,19 +22,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/indirect/go.opentelemetry.io/collector/pdata/pcommon"
+	"github.com/indirect/go.opentelemetry.io/collector/pdata/plog"
+	"github.com/indirect/go.opentelemetry.io/collector/pdata/plog/plogotlp"
+	"github.com/indirect/go.opentelemetry.io/collector/pdata/pmetric"
+	"github.com/indirect/go.opentelemetry.io/collector/pdata/pmetric/pmetricotlp"
+	"github.com/indirect/go.opentelemetry.io/collector/pdata/ptrace"
+	"github.com/indirect/go.opentelemetry.io/collector/pdata/ptrace/ptraceotlp"
+	semconv "github.com/indirect/go.opentelemetry.io/collector/semconv/v1.16.0"
 	"github.com/influxdata/influxdb-observability/common"
 	"github.com/openGemini/openGemini/lib/opentelemetry"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/collector/pdata/pcommon"
-	"go.opentelemetry.io/collector/pdata/plog"
-	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
-	"go.opentelemetry.io/collector/pdata/pmetric"
-	"go.opentelemetry.io/collector/pdata/pmetric/pmetricotlp"
-	"go.opentelemetry.io/collector/pdata/ptrace"
-	"go.opentelemetry.io/collector/pdata/ptrace/ptraceotlp"
-	semconv "go.opentelemetry.io/collector/semconv/v1.16.0"
 )
 
 type writer struct{}

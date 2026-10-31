@@ -125,12 +125,12 @@ var setRequestMsgTests = []struct {
 		name:           "RegisterQueryIDOffset",
 		handlerFn:      func() meta.RPCHandler { return &meta.RegisterQueryIDOffset{} },
 		validRequest:   &message.RegisterQueryIDOffsetRequest{},
-		invalidRequest: &message.Sql2MetaHeartbeatRequest{},
+		invalidRequest: &message.CQ2MetaHeartbeatRequest{},
 	},
 	{
-		name:           "Sql2MetaHeartbeat",
-		handlerFn:      func() meta.RPCHandler { return &meta.Sql2MetaHeartbeat{} },
-		validRequest:   &message.Sql2MetaHeartbeatRequest{},
+		name:           "CQ2MetaHeartbeat",
+		handlerFn:      func() meta.RPCHandler { return &meta.CQ2MetaHeartbeat{} },
+		validRequest:   &message.CQ2MetaHeartbeatRequest{},
 		invalidRequest: &message.GetContinuousQueryLeaseRequest{},
 	},
 	{
@@ -155,6 +155,12 @@ var setRequestMsgTests = []struct {
 		name:           "ShowCluster",
 		handlerFn:      func() meta.RPCHandler { return &meta.ShowCluster{} },
 		validRequest:   &message.ShowClusterRequest{},
+		invalidRequest: &message.PingRequest{},
+	},
+	{
+		name:           "GetShardingPlan",
+		handlerFn:      func() meta.RPCHandler { return &meta.GetShardingPlan{} },
+		validRequest:   &message.GetShardingPlanRequest{},
 		invalidRequest: &message.PingRequest{},
 	},
 }

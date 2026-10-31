@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # It is recommended to run in a linux environment.
-
+WORKSPACE=$(cd $(dirname $0)/../../; pwd)
 set -e
 
 has_proto=$(grep "github.com/gogo/protobuf/proto" go.mod | grep -v "indirect" | wc -l)
@@ -12,20 +12,30 @@ if [[ $has_proto -ne 0 ]]; then
     exit 1
 fi
 
+shopt -s expand_aliases
+
+if command -v protoc_v32 >/dev/null 2>&1; then
+    alias protoc='protoc_v32' # compatibility with historical code
+elif command -v protoc >/dev/null 2>&1; then
+    alias protoc='protoc'
+else
+    echo "protoc/protoc_v32 not found. Please install protoc ${PROTOC_VERSION:-32.0}."
+    exit 127
+fi
+
+protoc --version
 go generate -x ./...
 
-sed -i "s#github.com/gogo/protobuf/proto#github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto#g" lib/util/lifted/influx/influxql/internal/internal.pb.go
-sed -i "s#github.com/gogo/protobuf/proto#github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto#g" lib/util/lifted/influx/meta/proto/meta.pb.go
-sed -i "s#github.com/gogo/protobuf/proto#github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto#g" lib/util/lifted/protobuf/proto/test_proto/test.pb.go
+protoc --go_out=lib/msgservice/data/ lib/msgservice/data/data.proto
+cd $WORKSPACE/lib/util/lifted/influx/query/proto/ || exit 1;
+protoc --go_out=. internal.proto
+cd $WORKSPACE/lib/util/lifted/influx/meta/proto/ || exit 1;
+protoc --go_out=. meta.proto
+cd $WORKSPACE || exit 1;
 
-protoc --gogo_out=lib/msgservice/data/ lib/msgservice/data/data.proto
-
-sed -i "7d" lib/msgservice/data/data.pb.go
-sed -i "8d" lib/msgservice/data/data.pb.go
-sed -i "8G"  lib/msgservice/data/data.pb.go
-
-sed -i "9a\    proto \"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto\""  lib/msgservice/data/data.pb.go
-sed -i "10a\    proto1 \"github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto\""  lib/msgservice/data/data.pb.go
+sed -i "s#package data#package msgservice_data#" lib/msgservice/data/data.pb.go
+sed -i "s#proto \"../proto\"#\"github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto\"#"  lib/msgservice/data/data.pb.go
+sed -i "s#proto \"github.com/gogo/protobuf/proto\"#proto \"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto\"#" lib/util/lifted/influx/influxql/internal/internal.pb.go
 
 checkGrammarDepth() {
   processed=$1
@@ -62,6 +72,10 @@ genGrammar() {
   # Inject exit-on any error shortcut
   sed -i "s/^${prefix}stack:/\0\n\tif ${prefix}lex.HasError() {\n\t\tgoto ret1\n\t\}/" $output
   sed -i "s/^type ${prefix}Lexer interface {/\0\n\tHasError() bool/" $output
+  # yyParser reuse
+  sed -i "/^type ${prefix}Parser interface {$/,/^}$/ s/^}$/\tRelease()\n&/" $output
+  sed -i "s/return &${prefix}ParserImpl{}/return ${prefix}ParserPool.Get()/g" $output
+  sed -i "/^func ${prefix}Parse(${prefix}lex ${prefix}Lexer) int {$/,/^}$/ s/^\treturn ${prefix}NewParser().Parse(${prefix}lex)$/\tp := ${prefix}NewParser()\n\tdefer p.Release()\n\treturn p.Parse(${prefix}lex)/" $output
   # Validate there is no conflicts in a grammar
   grep "0 shift/reduce, 0 reduce/reduce conflicts reported" y.output || (echo "ERROR: "; grep "conflicts reported" y.output; exit 1)
   rm -f y.output

@@ -192,4 +192,30 @@ func TestHttpServer(t *testing.T) {
 	svc := newHttpServer(conf, &tls.Config{})
 	err = svc.open(&httpHandler{})
 	require.Error(t, err)
+	require.NoError(t, svc.close())
+}
+
+func TestHttpServerOpenClose(t *testing.T) {
+	conf := config.NewMeta()
+	conf.HTTPBindAddress = "127.0.0.1:0"
+	svc := newHttpServer(conf, &tls.Config{})
+	require.NoError(t, svc.open(&httpHandler{}))
+	t.Cleanup(func() { _ = svc.close() })
+	require.NotNil(t, svc.ln)
+	addr := svc.ln.Addr().String()
+	require.NoError(t, svc.close())
+	ln, err := net.Listen("tcp", addr)
+	require.NoError(t, err)
+	require.NoError(t, ln.Close())
+}
+
+func TestOpenHttpServerBindFailure(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	conf := config.NewMeta()
+	conf.HTTPBindAddress = ln.Addr().String()
+	svc := &Service{config: conf, store: &Store{}}
+	require.Error(t, svc.openHttpServer())
+	require.NoError(t, svc.httpServer.close())
 }

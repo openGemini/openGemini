@@ -15,14 +15,19 @@
 package httpd
 
 import (
+	"bytes"
+	stdGzip "compress/gzip"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/influxdata/influxdb/models"
+	"github.com/klauspost/compress/gzip"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/prometheus/promql"
 	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
 	"github.com/prometheus/prometheus/promql/parser"
+	"github.com/stretchr/testify/require"
 )
 
 type mockWriter struct {
@@ -32,9 +37,8 @@ func (w *mockWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-func BenchmarkJsonFormatter(b *testing.B) {
-	f := &jsonFormatter{}
-	res := []*query.Result{}
+func buildResponseData() Response {
+	var res []*query.Result
 	for i := 0; i < 100; i++ {
 		res = append(res, &query.Result{Series: []*models.Row{{
 			Name:    "db2",
@@ -54,43 +58,61 @@ func BenchmarkJsonFormatter(b *testing.B) {
 				},
 			}}})
 	}
-	resp := Response{Results: res}
+	return Response{Results: res}
+}
+
+func BenchmarkGzipWriter(b *testing.B) {
+	data := buildResponseData()
+	buf, err := json.Marshal(data)
+	require.NoError(b, err)
+
+	b.Run("std-gzip", func(b *testing.B) {
+		bw := bytes.NewBuffer(nil)
+		gz := stdGzip.NewWriter(bw)
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			bw.Reset()
+			gz.Reset(bw)
+			_, _ = gz.Write(buf)
+			_ = gz.Close()
+		}
+	})
+
+	b.Run("klauspost-gzip", func(b *testing.B) {
+		bw := bytes.NewBuffer(nil)
+		gz := gzip.NewWriter(bw)
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			bw.Reset()
+			gz.Reset(bw)
+			_, _ = gz.Write(buf)
+			_ = gz.Close()
+		}
+	})
+}
+
+func BenchmarkJsonFormatter(b *testing.B) {
+	f := &jsonFormatter{}
+	resp := buildResponseData()
+
 	writer := &mockWriter{}
 	b.ReportAllocs()
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		f.WriteResponse(writer, resp)
+		_ = f.WriteResponse(writer, resp)
 	}
 }
 
 func BenchmarkSonicJsonFormatter(b *testing.B) {
 	f := &sonicJsonFormatter{}
-	res := []*query.Result{}
-	for i := 0; i < 100; i++ {
-		res = append(res, &query.Result{Series: []*models.Row{{
-			Name:    "db2",
-			Columns: []string{"name", "query"},
-			Values: [][]interface{}{
-				{"db2_query_name", "db2_query"},
-				{"db2_query2_name", "db2_query2"},
-			},
-		},
-			{
-				Name:    "db4",
-				Columns: []string{"name", "query"},
-				Values: [][]interface{}{
-					{"db4_query_name", "db4_query"},
-					{"db4_query2_name", "db4_query2"},
-					{"db4_query3_name", "db4_query3"},
-				},
-			}}})
-	}
-	resp := Response{Results: res}
+	resp := buildResponseData()
 	writer := &mockWriter{}
 	b.ReportAllocs()
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		f.WriteResponse(writer, resp)
+		_ = f.WriteResponse(writer, resp)
 	}
 }
 

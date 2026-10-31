@@ -20,13 +20,32 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type mockTsspFile struct {
+	immutable.TSSPFile
+	path string
+}
+
+func (m mockTsspFile) Path() string {
+	return m.path
+}
+
+func (m mockTsspFile) FileNameMerge() uint16 {
+	return 0
+}
+
+func (m mockTsspFile) FileSize() int64 {
+	return 0
+}
 
 func TestLastMergeTime(t *testing.T) {
 	lmt := immutable.NewLastMergeTime()
@@ -212,4 +231,24 @@ func TestBuildMergeContext(t *testing.T) {
 	files := &immutable.TSSPFiles{}
 	arr := immutable.BuildMergeContext("mst", files, false, immutable.NewLastMergeTime())
 	require.Equal(t, 0, len(arr))
+
+	files.Append(&mockTsspFile{})
+	conf := config.GetStoreConfig()
+	conf.Merge.UnorderedMergeSelf = true
+	defaultSize := conf.Merge.MaxUnorderedFileSize
+	conf.Merge.MaxUnorderedFileSize = 0
+	defer func() {
+		conf.Merge.MaxUnorderedFileSize = defaultSize
+	}()
+	arr = immutable.BuildMergeContext("mst", files, false, immutable.NewLastMergeTime())
+	require.Equal(t, 0, len(arr))
+}
+
+func TestMeasurementInProcess_MatchPrefix(t *testing.T) {
+	convey.Convey("test match prefix", t, func() {
+		mst := immutable.NewMeasurementInProcess()
+		dir := "/tsdb/xxxxin13/data/db/dbpt/rp/shardid"
+		mst.Add(dir)
+		convey.So(mst.MatchPrefix(dir), convey.ShouldBeTrue)
+	})
 }

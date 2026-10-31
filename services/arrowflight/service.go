@@ -42,6 +42,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -49,6 +50,7 @@ const (
 	WriteAuthSuccess      string = "ArrowFlightWriteSuccessfully"
 	WriteAuthTokenSalty   int64  = 1e9
 	WriteAuthTokenTimeOut        = 24 * time.Hour
+	GrpcTemplate                 = "grpc://%s"
 )
 
 type RecordWriter interface {
@@ -272,6 +274,7 @@ type flightServer struct {
 	queryHandler *httpd.Handler
 	mem          memory.Allocator
 	logger       *logger.Logger
+	location     string
 	flight.BaseFlightServer
 }
 
@@ -279,6 +282,7 @@ func NewFlightServer(logger *logger.Logger, c *config.Config) *flightServer {
 	service := &flightServer{
 		mem:              memory.NewGoAllocator(),
 		logger:           logger,
+		location:         c.FlightAddress,
 		BaseFlightServer: flight.BaseFlightServer{},
 	}
 	return service
@@ -382,4 +386,85 @@ func (s *flightServer) getUserFromContext(context context.Context) (string, meta
 		return username, nil, status.Error(codes.PermissionDenied, fmt.Sprintf("%s not authorized", username))
 	}
 	return username, user, nil
+}
+
+func (s *flightServer) GetFlightInfo(ctx context.Context, flightDescriptor *flight.FlightDescriptor) (*flight.FlightInfo, error) {
+	user, request, err := s.validAndGetParams(ctx, flightDescriptor)
+	if err != nil {
+		return nil, err
+	}
+
+	schema, err := s.queryHandler.GetSchema(request, user, ctx)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if schema == nil {
+		schema = &arrow.Schema{}
+	}
+
+	ticket, err := json2.Marshal(request)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	endpoint := &flight.FlightEndpoint{
+		Ticket:   &flight.Ticket{Ticket: ticket},
+		Location: []*flight.Location{{Uri: fmt.Sprintf(GrpcTemplate, s.location)}},
+	}
+	return &flight.FlightInfo{
+		FlightDescriptor: flightDescriptor,
+		Schema:           flight.SerializeSchema(schema, s.mem),
+		Endpoint:         []*flight.FlightEndpoint{endpoint},
+	}, nil
+}
+
+func (s *flightServer) GetSchema(ctx context.Context, flightDescriptor *flight.FlightDescriptor) (*flight.SchemaResult, error) {
+	user, request, err := s.validAndGetParams(ctx, flightDescriptor)
+	if err != nil {
+		return nil, err
+	}
+	schema, err := s.queryHandler.GetSchema(request, user, ctx)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if schema == nil {
+		schema = &arrow.Schema{}
+	}
+	return &flight.SchemaResult{
+		Schema: flight.SerializeSchema(schema, s.mem),
+	}, nil
+}
+
+func (s *flightServer) validAndGetParams(ctx context.Context, flightDescriptor *flight.FlightDescriptor) (user meta.User, request httpd.FlightRequest, err error) {
+	if s.queryHandler == nil {
+		return user, request, status.Error(codes.FailedPrecondition, "service unavailable")
+	}
+	_, user, err = s.getUserFromContext(ctx)
+	if err != nil {
+		return user, request, err
+	}
+
+	request, err = s.getRequestParams(ctx)
+	if err != nil {
+		return user, request, err
+	}
+
+	cmd := flightDescriptor.GetCmd()
+	request.Q = string(cmd)
+
+	return user, request, err
+}
+
+func (s *flightServer) getRequestParams(ctx context.Context) (httpd.FlightRequest, error) {
+	var request httpd.FlightRequest
+	paramsValue := metadata.ValueFromIncomingContext(ctx, "query_params")
+	if len(paramsValue) == 0 {
+		return request, nil
+	}
+
+	err := json2.Unmarshal([]byte(paramsValue[0]), &request)
+	if err != nil {
+		return httpd.FlightRequest{}, status.Error(codes.InvalidArgument, err.Error())
+	}
+	return request, nil
 }

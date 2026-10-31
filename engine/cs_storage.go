@@ -22,42 +22,37 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/engine/immutable"
-	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/failpoint"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
-	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
 
 type ColumnStoreImpl struct {
-	db, rp              string
-	mu                  sync.RWMutex
-	wg                  sync.WaitGroup
-	snapshotContainer   []*mutable.MemTable
-	snapshotInUsed      []bool
-	lastSnapShotTime    uint64
-	flushManager        map[string]mutable.FlushManager // mst -> flush detached or attached
-	accumulateMetaIndex *sync.Map                       //mst -> immutable.AccumulateMetaIndex, record metaIndex for detached store
-	strategy            shardMoveStrategy               // config to determine which strategy
+	db, rp            string
+	mu                sync.RWMutex
+	wg                sync.WaitGroup
+	snapshotContainer []*mutable.MemTable
+	snapshotInUsed    []bool
+	lastSnapShotTime  uint64
+	strategy          shardMoveStrategy // config to determine which strategy
 }
 
 func newColumnStoreImpl(db, rp string, snapshotTblNum int) *ColumnStoreImpl {
 	return &ColumnStoreImpl{
-		db:                  db,
-		rp:                  rp,
-		lastSnapShotTime:    fasttime.UnixTimestamp(),
-		snapshotContainer:   make([]*mutable.MemTable, snapshotTblNum),
-		snapshotInUsed:      make([]bool, snapshotTblNum),
-		flushManager:        make(map[string]mutable.FlushManager),
-		accumulateMetaIndex: &sync.Map{},
-		strategy:            newShardMoveStrategy(config.GetStoreConfig().ShardMoveLayoutSwitchEnabled),
+		db:                db,
+		rp:                rp,
+		lastSnapShotTime:  fasttime.UnixTimestamp(),
+		snapshotContainer: make([]*mutable.MemTable, snapshotTblNum),
+		snapshotInUsed:    make([]bool, snapshotTblNum),
+		strategy:          newShardMoveStrategy(config.GetStoreConfig().ShardMoveLayoutSwitchEnabled),
 	}
 }
 
@@ -81,8 +76,7 @@ func (storage *ColumnStoreImpl) writeSnapshot(s *shard) {
 		s.snapshotLock.Unlock()
 		panic("error: there is not free snapShotTbl")
 	}
-	//set flushManager and accumulateMetaIndex
-	s.activeTbl.MTable.SetFlushManagerInfo(storage.flushManager, storage.accumulateMetaIndex)
+
 	storage.snapshotContainer[idx] = s.activeTbl
 	storage.snapshotInUsed[idx] = true
 	curSize := storage.snapshotContainer[idx].GetMemSize()
@@ -107,20 +101,21 @@ func (storage *ColumnStoreImpl) writeSnapshot(s *shard) {
 		defer storage.wg.Done()
 		storage.flush(s, idx, curSize, walFiles, start)
 	}()
+
+	// record last flush ok time
+	atomic.StoreUint64(&s.lastFlushTime, fasttime.UnixTimestamp())
 }
 
 func (storage *ColumnStoreImpl) flush(s *shard, idx int, curSize int64, walFiles *WalFiles, start time.Time) {
 	s.commitSnapshot(storage.snapshotContainer[idx])
-	nodeMutableLimit.freeResource(curSize)
+	resourceallocator.NodeMutableLimit.FreeResource(curSize)
 	err := removeWalFiles(walFiles)
 	if err != nil {
 		panic("wal remove files failed: " + err.Error())
 	}
 
 	//This fail point is used in scenarios where "s.snapshotTbl" is not recycled
-	failpoint.Inject("snapshot-table-reset-delay", func() {
-		time.Sleep(2 * time.Second)
-	})
+	failpoint.Sleep("snapshot-table-reset-delay", func() {})
 
 	s.snapshotLock.Lock()
 	storage.snapshotContainer[idx].UnRef()
@@ -134,10 +129,6 @@ func (storage *ColumnStoreImpl) flush(s *shard, idx int, curSize int64, walFiles
 
 func (storage *ColumnStoreImpl) waitSnapshot() {
 	storage.wg.Wait()
-}
-
-func (storage *ColumnStoreImpl) SetAccumulateMetaIndex(name string, aMetaIndex *immutable.AccumulateMetaIndex) {
-	storage.accumulateMetaIndex.Store(name, aMetaIndex)
 }
 
 func (storage *ColumnStoreImpl) shouldSnapshot(s *shard) bool {
@@ -213,39 +204,26 @@ func (storage *ColumnStoreImpl) WriteCols(s *shard, cols *record.Record, mst str
 		return nil
 	}
 	atomic.StoreUint64(&s.lastWriteTime, fasttime.UnixTimestamp())
-	mw := getMstWriteRecordCtx(nodeMutableLimit.timeOut, s.engineType)
+	mw := getMstWriteRecordCtx(resourceallocator.NodeMutableLimit.TimeOut, s.engineType)
 	defer putMstWriteRecordCtx(mw)
 
 	// alloc token
 	start := time.Now()
 	curSize := int64(cols.Size())
-	err := nodeMutableLimit.allocResource(curSize, mw.timer)
+	err := resourceallocator.NodeMutableLimit.AllocResource(curSize, mw.timer)
 	atomic.AddInt64(&statistics.PerfStat.WriteGetTokenDurationNs, time.Since(start).Nanoseconds())
 	if err != nil {
 		s.log.Info("Alloc resource failed, need retry", zap.Int64("current mem size", curSize))
 		return err
 	}
 
-	var indexErr error
-	var indexWg sync.WaitGroup
-	indexWg.Add(1)
-
-	//write index
-	go func() {
-		writeIndexStart := time.Now()
-		indexErr = storage.WriteIndexForCols(s, cols, mst)
-		indexWg.Done()
-		atomic.AddInt64(&statistics.PerfStat.WriteIndexDurationNs, time.Since(writeIndexStart).Nanoseconds())
-	}()
-
 	// write data and wal
 	err = s.writeCols(cols, binaryCols, mst)
-	indexWg.Wait()
 	if err != nil {
 		return err
 	}
 	s.activeTbl.AddMemSize(curSize)
-	return indexErr
+	return nil
 }
 
 func (storage *ColumnStoreImpl) writeCols(s *shard, cols *record.Record, mst string) error {
@@ -256,54 +234,8 @@ func (storage *ColumnStoreImpl) writeCols(s *shard, cols *record.Record, mst str
 	return s.activeTbl.MTable.WriteCols(s.activeTbl, cols, mst)
 }
 
-func (storage *ColumnStoreImpl) WriteIndex(idx *tsi.IndexBuilder, mw *mstWriteCtx) func() error {
-	if !config.GetStoreConfig().ColumnStore.MergesetEnabled {
-		return func() error {
-			return nil
-		}
-	}
-
-	var indexErr error
-	var indexWg sync.WaitGroup
-	indexWg.Add(1)
-
-	go func() {
-		defer indexWg.Done()
-		writeIndexStart := time.Now()
-		indexErr = idx.CreateIndexIfNotExists(mw.getMstMap(), false)
-		atomic.AddInt64(&statistics.PerfStat.WriteIndexDurationNs, time.Since(writeIndexStart).Nanoseconds())
-	}()
-
-	return func() error {
-		indexWg.Wait()
-		return indexErr
-	}
-}
-
-func (storage *ColumnStoreImpl) WriteIndexForCols(s *shard, cols *record.Record, mstName string) error {
-	if s.closed.Closed() {
-		return errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
-	}
-	if config.IsLogKeeper() || !config.GetStoreConfig().ColumnStore.MergesetEnabled {
-		return nil
-	}
-
-	ident := colstore.NewMeasurementIdent(storage.db, storage.rp)
-	ident.SetSafeName(mstName)
-
-	mst, ok := colstore.MstManagerIns().GetByIdent(ident)
-	if !ok {
-		s.log.Info("mstInfo is nil", zap.String("mst name", ident.String()))
-		return errors.New("measurement info is not found")
-	}
-
-	msInfo := mst.MeasurementInfo()
-
-	msInfo.SchemaLock.RLock()
-	tagIndex := findTagIndex(cols.Schemas(), msInfo.Schema)
-	msInfo.SchemaLock.RUnlock()
-	// write index
-	return s.indexBuilder.CreateIndexIfNotExistsByCol(cols, tagIndex, ident.Name)
+func (storage *ColumnStoreImpl) WriteIndex(idx *tsi.IndexBuilder, mw *mstWriteCtx) error {
+	return nil
 }
 
 func (storage *ColumnStoreImpl) getAllFiles(s *shard, mstName string) ([]immutable.TSSPFile, []string, error) {
