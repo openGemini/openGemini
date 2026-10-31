@@ -17,6 +17,7 @@ package meta
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -127,18 +128,6 @@ func (s *Service) openStore() error {
 	return nil
 }
 
-// Start the HTTP server in a separate goroutine.
-func (s *Service) startMetaHTTPServer() {
-	go func() {
-		err := s.openHttpServer()
-		if err != nil {
-			s.Logger.Error("failed to start the HTTP server",
-				zap.String("addr", s.config.HTTPBindAddress),
-				zap.Error(err))
-		}
-	}()
-}
-
 // StartReportServer starts report server.
 func (s *Service) StartReportServer() {
 	ticker := time.NewTimer(1 * time.Hour)
@@ -182,7 +171,9 @@ func (s *Service) Open() error {
 	}
 	meta.SetRepDisPolicy(s.config.RepDisPolicy)
 	s.initStore(ar)
-	s.startMetaHTTPServer()
+	if err := s.openHttpServer(); err != nil {
+		return err
+	}
 	err = s.startMetaServer()
 	if err != nil {
 		return err
@@ -204,7 +195,7 @@ func (s *Service) GetClusterManager() *ClusterManager {
 	return s.clusterManager
 }
 
-// openHttpServer Used only for debugging.
+// openHttpServer binds the listener before starting the HTTP server.
 func (s *Service) openHttpServer() error {
 	s.httpServer = newHttpServer(s.config, s.tlsConfig)
 	handler := newHttpHandler(s.config, s.store)
@@ -299,7 +290,12 @@ func (s *httpServer) open(handler *httpHandler) error {
 		return err
 	}
 
-	return http.Serve(s.ln, handler)
+	go func() {
+		if err := http.Serve(s.ln, handler); err != nil && !errors.Is(err, net.ErrClosed) {
+			s.logger.Error("HTTP server stopped", zap.Error(err))
+		}
+	}()
+	return nil
 }
 
 func (s *httpServer) httpsListener() (net.Listener, error) {
@@ -324,6 +320,9 @@ func (s *httpServer) httpListener() (net.Listener, error) {
 }
 
 func (s *httpServer) close() error {
+	if s.ln == nil {
+		return nil
+	}
 	return s.ln.Close()
 }
 
