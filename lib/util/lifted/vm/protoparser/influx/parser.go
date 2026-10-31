@@ -1485,7 +1485,7 @@ func unmarshalRows(dst []Row, s string, tagsPool []Tag, fieldsPool []Field, enab
 	var err error
 	noEscapeChars := strings.IndexByte(s, '\\') < 0
 	for len(s) > 0 {
-		n := strings.IndexByte(s, '\n')
+		n := nextRowEnd(s, noEscapeChars)
 		if n < 0 {
 			// The last line.
 			return unmarshalRow(dst, s, tagsPool, fieldsPool, noEscapeChars, enableTagArray)
@@ -1759,6 +1759,54 @@ func nextUnquotedChar(s string, ch byte, noEscapeChars, hasQuotedFields bool) in
 			return -1
 		}
 		s = s[n+1:]
+	}
+}
+
+// nextRowEnd returns the index of the '\n' that ends the first row in s,
+// or -1 if the first row extends to the end of s.
+//
+// As in the InfluxDB line protocol, a '\n' inside a quoted string field value
+// is part of the value and does not end the row. Quotes are only meaningful in
+// the fields section, i.e. after the first unescaped space of the row, because
+// '"' is an ordinary character in measurement names and tags.
+func nextRowEnd(s string, noEscapeChars bool) int {
+	n := strings.IndexByte(s, '\n')
+	if n < 0 || strings.IndexByte(s[:n], '"') < 0 || s[0] == '#' {
+		// Fast path: no quoted field value can span the '\n'.
+		return n
+	}
+	start := checkWhitespace(s[:n], 0)
+	sp := nextUnescapedChar(s[start:n], ' ', noEscapeChars, false, false)
+	if sp < 0 {
+		// The row has no fields section.
+		return n
+	}
+	i := start + sp + 1
+	if noEscapeChars && strings.Count(s[i:n], `"`)&1 == 0 {
+		// Fast path: all the quoted values before the '\n' are closed.
+		return n
+	}
+	for {
+		// Look for a quoted value that opens before the current '\n'.
+		q := nextUnescapedChar(s[i:n], '"', noEscapeChars, false, false)
+		if q < 0 {
+			return n
+		}
+		i += q + 1
+		q = nextUnescapedChar(s[i:], '"', noEscapeChars, false, false)
+		if q < 0 {
+			// The quoted value is not closed, so it runs to the end of s.
+			return -1
+		}
+		i += q + 1
+		if i > n {
+			// The quoted value contains the '\n'. Move on to the next one.
+			m := strings.IndexByte(s[i:], '\n')
+			if m < 0 {
+				return -1
+			}
+			n = i + m
+		}
 	}
 }
 
