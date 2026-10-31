@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,7 +37,6 @@ func ReadLinesBlockExt(r io.Reader, dstBuf, tailBuf []byte, maxLineLen, blockSiz
 
 	dstBuf = append(dstBuf[:0], tailBuf...)
 	tailBuf = tailBuf[:0]
-	originLen := len(dstBuf)
 again:
 	for {
 		n, err := r.Read(dstBuf[len(dstBuf):cap(dstBuf)])
@@ -64,8 +64,8 @@ again:
 		}
 	}
 
-	// Search for the last newline in dstBuf and put the rest into tailBuf.
-	nn := bytes.LastIndexByte(dstBuf[originLen:], '\n')
+	// Search for the newline that ends the last complete row in dstBuf and put the rest into tailBuf.
+	nn := lastRowEnd(dstBuf)
 	if nn < 0 {
 		// Didn't found at least a single line.
 		if len(dstBuf) > maxLineLen {
@@ -80,11 +80,31 @@ again:
 		goto again
 	}
 	// Found at least a single line. Return it.
-	nn += originLen
 	tailBuf = append(tailBuf[:0], dstBuf[nn+1:]...)
 	dstBuf = dstBuf[:nn]
 
 	return dstBuf, tailBuf, nil
+}
+
+// lastRowEnd returns the index of the '\n' that ends the last complete row in b,
+// or -1 if b doesn't contain a complete row.
+func lastRowEnd(b []byte) int {
+	if bytes.IndexByte(b, '"') < 0 {
+		// Fast path: without quoted field values every '\n' ends a row.
+		return bytes.LastIndexByte(b, '\n')
+	}
+
+	// A '\n' may belong to a quoted string field value, so walk the rows from the start.
+	s := bytesutil.ToUnsafeString(b)
+	noEscapeChars := strings.IndexByte(s, '\\') < 0
+	end := -1
+	for {
+		n := nextRowEnd(s[end+1:], noEscapeChars)
+		if n < 0 {
+			return end
+		}
+		end += n + 1
+	}
 }
 
 func (ctx *streamContext) Read(blockSize int) bool {
