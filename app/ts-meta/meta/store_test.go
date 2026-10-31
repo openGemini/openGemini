@@ -1262,8 +1262,6 @@ func TestUpdateInvalidUser(t *testing.T) {
 func TestUpLoadCapacityStatPanic(t *testing.T) {
 	dir := t.TempDir()
 	mms, err := meta.InitStore(dir, "127.0.0.1")
-	conf := config.NewMeta()
-	_ = meta.NewService(conf, nil, nil)
 	defer func() {
 		mms.Close()
 	}()
@@ -1285,8 +1283,6 @@ func TestUpLoadCapacityStatPanic(t *testing.T) {
 func TestUpLoadCapacityStat(t *testing.T) {
 	dir := t.TempDir()
 	mms, err := meta.InitStore(dir, "127.0.0.1")
-	conf := config.NewMeta()
-	_ = meta.NewService(conf, nil, nil)
 	defer func() {
 		mms.Close()
 	}()

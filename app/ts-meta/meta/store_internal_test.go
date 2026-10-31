@@ -40,6 +40,19 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestInitStoreResetsGlobalService(t *testing.T) {
+	previous := globalService
+	defer func() { globalService = previous }()
+	globalService = &Service{store: &Store{}}
+
+	ms, err := InitStore(t.TempDir(), "127.0.0.1")
+	require.NoError(t, err)
+	defer ms.Close()
+
+	require.Same(t, ms.store, globalService.store)
+	require.Nil(t, globalService.clusterManager)
+}
+
 func TestCheckLeaderChanged(t *testing.T) {
 	dir := t.TempDir()
 	mms, err := NewMockMetaService(dir, "127.0.0.1")

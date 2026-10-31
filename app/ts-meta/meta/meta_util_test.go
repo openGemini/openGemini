@@ -117,6 +117,8 @@ func InitStore(dir string, ip string) (*MetaService, error) {
 	}
 
 	ms.store = NewStore(ms.c, ms.c.HTTPBindAddress, ms.c.RPCBindAddress, ms.c.BindAddress)
+	// Bare-store tests must not inherit another service's background managers.
+	globalService = &Service{store: ms.store}
 	log := zap.NewNop()
 	ms.store.Logger = logger2.NewLogger(errno.ModuleMeta).SetZapLogger(log)
 	ms.store.Node = metaclient.NewNode(ms.c.Dir)
