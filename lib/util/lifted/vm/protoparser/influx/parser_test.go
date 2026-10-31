@@ -124,6 +124,87 @@ func TestNextUnquotedChar(t *testing.T) {
 	f(`"foo bar\" " baz`, ' ', true, 10)
 }
 
+func TestNextRowEnd(t *testing.T) {
+	f := func(s string, nExpected int) {
+		t.Helper()
+		noEscapeChars := strings.IndexByte(s, '\\') < 0
+		n := nextRowEnd(s, noEscapeChars)
+		if n != nExpected {
+			t.Fatalf("unexpected n for nextRowEnd(%q); got %d; want %d", s, n, nExpected)
+		}
+	}
+
+	f("", -1)
+	f("cpu value=1", -1)
+	f("cpu value=1\n", 11)
+	f("cpu value=1\ncpu value=2\n", 11)
+	f("\ncpu value=1", 0)
+	f(`cpu value="a b"`+"\n", 15)
+
+	// a '\n' inside a quoted string field value doesn't end the row
+	f("cpu value=\"a\nb\"\ncpu value=2\n", 15)
+	f("cpu value=\"a\nb\" 1\ncpu value=2\n", 17)
+	f("cpu value=\"a\nb\"", -1)
+	f("cpu value=\"a\nb\",x=\"c\nd\"\ncpu value=2", 23)
+	f("cpu value=\"a\nb\",x=1,y=\"c\"\ncpu value=2", 25)
+	f("  cpu value=\"a\nb\"\n", 17)
+
+	// escaped quotes don't close the quoted string field value
+	f("cpu value=\"a\\\"\nb\"\n", 17)
+	f("cpu value=\"a\\\\\"\nb\"\n", 15)
+
+	// an unclosed quoted string field value runs to the end of the input
+	f("cpu value=\"a\ncpu value=2\n", -1)
+
+	// '"' is an ordinary character in measurement names and tags
+	f("c\"pu,host=a\"b value=1\ncpu value=\"2\"\n", 21)
+	f("cpu,host=a\"b\ncpu value=1\n", 12)
+	f("cpu,host=a\\ \"b value=1\ncpu value=\"2\"\n", 22)
+
+	// a comment line ends at the first '\n'
+	f("# cpu value=\"a\ncpu value=1\n", 14)
+}
+
+func TestUnmarshalRows_NewlineInQuotedStringField(t *testing.T) {
+	var rows []Row
+	var tagsPool []Tag
+	var fieldsPool []Field
+	var err error
+
+	req := "json,a=1 data=\"{\n\t\\\"a\\\": 1,\n\t\\\"b\\\": \\\"s\\\"\n}\",x=1i 1000000000\n" +
+		"cpu,host=a\"b value=\"x\r\ny\" 2000000000\r\n" +
+		"cpu,host=c value=1 3000000000"
+	rows, tagsPool, fieldsPool, err = unmarshalRows(rows[:0], req, tagsPool[:0], fieldsPool[:0], false)
+	require.NoError(t, err)
+	require.Len(t, rows, 3)
+
+	require.Equal(t, "json", rows[0].Name)
+	require.Len(t, rows[0].Fields, 2)
+	require.Equal(t, "data", rows[0].Fields[0].Key)
+	require.Equal(t, int32(Field_Type_String), rows[0].Fields[0].Type)
+	require.Equal(t, "{\n\t\"a\": 1,\n\t\"b\": \"s\"\n}", rows[0].Fields[0].StrValue)
+	require.Equal(t, "x", rows[0].Fields[1].Key)
+	require.Equal(t, float64(1), rows[0].Fields[1].NumValue)
+	require.Equal(t, int64(1000000000), rows[0].Timestamp)
+
+	require.Equal(t, "cpu", rows[1].Name)
+	require.Equal(t, `a"b`, rows[1].Tags[0].Value)
+	require.Equal(t, "x\r\ny", rows[1].Fields[0].StrValue)
+	require.Equal(t, int64(2000000000), rows[1].Timestamp)
+
+	require.Equal(t, "c", rows[2].Tags[0].Value)
+	require.Equal(t, float64(1), rows[2].Fields[0].NumValue)
+	require.Equal(t, int64(3000000000), rows[2].Timestamp)
+
+	// a quoted string field value that is never closed runs to the end of the input
+	req = "cpu value=\"a\ncpu value=2\n"
+	rows, _, _, err = unmarshalRows(rows[:0], req, tagsPool[:0], fieldsPool[:0], false)
+	require.EqualError(t, err, `cannot parse field value for "value": missing closing quote for quoted field value "a
+cpu value=2
+`)
+	require.Len(t, rows, 0)
+}
+
 func TestIndexOptionsMarshalUnmarshal(t *testing.T) {
 	funcMarshal := func(dst []byte, rows []Row, indexOptionPool []IndexOption) {
 		t.Helper()
