@@ -960,6 +960,10 @@ func (s *Store) GetPtWriteStatus(db, rp string) (MstPtStatus, error) {
 			}
 		case status, ok := <-statusChan:
 			if !ok {
+				// Finished workers may still have a buffered error pending.
+				if err := <-errChan; err != nil {
+					return nil, err
+				}
 				return mstPtStatus, nil
 			}
 			combineRPPTWriteStatus(mstPtStatus, status)

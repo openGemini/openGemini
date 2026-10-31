@@ -963,7 +963,6 @@ func TestGetPtWriteStatus_NetStoreError(t *testing.T) {
 }
 
 func TestGetPtWriteStatus_PartialSuccess(t *testing.T) {
-	callCount := 0
 	store, mockNetStorage := initStoreForRPPTBalanceTest()
 	// Setup cache data with database and partition views
 	n1, _ := store.cacheData.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "", "")
@@ -980,7 +979,6 @@ func TestGetPtWriteStatus_PartialSuccess(t *testing.T) {
 		}}
 
 	mockNetStorage.GetRPPTWriteStatusFn = func(node *meta.DataNode, db, rp string) (meta.PTMstWriteStatus, error) {
-		callCount++
 		if node.ID == n2 {
 			return nil, errors.New("node 2 error")
 		}
@@ -994,8 +992,7 @@ func TestGetPtWriteStatus_PartialSuccess(t *testing.T) {
 	status, err := store.GetPtWriteStatus("testdb", "testrp")
 
 	// Verify results
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "node 2 error")
+	assert.ErrorContains(t, err, "node 2 error")
 	assert.Nil(t, status)
 }
 
