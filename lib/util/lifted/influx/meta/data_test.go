@@ -4310,11 +4310,10 @@ func TestData_CreateShardGroupZone2(t *testing.T) {
 		t.Fatal("creation of retention policy failed")
 	}
 
-	testTime := time.Now()
-	endTime := testTime.Truncate(rp.IndexGroupDuration).Add(48 * time.Hour)
-	if endTime.Sub(testTime) < time.Hour*24 {
-		testTime = testTime.Add(-24 * time.Hour)
-	}
+	// Start at a fixed UTC index boundary so the timezone switch exercises the
+	// shortened transition shard regardless of the wall clock or local timezone.
+	testTime := time.Date(2025, 2, 14, 0, 0, 0, 0, time.UTC).Truncate(rp.IndexGroupDuration)
+	endTime := testTime.Add(rp.IndexGroupDuration)
 	igi := data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "UTC")
 	sgi := data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
 	rp.ShardGroups = append(rp.ShardGroups, *sgi)
@@ -4374,11 +4373,10 @@ func TestData_CreateShardGroupZone3(t *testing.T) {
 		t.Fatal("creation of retention policy failed")
 	}
 
-	testTime := time.Date(2025, 2, 14, 0, 0, 0, 0, time.Local)
-	endTime := testTime.Truncate(rp.IndexGroupDuration).Add(48 * time.Hour)
-	if endTime.Sub(testTime) > time.Hour*24 {
-		testTime = testTime.Add(24 * time.Hour)
-	}
+	// Use noon UTC on the second index day, after New York midnight, so the
+	// backwards timezone transition is independent of the local timezone.
+	testTime := time.Date(2025, 2, 14, 0, 0, 0, 0, time.UTC).Truncate(rp.IndexGroupDuration).Add(36 * time.Hour)
+	endTime := testTime.Truncate(rp.IndexGroupDuration).Add(rp.IndexGroupDuration)
 	igi := data.createIndexGroupIfNeeded(rp, testTime, config.TSSTORE, 1, "UTC")
 	sgi := data.newShardGroup(rp, testTime, config.TSSTORE, 0, igi)
 	rp.ShardGroups = append(rp.ShardGroups, *sgi)
