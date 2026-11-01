@@ -3282,6 +3282,56 @@ func TestData_ShowShardsFromMst_Disorder(t *testing.T) {
 	}
 }
 
+func TestData_ShowShardsAndShardGroupsOnDatabase(t *testing.T) {
+	newRp := func(sgIDs ...uint64) map[string]*RetentionPolicyInfo {
+		rp := &RetentionPolicyInfo{Name: "autogen"}
+		for _, id := range sgIDs {
+			rp.ShardGroups = append(rp.ShardGroups, ShardGroupInfo{ID: id, Shards: []ShardInfo{{ID: id, Owners: []uint32{0}}}})
+		}
+		return map[string]*RetentionPolicyInfo{rp.Name: rp}
+	}
+	data := &Data{
+		Databases: map[string]*DatabaseInfo{
+			"db0": {Name: "db0", RetentionPolicies: newRp(1, 2)},
+			"db1": {Name: "db1", RetentionPolicies: newRp(3)},
+		},
+		PtView: map[string]DBPtInfos{
+			"db0": {{PtId: 0, Owner: PtOwner{NodeID: 4}}},
+			"db1": {{PtId: 0, Owner: PtOwner{NodeID: 5}}},
+		},
+	}
+	data.Databases["db0"].RetentionPolicies["autogen"].ShardGroups[1].DeletedAt = time.Now()
+
+	shardIDs := func(rows models.Rows) map[string][]uint64 {
+		ids := make(map[string][]uint64)
+		for _, row := range rows {
+			ids[row.Name] = []uint64{}
+			for _, value := range row.Values {
+				ids[row.Name] = append(ids[row.Name], value[0].(uint64))
+			}
+		}
+		return ids
+	}
+	require.Equal(t, map[string][]uint64{"db0": {1}, "db1": {3}}, shardIDs(data.ShowShards("")))
+	require.Equal(t, map[string][]uint64{"db0": {1}}, shardIDs(data.ShowShards("db0")))
+	require.Equal(t, map[string][]uint64{"db1": {3}}, shardIDs(data.ShowShards("db1")))
+	require.Empty(t, data.ShowShards("db2"))
+
+	shardGroups := func(rows models.Rows) [][]interface{} {
+		require.Len(t, rows, 1)
+		values := rows[0].Values
+		sort.Slice(values, func(i, j int) bool { return values[i][0].(uint64) < values[j][0].(uint64) })
+		for i := range values {
+			values[i] = values[i][:3]
+		}
+		return values
+	}
+	require.Equal(t, [][]interface{}{{uint64(1), "db0", "autogen"}, {uint64(3), "db1", "autogen"}}, shardGroups(data.ShowShardGroups("")))
+	require.Equal(t, [][]interface{}{{uint64(1), "db0", "autogen"}}, shardGroups(data.ShowShardGroups("db0")))
+	require.Equal(t, [][]interface{}{{uint64(3), "db1", "autogen"}}, shardGroups(data.ShowShardGroups("db1")))
+	require.Empty(t, shardGroups(data.ShowShardGroups("db2")))
+}
+
 func TestGetPtInfosByDbnameForRep(t *testing.T) {
 	data := &Data{
 		TakeOverEnabled: true,

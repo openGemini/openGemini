@@ -118,6 +118,8 @@ func init() {
 		"ALTER MEASUREMENT db0",                                      //add alter measurement
 		"SHOW SHARD GROUPS",                                          //add show shard groups
 		"SHOW SHARDS",                                                //add show shards
+		"SHOW SHARD GROUPS ON db0",                                   //add show shard groups on database
+		"SHOW SHARDS ON db0",                                         //add show shards on database
 		"SHOW SERIES EXACT CARDINALITY on db0",                       //add show series cardinality
 		"SHOW MEASUREMENT EXACT CARDINALITY on db0",                  //add SHOW MEASUREMENT EXACT CARDINALITY
 		"SHOW GRANTS FOR db",                                         //add SHOW GRANTS

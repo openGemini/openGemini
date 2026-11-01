@@ -2301,13 +2301,41 @@ func (p *Parser) parseExplainStatement() (*ExplainStatement, error) {
 // parseShowShardGroupsStatement parses a string for "SHOW SHARD GROUPS" statement.
 // This function assumes the "SHOW SHARD GROUPS" tokens have already been consumed.
 func (p *Parser) parseShowShardGroupsStatement() (*ShowShardGroupsStatement, error) {
-	return &ShowShardGroupsStatement{}, nil
+	stmt := &ShowShardGroupsStatement{}
+
+	// Parse optional ON clause.
+	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == ON {
+		// Parse the database.
+		ident, err := p.ParseIdent()
+		if err != nil {
+			return nil, err
+		}
+		stmt.Database = ident
+	} else {
+		p.Unscan()
+	}
+
+	return stmt, nil
 }
 
 // parseShowShardsStatement parses a string for "SHOW SHARDS" statement.
 // This function assumes the "SHOW SHARDS" tokens have already been consumed.
 func (p *Parser) parseShowShardsStatement() (*ShowShardsStatement, error) {
-	return &ShowShardsStatement{}, nil
+	stmt := &ShowShardsStatement{}
+
+	// Parse optional ON clause.
+	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == ON {
+		// Parse the database.
+		ident, err := p.ParseIdent()
+		if err != nil {
+			return nil, err
+		}
+		stmt.Database = ident
+	} else {
+		p.Unscan()
+	}
+
+	return stmt, nil
 }
 
 // parseShowStatsStatement parses a string and returns a ShowStatsStatement.
