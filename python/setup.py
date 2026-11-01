@@ -39,6 +39,7 @@ setup(
     license="Apache-2.0",
     include_package_data=True,
     install_requires=requirements,
+    python_requires=">=3.10",
     entry_points={
         "console_scripts": [
             "ts-udf = ts_udf.server.handler:main",
@@ -46,8 +47,6 @@ setup(
     },
     classifiers=[
         "Development Status :: 3 - Alpha",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
     ],
 )
