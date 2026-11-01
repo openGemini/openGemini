@@ -47,6 +47,50 @@ func TestUnmarshalWithColumns(t *testing.T) {
 	require.Equal(t, int(other.columnCount), len(other.colMeta))
 }
 
+// The time column of SELECT count(time) is sorted together with the other columns
+func TestUnmarshalWithColumns_CountTime(t *testing.T) {
+	cm := buildChunkMeta()
+	ctx := GetChunkMetaCodecCtx()
+	defer ctx.Release()
+	SetChunkMetaCompressMode(ChunkMetaCompressSelf)
+	defer SetChunkMetaCompressMode(ChunkMetaCompressNone)
+	selfBuf, err := MarshalChunkMeta(ctx, cm, nil)
+	require.NoError(t, err)
+	trailer := &Trailer{}
+	trailer.ChunkMetaHeader = ctx.GetHeader()
+	ctx.SetTrailer(trailer)
+
+	tests := []struct {
+		columns  []string
+		expected []string
+	}{
+		// SELECT count(time) FROM mst WHERE col_0009 > 0
+		{[]string{"col_0009", "time", "time"}, []string{"col_0009", "time"}},
+		// SELECT count(time) FROM mst WHERE col_0009 > 0 AND x_0011 > 0
+		{[]string{"col_0009", "time", "x_0011", "time"}, []string{"col_0009", "x_0011", "time"}},
+	}
+
+	assertColumns := func(other *ChunkMeta, expected []string) {
+		require.Equal(t, len(expected), int(other.columnCount))
+		require.Equal(t, len(expected), len(other.colMeta))
+		for i := range expected {
+			require.Equal(t, expected[i], other.colMeta[i].name)
+		}
+	}
+
+	for _, tt := range tests {
+		other := &ChunkMeta{}
+		_, err = other.UnmarshalWithColumns(cm.marshal(nil), tt.columns)
+		require.NoError(t, err)
+		assertColumns(other, tt.expected)
+
+		other = &ChunkMeta{}
+		_, err = UnmarshalChunkMetaWithColumns(ctx, other, tt.columns, selfBuf)
+		require.NoError(t, err)
+		assertColumns(other, tt.expected)
+	}
+}
+
 func TestUnmarshalWithColumns_error(t *testing.T) {
 	var err error
 	cm := buildChunkMeta()

@@ -684,11 +684,9 @@ func (t *MemTable) getSortedRecSafe(msName string, id uint64, tr util.TimeRange,
 
 func (t *MemTable) values(msName string, id uint64, tr util.TimeRange, schema record.Schemas, ascending bool) *record.Record {
 	// column of sid need sort and dedupe
-	rec := t.getSortedRecSafe(msName, id, tr, schema, ascending)
-	if rec != nil {
-		sort.Sort(rec)
-	}
-	return rec
+	// the columns of the record must stay in the order of schema, because callers locate them by schema index.
+	// schema may contain a time column in front of other columns, e.g. select count(time) from mst where a > 0 and z > 0
+	return t.getSortedRecSafe(msName, id, tr, schema, ascending)
 }
 
 func UpdateMstRowCount(msRowCount *util.SyncMap[string, *int64], mstName string, rowCount int64) {
