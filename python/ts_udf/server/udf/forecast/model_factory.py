@@ -23,6 +23,7 @@ import torch
 from transformers import AutoModelForCausalLM
 
 from ts_udf.server.server import get_config
+from ts_udf.server.udf.forecast.sundial import generate_sundial, restore_sundial_buffers
 from ts_udf.server.udf.forecast.lib.CS_LSTMs.interface import model_load, udf_model_infer
 
 MODEL_SUFFIX = ".ckpt"
@@ -82,16 +83,22 @@ class LTSMModel(Model):
 
     def infer(self, data, params):
         if self._model is None:
-            self._model = AutoModelForCausalLM.from_pretrained(self.path, trust_remote_code=True)
-        batch_size, lookback_length = 1, params["window_size"]
+            model = AutoModelForCausalLM.from_pretrained(self.path, trust_remote_code=True).eval()
+            if model.config.model_type == "sundial":
+                restore_sundial_buffers(model)
+            self._model = model
+        lookback_length = params["window_size"]
         forecast_length = params["horizon"]
         num_samples = 10
         if "samples_num" in params:
             num_samples = params["samples_num"]
         lookback = torch.tensor(data["value"][:lookback_length]).unsqueeze(0).float()
-        output = self._model.generate(lookback, max_new_tokens=forecast_length, num_samples=num_samples) # generate num_samples probable predictions
+        if self._model.config.model_type == "sundial":
+            output = generate_sundial(self._model, lookback, forecast_length, num_samples)
+        else:
+            output = self._model.generate(lookback, max_new_tokens=forecast_length, num_samples=num_samples)
         out = output[0].mean(dim=0)
-        result = pd.DataFrame(out.numpy(), columns=["value"])
+        result = pd.DataFrame(out.cpu().numpy(), columns=["value"])
         return result
 
 
