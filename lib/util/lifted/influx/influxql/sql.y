@@ -3528,16 +3528,16 @@ COLUMN_LISTS:
             } else if fType == "field" {
                 fieldType := strings.ToLower($2[i].fieldType)
                 fieldName := $2[i].fieldName
-                if fieldType == "int64" {
+                if fieldType == "int64" || fieldType == "integer" {
                     stmt.Fields[fieldName] = influx.Field_Type_Int
-                } else if fieldType == "float64"{
+                } else if fieldType == "float64" || fieldType == "float" {
                     stmt.Fields[fieldName] = influx.Field_Type_Float
                 } else if fieldType == "string"{
                     stmt.Fields[fieldName] = influx.Field_Type_String
-                } else if fieldType == "bool"{
+                } else if fieldType == "bool" || fieldType == "boolean" {
                     stmt.Fields[fieldName] = influx.Field_Type_Boolean
                 } else {
-                    yylex.Error("expect FLOAT64, INT64, BOOL, STRING for column data type")
+                    yylex.Error("expect FLOAT64 (FLOAT), INT64 (INTEGER), BOOL (BOOLEAN), STRING for column data type")
                     return 1 // syntax error
                 }
             }
