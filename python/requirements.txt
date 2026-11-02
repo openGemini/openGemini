@@ -3,7 +3,7 @@ toml==0.10.2
 networkx==3.2.1
 numpy==1.26.4
 pandas==2.2.3
-pytorch-lightning==1.7.7
+pytorch-lightning==2.6.1
 scikit-learn==1.6.1
 scipy==1.13.1
 sympy==1.14.0
