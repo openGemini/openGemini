@@ -79,8 +79,9 @@ def model_save(trainer, path):
 
 
 def model_load(path):
-    model = MyATF.load_from_checkpoint(path)
-    return model
+    # CS-LSTM checkpoints store argparse hyperparameters alongside the weights.
+    with torch.serialization.safe_globals([argparse.Namespace]):
+        return MyATF.load_from_checkpoint(path, weights_only=True)
 
 
 def udf_model_infer(df: DataFrame, hparams, model):
