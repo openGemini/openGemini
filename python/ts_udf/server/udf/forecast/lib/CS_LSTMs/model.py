@@ -34,6 +34,7 @@ class MyATF(LightningModule):
         super(MyATF, self).__init__()
         self.save_hyperparameters()
         self.hp = hparams
+        self._test_outputs = []
         self.__build_model()
 
     def __build_model(self):
@@ -75,6 +76,9 @@ class MyATF(LightningModule):
         )
         return output
 
+    def on_test_epoch_start(self):
+        self._test_outputs.clear()
+
     def test_step(self, data_batch, batch_idx):
         x, y_all, z_all = data_batch
         y = (y_all[:, -self.hp.horizon - 20:-self.hp.horizon]).unsqueeze(1)
@@ -92,9 +96,16 @@ class MyATF(LightningModule):
                 "recon_x": recon_x,
             }
         )
+        self._test_outputs.append({
+            name: value.detach().cpu() for name, value in output.items()
+        })
         return output
 
-    def test_epoch_end(self, outputs):
+    def on_test_epoch_end(self):
+        outputs = self._test_outputs
+        self._test_outputs = []
+        if not outputs:
+            return
         y = torch.cat(([x["y"] for x in outputs]), 0)
         x = torch.cat(([x["x"] for x in outputs]), 0)
         recon_prob = torch.cat(([x["recon_prob"] for x in outputs]), 0)
