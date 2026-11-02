@@ -2730,6 +2730,48 @@ func TestClient_ShowShards(t *testing.T) {
 	}
 }
 
+func TestClient_ShowShardsFromRegexPreservesRetentionPolicy(t *testing.T) {
+	newRP := func(name string, shardID uint64) *meta2.RetentionPolicyInfo {
+		return &meta2.RetentionPolicyInfo{
+			Name: name,
+			ShardGroups: []meta2.ShardGroupInfo{{
+				ID:     shardID,
+				Shards: []meta2.ShardInfo{{ID: shardID}},
+			}},
+		}
+	}
+	client := &Client{cacheData: &meta2.Data{
+		Databases: map[string]*meta2.DatabaseInfo{
+			"db0": {
+				Name: "db0",
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": newRP("rp0", 1),
+					"rp1": newRP("rp1", 2),
+				},
+			},
+		},
+	}}
+
+	for _, rp := range []string{"rp0", "missing"} {
+		t.Run(rp, func(t *testing.T) {
+			parser := &influxql.YyParser{Query: influxql.Query{}}
+			parser.Scanner = influxql.NewScanner(strings.NewReader("SHOW SHARDS FROM db0." + rp + "./cpu/"))
+			parser.ParseTokens()
+			query, err := parser.GetQuery()
+			require.NoError(t, err)
+			require.Len(t, query.Statements, 1)
+			stmt := query.Statements[0].(*influxql.ShowShardsStatement)
+			require.Equal(t, rp, stmt.GetRPName())
+			require.Empty(t, stmt.GetMstName())
+			require.NotNil(t, stmt.GetMstInfo().Regex)
+
+			// Preserve the existing FROM behavior for unsupported regex measurements.
+			// An empty measurement name must not turn this into a database-wide listing.
+			require.Empty(t, client.ShowShards(stmt.GetDBName(), stmt.GetRPName(), stmt.GetMstName()))
+		})
+	}
+}
+
 func TestSnapshotV2_GetData(t *testing.T) {
 	address := "127.0.0.1:8491"
 	nodeId := 1

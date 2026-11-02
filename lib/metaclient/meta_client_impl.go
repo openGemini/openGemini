@@ -746,7 +746,7 @@ func (c *Client) RaftEnabledForDB(name string) (RepConfWriteType, error) {
 func (c *Client) ShowShards(db string, rp string, mst string) models.Rows {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if mst == "" {
+	if rp == "" && mst == "" {
 		return c.cacheData.ShowShards(db)
 	} else {
 		return c.cacheData.ShowShardsFromMst(db, rp, mst)
