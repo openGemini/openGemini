@@ -2676,6 +2676,7 @@ func TestClient_ShowShards(t *testing.T) {
 		fields   *Client
 		args     args
 		wantSize int
+		wantNil  bool
 		want     []uint64
 	}{
 		{
@@ -2711,6 +2712,16 @@ func TestClient_ShowShards(t *testing.T) {
 			wantSize: 4,
 			want:     []uint64{1, 21, 33, 46},
 		},
+		{
+			name:   "nonexistent database",
+			fields: c1,
+			args: args{
+				db:  "missing",
+				rp:  "",
+				mst: "",
+			},
+			wantNil: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2718,9 +2729,12 @@ func TestClient_ShowShards(t *testing.T) {
 				cacheData: tt.fields.cacheData,
 			}
 			got := c.ShowShards(tt.args.db, tt.args.rp, tt.args.mst)
-			if len(got[0].Values) != tt.wantSize {
-				t.Errorf("Client.ShowShards() = %v, want %v", got, tt.wantSize)
+			if tt.wantNil {
+				require.Nil(t, got)
+				return
 			}
+			require.Len(t, got, 1)
+			require.Len(t, got[0].Values, tt.wantSize)
 			for i := 0; i < tt.wantSize; i++ {
 				if got[0].Values[i][0] != tt.want[i] {
 					t.Errorf("shard id = %v, want %v", got[0].Values[i][0], tt.want[i])
