@@ -37,6 +37,25 @@ func (p *pointPatchTarget) privateValue(delta int) int {
 	return p.base - delta
 }
 
+//go:noinline
+func pointPatchFunc(value int) int {
+	return 10 + value
+}
+
+func TestPointApplyFunc(t *testing.T) {
+	point := &failpoint.Point{}
+	t.Cleanup(point.ResetPatches)
+	require.Equal(t, 12, pointPatchFunc(2))
+
+	point.ApplyFunc(pointPatchFunc, func(value int) int { return 100 + value })
+	require.Equal(t, 102, pointPatchFunc(2))
+	point.ApplyFunc(pointPatchFunc, func(value int) int { return 200 + value })
+	require.Equal(t, 202, pointPatchFunc(2))
+
+	point.ResetPatches()
+	require.Equal(t, 12, pointPatchFunc(2))
+}
+
 func TestPointApplyMethod(t *testing.T) {
 	target := &pointPatchTarget{base: 10}
 	point := &failpoint.Point{}
