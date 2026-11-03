@@ -175,13 +175,13 @@ func (s *LogKeeperStatistics) Push(item *LogKeeperStatItem) {
 }
 
 type LogKeeperStatItem struct {
-	validateHandle func(item *LogKeeperStatItem) bool
-
 	ObsReadDataSize   int64
 	ObsStoreDataSize  int64
 	QueryRequestCount int64
 	WriteRequestSize  int64
 	WriteRequestCount int64
+
+	validateHandle func(item *LogKeeperStatItem) bool
 
 	LogStreamId string
 	RepoId      string

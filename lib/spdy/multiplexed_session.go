@@ -49,10 +49,10 @@ func MultiplexedSessionFuture(f func() (*MultiplexedSession, error)) func() (*Mu
 }
 
 type MultiplexedSession struct {
-	cfg       config.Spdy
-	conn      *MultiplexedConnection
 	id        uint64
 	sequence  uint64
+	cfg       config.Spdy
+	conn      *MultiplexedConnection
 	fsm       *FSM
 	recvQueue chan []byte
 	hdr       header

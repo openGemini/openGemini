@@ -159,6 +159,12 @@ func NewHotFileManager() *HotFileManager {
 }
 
 type HotFileManager struct {
+	maxMemorySize   int64
+	totalMemorySize int64
+
+	// Used only during shard loading
+	loadMemorySize int64
+
 	signal chan struct{}
 	wg     sync.WaitGroup
 	mu     sync.RWMutex
@@ -166,12 +172,6 @@ type HotFileManager struct {
 
 	files       map[int64]*HotFiles // key is the time window
 	timeWindows []int64             // reverse order
-
-	maxMemorySize   int64
-	totalMemorySize int64
-
-	// Used only during shard loading
-	loadMemorySize int64
 }
 
 func (m *HotFileManager) Run() {

@@ -28,11 +28,11 @@ import (
 
 type Node struct {
 	nodeID  uint64
+	cursor  uint64
 	address string
 	pools   []*spdy.MultiplexedSessionPool
 
-	mu     sync.RWMutex
-	cursor uint64
+	mu sync.RWMutex
 
 	successJob *statistics.SpdyJob
 	failedJob  *statistics.SpdyJob

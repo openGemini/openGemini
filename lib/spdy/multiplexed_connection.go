@@ -117,6 +117,7 @@ var (
 type handlerFunc func(*MultiplexedConnection, []byte) error
 
 type MultiplexedConnection struct {
+	nextSessionId uint64
 	cfg           config.Spdy
 	underlying    io.ReadWriteCloser
 	sessions      map[uint64]*MultiplexedSession
@@ -127,7 +128,6 @@ type MultiplexedConnection struct {
 	handlers      []handlerFunc
 	dataBp        bufferpool.Pool
 	client        bool
-	nextSessionId uint64
 
 	accept chan *MultiplexedSession
 

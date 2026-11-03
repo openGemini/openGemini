@@ -227,7 +227,11 @@ func TestCodecEmpty(t *testing.T) {
 		},
 	}
 
+	size := obj.Size()
 	buf, _ := obj.Marshal(nil)
+	assert.Equal(t, size, len(buf))
+	assert.Equal(t, 8, codec.SizeOfInt())
+	assert.Equal(t, codec.SizeOfInt(), len(codec.AppendInt(nil, 0)))
 	other := &CodecObject{}
 	assert.NoError(t, other.Unmarshal(buf))
 

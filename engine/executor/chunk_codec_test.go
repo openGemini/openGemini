@@ -94,6 +94,19 @@ func TestChunkCodec(t *testing.T) {
 	if !reflect.DeepEqual(chunk.IntervalIndex(), newChunk.IntervalIndex()) {
 		t.Fatalf("marshal intervalIndex failed.")
 	}
+
+	emptyCol := executor.NewColumnImpl(influxql.Integer)
+	emptyBuf, err := emptyCol.Marshal(nil)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if len(emptyBuf) != emptyCol.Size() {
+		t.Fatalf("error empty column size, exp: %d; got: %d", len(emptyBuf), emptyCol.Size())
+	}
+	decodedEmptyCol := &executor.ColumnImpl{}
+	if err := decodedEmptyCol.Unmarshal(emptyBuf); err != nil {
+		t.Fatalf("%v", err)
+	}
 }
 
 // Runs only in the development phase

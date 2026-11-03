@@ -20,10 +20,9 @@ import (
 )
 
 type Uint32Array struct {
-	pool *sync.Pool
-
 	hit   int64
 	total int64
+	pool  *sync.Pool
 }
 
 var uint32ArrayPool *Uint32Array

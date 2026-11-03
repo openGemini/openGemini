@@ -81,9 +81,9 @@ func NewBuilderPool() *BuilderPool {
 }
 
 type BuilderPool struct {
-	pool   sync.Pool
 	size   int64
 	length int64
+	pool   sync.Pool
 }
 
 func (p *BuilderPool) Get() *StringBuilder {

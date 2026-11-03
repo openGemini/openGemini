@@ -14,12 +14,8 @@
 
 package codec
 
-import (
-	"unsafe"
-)
-
 const (
-	sizeOfInt = int(unsafe.Sizeof(int(0)))
+	sizeOfInt = 8
 
 	sizeOfInt16 = 2
 	sizeOfInt32 = 4

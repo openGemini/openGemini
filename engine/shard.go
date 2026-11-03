@@ -198,10 +198,19 @@ type Shard interface {
 }
 
 type shard struct {
+	opId                  uint64
+	rowCount              int64
+	maxTime               int64
+	tier                  uint64
+	lastWriteTime         uint64
+	lastFlushTime         uint64
+	writeColdDuration     uint64
+	forceSnapShotDuration uint64
+	seriesLimit           uint64
+
 	mu        sync.RWMutex
 	wg        sync.WaitGroup
 	writeWg   sync.WaitGroup
-	opId      uint64
 	closed    *interruptsignal.InterruptSignal
 	dataPath  string
 	filesPath string
@@ -228,23 +237,13 @@ type shard struct {
 	pkIndexReader      sparseindex.PKIndexReader
 	skIndexReader      sparseindex.SKIndexReader
 	aggMapReader       sparseindex.PreAggMapReader
-	rowCount           int64
 	tmLock             sync.RWMutex
-	maxTime            int64
 	startTime          time.Time
 	endTime            time.Time
 	durationInfo       *meta.DurationDescriptor
 	log                *Log.Logger
 	droppedMst         sync.Map
 	msRowCount         *util.SyncMap[string, *int64]
-
-	tier uint64
-
-	lastWriteTime uint64
-	lastFlushTime uint64
-
-	writeColdDuration     uint64
-	forceSnapShotDuration uint64
 
 	forceFlush  bool
 	forceChan   chan struct{}
@@ -260,7 +259,6 @@ type shard struct {
 	storage    Storage
 	obsOpt     *obs.ObsOptions
 
-	seriesLimit  uint64
 	memTablePool *mutable.MemTablePool
 
 	// hierarchical storage

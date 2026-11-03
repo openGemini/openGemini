@@ -94,6 +94,10 @@ build-check:
 	@$(PYTHON) build.py --clean --platform darwin --arch arm64
 	@$(PYTHON) build.py --clean --platform linux --arch arm64
 	@$(PYTHON) build.py --clean --platform linux --arch arm
+	@$(PYTHON) build.py --clean --platform linux --arch 386
+	@GOOS=linux GOARCH=386 $(GOTEST) ./lib/codec
+	@GOOS=linux GOARCH=386 $(GOTEST) -run TestChunkCodec ./engine/executor
+	@GOOS=linux GOARCH=386 $(GOTEST) -run "Test_WindowDataPool_Len|Test_WindowCachePool_Block|Test_CacheRowPool_Len" ./app/ts-store/stream
 	@$(PYTHON) build.py --clean --platform linux --arch amd64
 
 integration-test:
