@@ -1193,7 +1193,7 @@ func (r *Row) unmarshal(s string, tagsPool []Tag, fieldsPool []Field, noEscapeCh
 	// Parse fields
 	fieldsStart := len(fieldsPool)
 	hasQuotedFields := nextUnescapedChar(s, '"', noEscapeChars, enableTagArray, false) >= 0
-	n = nextUnquotedChar(s, ' ', noEscapeChars, hasQuotedFields)
+	n = nextFieldSeparator(s, ' ', noEscapeChars, hasQuotedFields)
 	if n < 0 {
 		// No timestamp.
 		fieldsPool, err = unmarshalInfluxFields(fieldsPool, s, noEscapeChars, hasQuotedFields)
@@ -1463,7 +1463,7 @@ func (f *Field) unmarshal(s string, noEscapeChars, hasQuotedFields bool) error {
 	if len(f.Key) > util.MaxFieldNameLength {
 		return errno.NewError(errno.FieldNameTooLong, f.Key, util.MaxFieldNameLength, len(f.Key))
 	}
-	if hasQuotedFields && nextUnescapedChar(s[n:], '"', noEscapeChars, false, false) >= 0 {
+	if hasQuotedFields && n+1 < len(s) && s[n+1] == '"' {
 		vstr, err := parseFieldStrValue(s[n+1:])
 		if err != nil {
 			return fmt.Errorf("cannot parse field value for %q: %w", f.Key, err)
@@ -1561,7 +1561,7 @@ func unmarshalInfluxFields(dst []Field, s string, noEscapeChars, hasQuotedFields
 			dst = append(dst, Field{})
 		}
 		f := &dst[len(dst)-1]
-		n := nextUnquotedChar(s, ',', noEscapeChars, hasQuotedFields)
+		n := nextFieldSeparator(s, ',', noEscapeChars, hasQuotedFields)
 		if n < 0 {
 			if err := f.unmarshal(s, noEscapeChars, hasQuotedFields); err != nil {
 				return dst, err
@@ -1740,74 +1740,81 @@ again:
 	goto again
 }
 
-func nextUnquotedChar(s string, ch byte, noEscapeChars, hasQuotedFields bool) int {
+// nextFieldSeparator finds ch outside string field values. It starts at a field
+// key: quotes in keys are literal, and only a quote immediately after the first
+// unescaped '=' opens a string. Commas start a new key; spaces end the field set.
+func nextFieldSeparator(s string, ch byte, noEscapeChars, hasQuotedFields bool) int {
 	if !hasQuotedFields {
 		return nextUnescapedChar(s, ch, noEscapeChars, false, false)
 	}
-	sOrig := s
-	for {
-		n := nextUnescapedChar(s, ch, noEscapeChars, false, false)
-		if n < 0 {
+	inKey := true
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			// Outside a string, a backslash cannot hide a row boundary.
+			if !noEscapeChars && i+1 < len(s) && s[i+1] != '\n' {
+				i++
+			}
+		case '=':
+			if inKey {
+				inKey = false
+				if i+1 < len(s) && s[i+1] == '"' {
+					q := nextUnescapedChar(s[i+2:], '"', noEscapeChars, false, false)
+					if q < 0 {
+						return -1
+					}
+					i += q + 2
+				}
+			}
+		case ',':
+			if ch == ',' {
+				return i
+			}
+			inKey = true
+		case ' ':
+			if ch == ' ' {
+				return i
+			}
+			// Quotes in a (possibly invalid) timestamp must not swallow rows.
+			if ch == '\n' {
+				n := strings.IndexByte(s[i:], '\n')
+				if n >= 0 {
+					return i + n
+				}
+			}
+			return -1
+		case '\n':
+			if ch == '\n' {
+				return i
+			}
 			return -1
 		}
-		if !isInQuote(s[:n], noEscapeChars) {
-			return n + len(sOrig) - len(s)
-		}
-		s = s[n+1:]
-		n = nextUnescapedChar(s, '"', noEscapeChars, false, false)
-		if n < 0 {
-			return -1
-		}
-		s = s[n+1:]
 	}
+	return -1
 }
 
-// nextRowEnd returns the index of the '\n' that ends the first row in s,
-// or -1 if the first row extends to the end of s.
-//
-// As in the InfluxDB line protocol, a '\n' inside a quoted string field value
-// is part of the value and does not end the row. Quotes are only meaningful in
-// the fields section, i.e. after the first unescaped space of the row, because
-// '"' is an ordinary character in measurement names and tags.
+// nextRowEnd returns the index of the '\n' ending the first row, or -1 if
+// the row extends to the end of s. Only string field values can span newlines;
+// quotes in measurement names, tags and field keys are ordinary characters.
 func nextRowEnd(s string, noEscapeChars bool) int {
 	n := strings.IndexByte(s, '\n')
 	if n < 0 || strings.IndexByte(s[:n], '"') < 0 || s[0] == '#' {
-		// Fast path: no quoted field value can span the '\n'.
 		return n
 	}
 	start := checkWhitespace(s[:n], 0)
 	sp := nextUnescapedChar(s[start:n], ' ', noEscapeChars, false, false)
 	if sp < 0 {
-		// The row has no fields section.
 		return n
 	}
 	i := start + sp + 1
-	if noEscapeChars && strings.Count(s[i:n], `"`)&1 == 0 {
-		// Fast path: all the quoted values before the '\n' are closed.
-		return n
+	for i < n && s[i] == ' ' {
+		i++
 	}
-	for {
-		// Look for a quoted value that opens before the current '\n'.
-		q := nextUnescapedChar(s[i:n], '"', noEscapeChars, false, false)
-		if q < 0 {
-			return n
-		}
-		i += q + 1
-		q = nextUnescapedChar(s[i:], '"', noEscapeChars, false, false)
-		if q < 0 {
-			// The quoted value is not closed, so it runs to the end of s.
-			return -1
-		}
-		i += q + 1
-		if i > n {
-			// The quoted value contains the '\n'. Move on to the next one.
-			m := strings.IndexByte(s[i:], '\n')
-			if m < 0 {
-				return -1
-			}
-			n = i + m
-		}
+	end := nextFieldSeparator(s[i:], '\n', noEscapeChars, true)
+	if end < 0 {
+		return -1
 	}
+	return i + end
 }
 
 func nextTimestamp(s string) (int64, error) {
@@ -1823,18 +1830,6 @@ func nextTimestamp(s string) (int64, error) {
 		}
 	}
 	return fastfloat.ParseInt64(s)
-}
-
-func isInQuote(s string, noEscapeChars bool) bool {
-	isQuote := false
-	for {
-		n := nextUnescapedChar(s, '"', noEscapeChars, false, false)
-		if n < 0 {
-			return isQuote
-		}
-		isQuote = !isQuote
-		s = s[n+1:]
-	}
 }
 
 func stripLeadingWhitespace(s string) string {

@@ -108,21 +108,20 @@ func TestUnmarshalRows_error(t *testing.T) {
 
 }
 
-func TestNextUnquotedChar(t *testing.T) {
-	f := func(s string, ch byte, noUnescape bool, nExpected int) {
+func TestNextFieldSeparator(t *testing.T) {
+	f := func(s string, ch byte, want int) {
 		t.Helper()
-		n := nextUnquotedChar(s, ch, noUnescape, true)
-		if n != nExpected {
-			t.Fatalf("unexpected n for nextUnqotedChar(%q, '%c', %v); got %d; want %d", s, ch, noUnescape, n, nExpected)
-		}
+		got := nextFieldSeparator(s, ch, !strings.Contains(s, `\`), true)
+		require.Equal(t, want, got, "nextFieldSeparator(%q, %q)", s, ch)
 	}
-
-	f(``, ' ', false, -1)
-	f(``, ' ', true, -1)
-	f(`""`, ' ', false, -1)
-	f(`""`, ' ', true, -1)
-	f(`"foo bar\" " baz`, ' ', false, 12)
-	f(`"foo bar\" " baz`, ' ', true, 10)
+	f("", ' ', -1)
+	f(`a"b=1i`, ' ', -1)
+	f(`a"b=1i 1`, ' ', 6)
+	f(`a"b=1i,c"d=2i`, ',', 6)
+	f(`a"b="c d" 1`, ' ', 9)
+	f(`a\=b="c,d",x=1i`, ',', 10)
+	f(`a="c\" d",x=1i`, ',', 9)
+	f(`a"b="unclosed`, ',', -1)
 }
 
 func TestNextRowEnd(t *testing.T) {

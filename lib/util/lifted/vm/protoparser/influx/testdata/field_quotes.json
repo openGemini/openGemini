@@ -1,0 +1,178 @@
+[
+  {
+    "name": "quote_in_key",
+    "input": "cpu a\"b=1i",
+    "fields": {
+      "a\"b": 1
+    }
+  },
+  {
+    "name": "quoted_key",
+    "input": "cpu \"ab\"=1i 1",
+    "fields": {
+      "\"ab\"": 1
+    },
+    "timestamp": 1
+  },
+  {
+    "name": "quote_before_equals",
+    "input": "cpu a\"=1i 1",
+    "fields": {
+      "a\"": 1
+    },
+    "timestamp": 1
+  },
+  {
+    "name": "quotes_in_multiple_keys",
+    "input": "cpu a\"b=1i,c\"d=2i 1",
+    "fields": {
+      "a\"b": 1,
+      "c\"d": 2
+    },
+    "timestamp": 1
+  },
+  {
+    "name": "quoted_key_and_string",
+    "input": "cpu a\"b=\"hello world\",c\"d=2i 1",
+    "fields": {
+      "a\"b": "hello world",
+      "c\"d": 2
+    },
+    "timestamp": 1
+  },
+  {
+    "name": "quoted_key_and_multiline_string",
+    "input": "cpu a\"b=\"line1\nline2\",c\"d=2i 1",
+    "fields": {
+      "a\"b": "line1\nline2",
+      "c\"d": 2
+    },
+    "timestamp": 1
+  },
+  {
+    "name": "quote_in_later_key",
+    "input": "cpu a=1i,b\"c=\"x\ny\" 1",
+    "fields": {
+      "a": 1,
+      "b\"c": "x\ny"
+    },
+    "timestamp": 1
+  },
+  {
+    "name": "escaped_key_delimiters",
+    "input": "cpu a\\=b\\,c\\ d\"=\"x\ny\",z=2i 1",
+    "fields": {
+      "a=b,c d\"": "x\ny",
+      "z": 2
+    },
+    "timestamp": 1
+  },
+  {
+    "name": "backslash_before_key_quote",
+    "input": "cpu a\\\"b=\"x\ny\" 1",
+    "fields": {
+      "a\\\"b": "x\ny"
+    },
+    "timestamp": 1,
+    "influxdb1Fields": {
+      "a\"b": "x\ny"
+    },
+    "influxdb2Fields": {
+      "a\"b": "x\ny"
+    }
+  },
+  {
+    "name": "value_delimiters",
+    "input": "cpu value=\"a=b,c d\",next=2i 1",
+    "fields": {
+      "value": "a=b,c d",
+      "next": 2
+    },
+    "timestamp": 1
+  },
+  {
+    "name": "escaped_value_quote",
+    "input": "cpu a\"b=\"a\\\"\nb\",next=2i 1",
+    "fields": {
+      "a\"b": "a\"\nb",
+      "next": 2
+    },
+    "timestamp": 1
+  },
+  {
+    "name": "backslashes_before_closing_quote",
+    "input": "cpu a\"b=\"a\\\\\",next=2i 1",
+    "fields": {
+      "a\"b": "a\\",
+      "next": 2
+    },
+    "timestamp": 1,
+    "influxdb1Fields": {
+      "a\"b": "a\\\",next=2"
+    }
+  },
+  {
+    "name": "literal_backslash_n",
+    "input": "cpu a\"b=\"a\\nb\" 1",
+    "fields": {
+      "a\"b": "a\\nb"
+    },
+    "timestamp": 1
+  },
+  {
+    "name": "crlf_value",
+    "input": "cpu a\"b=\"a\r\nb\" 1",
+    "fields": {
+      "a\"b": "a\r\nb"
+    },
+    "timestamp": 1
+  },
+  {
+    "name": "leading_spaces",
+    "input": "  cpu   a\"b=\"x\ny\" 1",
+    "fields": {
+      "a\"b": "x\ny"
+    },
+    "timestamp": 1
+  },
+  {
+    "name": "quotes_in_measurement_and_tags",
+    "input": "c\"pu,h\"ost=a\"b a\"b=\"x\ny\" 1",
+    "fields": {
+      "a\"b": "x\ny"
+    },
+    "timestamp": 1,
+    "measurement": "c\"pu",
+    "tags": {
+      "h\"ost": "a\"b"
+    }
+  },
+  {
+    "name": "single_quotes_are_literal_in_key",
+    "input": "cpu a'b=1i 1",
+    "fields": {
+      "a'b": 1
+    },
+    "timestamp": 1
+  },
+  {
+    "name": "quote_cannot_cross_equals",
+    "input": "cpu \"key=value\"",
+    "error": true
+  },
+  {
+    "name": "quote_cannot_cross_comma",
+    "input": "cpu a\"=1i,b=word\"",
+    "error": true
+  },
+  {
+    "name": "single_quotes_do_not_delimit_value",
+    "input": "cpu value='word'",
+    "error": true
+  },
+  {
+    "name": "unclosed_value_with_quoted_key",
+    "input": "cpu a\"b=\"line1\nline2",
+    "error": true
+  }
+]
