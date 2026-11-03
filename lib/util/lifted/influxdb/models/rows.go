@@ -3,15 +3,7 @@ package models
 import (
 	"math"
 	"sort"
-
-	"github.com/bytedance/sonic"
 )
-
-var json2 = sonic.Config{
-	SortMapKeys:             true,
-	NoValidateJSONMarshaler: true,
-	NoValidateJSONSkip:      true,
-}.Froze()
 
 // Row represents a single row returned from the execution of a statement.
 type Row struct {

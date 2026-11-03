@@ -39,9 +39,9 @@ TARGETS: Dict[str, str] = {
 }
 
 SUPPORTED_BUILDS: Dict[str, List[str]] = {
-    'linux': ["amd64", "arm64"],
+    'linux': ["amd64", "arm64", "arm", "386"],
     'darwin': ["amd64", "arm64"],
-    'windows': ["amd64", "arm64"],
+    'windows': ["amd64", "arm64", "386"],
 }
 
 ################
@@ -131,13 +131,16 @@ def get_system_arch() -> str:
     arch = platform.uname()[4].lower()
     arch_map = {
         "x86_64": "amd64",
-        "386": "i386",
-        "aarch64": "arm64"
+        "386": "386",
+        "i386": "386",
+        "i686": "386",
+        "aarch64": "arm64",
+        "arm64": "arm64"
     }
     if arch in arch_map:
         return arch_map[arch]
     if 'arm' in arch:
-        return "arm64"
+        return "arm"
     return arch
 
 def get_system_platform() -> str:

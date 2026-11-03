@@ -28,7 +28,7 @@ func TestRand(t *testing.T) {
 			v := rand.Int63()
 			if v > math.MaxInt64 || v < math.MinInt64 {
 				t.Fatalf("invalid random number. exp: [%d, %d]; got: %d",
-					math.MinInt64, math.MaxInt64, v)
+					int64(math.MinInt64), int64(math.MaxInt64), v)
 			}
 		},
 		func() {

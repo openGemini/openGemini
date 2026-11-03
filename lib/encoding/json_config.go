@@ -1,3 +1,5 @@
+//go:build amd64 || arm64
+
 // Copyright 2025 Huawei Cloud Computing Technologies Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");

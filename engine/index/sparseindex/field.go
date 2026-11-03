@@ -26,9 +26,9 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
-var NEGATIVE_INFINITY = &FieldRef{row: math.MinInt64}
+var NEGATIVE_INFINITY = &FieldRef{row: math.MinInt}
 
-var POSITIVE_INFINITY = &FieldRef{row: math.MaxInt64}
+var POSITIVE_INFINITY = &FieldRef{row: math.MaxInt}
 
 type FieldRef struct {
 	column int
@@ -234,17 +234,17 @@ func (f *FieldRef) IsNull() bool {
 }
 
 func (f *FieldRef) SetPositiveInfinity() {
-	f.row = math.MaxInt64
+	f.row = math.MaxInt
 }
 
 func (f *FieldRef) SetNegativeInfinity() {
-	f.row = math.MinInt64
+	f.row = math.MinInt
 }
 
 func (f *FieldRef) IsPositiveInfinity() bool {
-	return f.row == math.MaxInt64
+	return f.row == math.MaxInt
 }
 
 func (f *FieldRef) IsNegativeInfinity() bool {
-	return f.row == math.MinInt64
+	return f.row == math.MinInt
 }

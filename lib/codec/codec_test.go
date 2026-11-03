@@ -133,7 +133,7 @@ func NewCodecObject() *CodecObject {
 
 	return &CodecObject{
 		a: "sandy",
-		b: []int{-1 * (2 << 31), -1, 0, 1, 2, 3, 4, 6},
+		b: []int{-1 << 31, -1, 0, 1, 2, 3, 4, 6},
 		c: []byte{1, 2, 3, 4, 6, 0},
 		d: []bool{true, true, false, false, true, false, false, false, false, false, true, true},
 		e: []string{"aaa", "bbb", "2222", "tttt"},

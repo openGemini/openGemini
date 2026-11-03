@@ -21,6 +21,8 @@ package fileops
 import (
 	"fmt"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 const defaultMmapSize = 4 * 1024 // 4K
@@ -67,11 +69,7 @@ func MUnmap(data []byte) error {
 }
 
 func Fadvise(fd int, offset int64, length int64, advice int) (err error) {
-	_, _, e1 := syscall.Syscall6(syscall.SYS_FADVISE64, uintptr(fd), uintptr(offset), uintptr(length), uintptr(advice), 0, 0)
-	if e1 != 0 {
-		err = e1
-	}
-	return
+	return unix.Fadvise(fd, offset, length, advice)
 }
 
 func Fdatasync(file File) (err error) {

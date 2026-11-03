@@ -545,7 +545,7 @@ func TestJsonFunctionJsonObject(t *testing.T) {
 	cols[6] = "boolVal"
 	cols[7] = true
 	cols[8] = "time"
-	cols[9] = 1629129602000000000
+	cols[9] = int64(1629129602000000000)
 	rows[0] = cols
 	cols = make([]interface{}, 10)
 	cols[0] = "strVal"
@@ -557,7 +557,7 @@ func TestJsonFunctionJsonObject(t *testing.T) {
 	cols[6] = "boolVal"
 	cols[7] = false
 	cols[8] = "time"
-	cols[9] = 1629129608000000000
+	cols[9] = int64(1629129608000000000)
 	rows[1] = cols
 
 	expects := make([]interface{}, 2)

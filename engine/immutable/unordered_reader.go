@@ -121,7 +121,7 @@ func (r *UnorderedColumnReader) ChangeColumn(sid uint64, ref *record.Field) {
 func (r *UnorderedColumnReader) initTime() error {
 	r.times = r.times[:0]
 	r.colIdx = 0
-	col, err := r.read(r.columns.TimeMeta(), math.MaxInt64, timeRef)
+	col, err := r.read(r.columns.TimeMeta(), math.MaxInt, timeRef)
 	if err != nil {
 		return err
 	}
