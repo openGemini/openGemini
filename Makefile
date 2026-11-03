@@ -93,6 +93,7 @@ build-check:
 	@$(PYTHON) build.py --clean --platform darwin --arch amd64
 	@$(PYTHON) build.py --clean --platform darwin --arch arm64
 	@$(PYTHON) build.py --clean --platform linux --arch arm64
+	@$(PYTHON) build.py --clean --platform linux --arch arm
 	@$(PYTHON) build.py --clean --platform linux --arch amd64
 
 integration-test:

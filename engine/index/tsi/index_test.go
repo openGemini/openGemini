@@ -2006,7 +2006,7 @@ func TestSeriesByAllAndExprIterator(t *testing.T) {
 	})
 
 	maxIndexMetrics = 0
-	pruneThreshold = math.MaxInt64 - 1
+	pruneThreshold = math.MaxInt - 1
 	defer func() {
 		maxIndexMetrics = 1500 * 10000
 		pruneThreshold = 10

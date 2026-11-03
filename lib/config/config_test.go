@@ -197,7 +197,7 @@ func TestTSStore(t *testing.T) {
 	conf.Common.NodeRole = "xx"
 	assert.EqualError(t, conf.Common.ValidateRole(), "invalid data role: xx")
 
-	maxSize := 600 * config.GB
+	maxSize := uint64(600 * config.GB)
 	conf.Data.Corrector(0, 600*config.GB)
 	assert.NotEqual(t, maxSize*3/100, conf.Data.ReadCache.ReadMetaCacheEn)
 

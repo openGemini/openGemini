@@ -1,5 +1,3 @@
-package failpoint
-
 // Copyright 2025 Huawei Cloud Computing Technologies Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,11 +12,11 @@ package failpoint
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+package failpoint
+
 import (
 	"sync"
 	"sync/atomic"
-
-	"github.com/agiledragon/gomonkey/v2"
 )
 
 var points = NewPoints()
@@ -26,44 +24,7 @@ var points = NewPoints()
 type Point struct {
 	mu      sync.Mutex
 	val     *atomic.Value
-	patches *gomonkey.Patches
-}
-
-func (p *Point) ResetPatches() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.resetPatches()
-}
-
-func (p *Point) resetPatches() {
-	if p.patches != nil {
-		p.patches.Reset()
-		p.patches = nil
-	}
-}
-
-func (p *Point) ApplyFunc(target, double any) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	p.resetPatches()
-	p.patches = gomonkey.ApplyFunc(target, double)
-}
-
-func (p *Point) ApplyMethod(target any, methodName string, double any) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	p.resetPatches()
-	p.patches = gomonkey.ApplyMethodFunc(target, methodName, double)
-}
-
-func (p *Point) ApplyPrivateMethod(target any, methodName string, double any) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	p.resetPatches()
-	p.patches = gomonkey.ApplyPrivateMethod(target, methodName, double)
+	patches patches
 }
 
 func (p *Point) StoreValue(val any) {

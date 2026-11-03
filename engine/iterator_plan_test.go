@@ -1480,7 +1480,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 			// select last[int] with time range
 			{
 				name:   "select last[int] with time range",
-				q:      fmt.Sprintf(`SELECT last(field2_int) from cpu WHERE time>=%v AND time<=%v`, minT, 1609462801030000000),
+				q:      fmt.Sprintf(`SELECT last(field2_int) from cpu WHERE time>=%v AND time<=%v`, minT, int64(1609462801030000000)),
 				tr:     util.TimeRange{Min: influxql.MinTime, Max: 1609462801030000000},
 				fields: fields,
 				outputRowDataType: hybridqp.NewRowDataTypeImpl(
@@ -1504,7 +1504,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 					}
 					ck := chunks[0]
 					success := true
-					success = ast.Equal(t, ck.Time()[0], int64(1609462801030000000)) && success
+					success = ast.Equal(t, ck.Time()[0], int64(int64(1609462801030000000))) && success
 					success = ast.Equal(t, len(ck.Columns()), 1) && success
 					success = ast.Equal(t, ck.Column(0).IntegerValue(0), int64(5)) && success
 					return success
@@ -1514,7 +1514,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 			// select last[float] with time range
 			{
 				name:   "select last[float] with time range",
-				q:      fmt.Sprintf(`SELECT last(field4_float) from cpu WHERE time>=%v AND time<=%v`, minT, 1609462801030000000),
+				q:      fmt.Sprintf(`SELECT last(field4_float) from cpu WHERE time>=%v AND time<=%v`, minT, int64(1609462801030000000)),
 				tr:     util.TimeRange{Min: minT, Max: 1609462801030000000},
 				fields: fields,
 				outputRowDataType: hybridqp.NewRowDataTypeImpl(
@@ -1538,7 +1538,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 					}
 					ck := chunks[0]
 					success := true
-					success = ast.Equal(t, ck.Time()[0], int64(1609462801030000000)) && success
+					success = ast.Equal(t, ck.Time()[0], int64(int64(1609462801030000000))) && success
 					success = ast.Equal(t, len(ck.Columns()), 1) && success
 					success = ast.Equal(t, ck.Column(0).FloatValue(0), 5.5) && success
 					return success
@@ -1548,7 +1548,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 			// select last[string] with time range
 			{
 				name:   "select last[string] with time range",
-				q:      fmt.Sprintf(`SELECT last(field1_string) from cpu WHERE time>=%v AND time<=%v`, minT, 1609462801030000000),
+				q:      fmt.Sprintf(`SELECT last(field1_string) from cpu WHERE time>=%v AND time<=%v`, minT, int64(1609462801030000000)),
 				tr:     util.TimeRange{Min: influxql.MinTime, Max: 1609462801030000000},
 				fields: fields,
 				outputRowDataType: hybridqp.NewRowDataTypeImpl(
@@ -1572,7 +1572,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 					}
 					ck := chunks[0]
 					success := true
-					success = ast.Equal(t, ck.Time()[0], int64(1609462801030000000)) && success
+					success = ast.Equal(t, ck.Time()[0], int64(int64(1609462801030000000))) && success
 					success = ast.Equal(t, len(ck.Columns()), 1) && success
 					success = ast.Equal(t, ck.Column(0).StringValue(0), "test-test-test-test-4") && success
 					return success
@@ -3158,7 +3158,7 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 		// select last[int] with time range
 		{
 			name:   "select last[int] with time range",
-			q:      fmt.Sprintf(`SELECT last(field2_int) from cpu WHERE time>=%v AND time<=%v`, minT, 1609462801030000000),
+			q:      fmt.Sprintf(`SELECT last(field2_int) from cpu WHERE time>=%v AND time<=%v`, minT, int64(1609462801030000000)),
 			tr:     util.TimeRange{Min: influxql.MinTime, Max: 1609462801030000000},
 			fields: fields,
 			outputRowDataType: hybridqp.NewRowDataTypeImpl(
@@ -3192,7 +3192,7 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 		// select last[float] with time range
 		{
 			name:   "select last[float] with time range",
-			q:      fmt.Sprintf(`SELECT last(field4_float) from cpu WHERE time>=%v AND time<=%v`, minT, 1609462801030000000),
+			q:      fmt.Sprintf(`SELECT last(field4_float) from cpu WHERE time>=%v AND time<=%v`, minT, int64(1609462801030000000)),
 			tr:     util.TimeRange{Min: minT, Max: 1609462801030000000},
 			fields: fields,
 			outputRowDataType: hybridqp.NewRowDataTypeImpl(
@@ -3226,7 +3226,7 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 		// select last[string] with time range
 		{
 			name:   "select last[string] with time range",
-			q:      fmt.Sprintf(`SELECT last(field1_string) from cpu WHERE time>=%v AND time<=%v`, minT, 1609462801030000000),
+			q:      fmt.Sprintf(`SELECT last(field1_string) from cpu WHERE time>=%v AND time<=%v`, minT, int64(1609462801030000000)),
 			tr:     util.TimeRange{Min: influxql.MinTime, Max: 1609462801030000000},
 			fields: fields,
 			outputRowDataType: hybridqp.NewRowDataTypeImpl(
@@ -7838,7 +7838,7 @@ func Test_PreAggregation_MemTableData_SingleCall(t *testing.T) {
 		// select last[float] with time range
 		{
 			name:   "select last[float] with time range",
-			q:      fmt.Sprintf(`SELECT last(field4_float) from cpu WHERE time>=%v AND time<=%v`, minTOut, 1609462801030000000),
+			q:      fmt.Sprintf(`SELECT last(field4_float) from cpu WHERE time>=%v AND time<=%v`, minTOut, int64(1609462801030000000)),
 			tr:     util.TimeRange{Min: minTOut, Max: maxTout},
 			fields: fields,
 			outputRowDataType: hybridqp.NewRowDataTypeImpl(
