@@ -67,6 +67,9 @@ type PtNNLock struct {
 }
 
 type DBPTInfo struct {
+	exeCount  int64
+	rExeCount int64
+
 	//lint:ignore U1000 use for replication feature
 	replicaInfo *message.ReplicaInfo
 
@@ -80,8 +83,6 @@ type DBPTInfo struct {
 	opt      EngineOptions
 
 	logger     *logger.Logger
-	exeCount   int64
-	rExeCount  int64
 	offloading bool
 	preload    bool
 	bgrEnabled bool

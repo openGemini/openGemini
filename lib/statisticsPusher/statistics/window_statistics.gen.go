@@ -89,8 +89,6 @@ func (s *StreamWindowStatistics) Push(item *StreamWindowStatItem) {
 }
 
 type StreamWindowStatItem struct {
-	validateHandle func(item *StreamWindowStatItem) bool
-
 	WindowIn               int64
 	WindowProcess          int64
 	WindowSkip             int64
@@ -108,6 +106,8 @@ type StreamWindowStatItem struct {
 	ReplaySkip             int64
 	ReplayCacheIn          int64
 	ConsumeCacheIn         int64
+
+	validateHandle func(item *StreamWindowStatItem) bool
 
 	StreamID string
 

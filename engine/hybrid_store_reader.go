@@ -53,6 +53,7 @@ var (
 )
 
 type HybridStoreReader struct {
+	closedCount int64
 	executor.BaseProcessor
 
 	aborted        bool
@@ -84,7 +85,6 @@ type HybridStoreReader struct {
 	outInIdxMap map[int]int // key: chunk column idx, value: record column idx
 	inOutIdxMap map[int]int // key: record column idx, value: chunk column idx
 	closedCh    chan struct{}
-	closedCount int64
 
 	fragCount           int
 	iterCount           int

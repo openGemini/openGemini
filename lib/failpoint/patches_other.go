@@ -18,12 +18,16 @@ package failpoint
 
 type patches struct{}
 
-func (p *Point) ResetPatches() {}
+func (*patches) Reset() {}
 
-func (p *Point) resetPatches() {}
+func applyFunc(target, double any) *patches {
+	return nil
+}
 
-func (p *Point) ApplyFunc(target, double any) {}
+func applyMethodFunc(target any, methodName string, double any) *patches {
+	return nil
+}
 
-func (p *Point) ApplyMethod(target any, methodName string, double any) {}
-
-func (p *Point) ApplyPrivateMethod(target any, methodName string, double any) {}
+func applyPrivateMethod(target any, methodName string, double any) *patches {
+	return nil
+}

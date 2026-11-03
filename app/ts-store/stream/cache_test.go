@@ -102,6 +102,14 @@ func Test_WindowCachePool_Block(t *testing.T) {
 		t.Fatal("cache pool should not block when no data ")
 	case <-r:
 	}
+	if pool.Count() != 1 {
+		t.Error(fmt.Sprintf("expect %v ,got %v", 1, pool.Count()))
+	}
+	c := pool.Get()
+	pool.Put(c)
+	if pool.Count() != 1 {
+		t.Error(fmt.Sprintf("expect %v ,got %v", 1, pool.Count()))
+	}
 }
 
 func Test_CacheRowPool_Len(t *testing.T) {
@@ -134,4 +142,5 @@ func Test_CacheRowPool_Len(t *testing.T) {
 	if pool.Size() != 2 {
 		t.Error(fmt.Sprintf("expect %v ,got %v", 2, pool.Size()))
 	}
+	_ = pool.Get()
 }

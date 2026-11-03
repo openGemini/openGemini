@@ -52,6 +52,8 @@ func PutDecoderWork(ww *DecoderWork) {
 var decoderWorkPool sync.Pool
 
 type DecoderWork struct {
+	lastResetTime    uint64
+	refCount         int64
 	reqBuf           []byte
 	streamVars       []*msgservice.StreamVar
 	rows             []influx.Row
@@ -59,8 +61,6 @@ type DecoderWork struct {
 	fieldpools       []influx.Field
 	indexKeypools    []byte
 	indexOptionpools []influx.IndexOption
-	lastResetTime    uint64
-	refCount         int64
 
 	logger *logger.Logger
 }

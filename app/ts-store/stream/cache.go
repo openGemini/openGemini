@@ -29,9 +29,9 @@ func NewCacheRowPool() *CacheRowPool {
 }
 
 type CacheRowPool struct {
-	pool     sync.Pool
 	size     int64
 	length   int64
+	pool     sync.Pool
 	rowsPool *RowsPool
 }
 
@@ -83,8 +83,8 @@ func (p *RowsPool) Put(r *[]influx.Row) {
 }
 
 type TaskDataPool struct {
-	cache  chan ChanData
 	length int64
+	cache  chan ChanData
 }
 
 func NewTaskDataPool() *TaskDataPool {
@@ -122,8 +122,8 @@ func (p *TaskDataPool) Len() int64 {
 }
 
 type TaskCachePool struct {
-	pool  sync.Pool
 	count int64
+	pool  sync.Pool
 }
 
 func NewTaskCachePool() *TaskCachePool {

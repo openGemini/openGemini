@@ -24,7 +24,44 @@ var points = NewPoints()
 type Point struct {
 	mu      sync.Mutex
 	val     *atomic.Value
-	patches patches
+	patches *patches
+}
+
+func (p *Point) ResetPatches() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.resetPatches()
+}
+
+func (p *Point) resetPatches() {
+	if p.patches != nil {
+		p.patches.Reset()
+		p.patches = nil
+	}
+}
+
+func (p *Point) ApplyFunc(target, double any) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.resetPatches()
+	p.patches = applyFunc(target, double)
+}
+
+func (p *Point) ApplyMethod(target any, methodName string, double any) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.resetPatches()
+	p.patches = applyMethodFunc(target, methodName, double)
+}
+
+func (p *Point) ApplyPrivateMethod(target any, methodName string, double any) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.resetPatches()
+	p.patches = applyPrivateMethod(target, methodName, double)
 }
 
 func (p *Point) StoreValue(val any) {

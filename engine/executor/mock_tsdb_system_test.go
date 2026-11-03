@@ -795,8 +795,8 @@ func (seg *Segment) GroupValue(keys ...string) string {
 }
 
 type MemStore struct {
-	store map[uint64]*Segment
 	id    uint64
+	store map[uint64]*Segment
 	rwm   sync.RWMutex
 }
 

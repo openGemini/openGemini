@@ -176,11 +176,11 @@ func (o *obsFile) GetRepoAndStreamId() (repoId, streamId string) {
 }
 
 type retryCtx struct {
+	totalReadLen     int64
 	retries          map[int64]int64
 	mutex            sync.RWMutex
 	chErrorCloseOnce sync.Once
 	chError          chan int
-	totalReadLen     int64
 	retryTimes       int32
 }
 

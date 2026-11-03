@@ -39,14 +39,14 @@ type ResourceBucket interface {
 type Int64bucket struct {
 	// timeout represents to max wait time for one PipelineExecutor.
 	timeout time.Duration
-	// broadcast used to notify waited PipelineExecutor to check the reResource.
-	broadcast chan struct{}
 	// TotalResource represents the Total Resource we can use.
 	totalResource int64
 	// FreeResource represents the free Resource reResources we can use now.
 	freeResource int64
 	// blockExecutor represents the number of Executors which are waiting reResources free.
 	blockExecutor int64
+	// broadcast used to notify waited PipelineExecutor to check the reResource.
+	broadcast chan struct{}
 
 	lock sync.Mutex
 
