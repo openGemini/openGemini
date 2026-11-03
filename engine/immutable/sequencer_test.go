@@ -33,6 +33,28 @@ type idTime struct {
 	tm int64
 }
 
+// Exercise the counter through its containing Sequencer: a standalone
+// SeriesCounter allocation does not expose misalignment on 32-bit platforms.
+func TestSequencerSeriesCounterAlignment(t *testing.T) {
+	seq := immutable.NewSequencer()
+	pairs := immutable.GetIDTimePairs("cpu")
+	defer immutable.PutIDTimePairs(pairs)
+	pairs.Add(1, 100)
+	pairs.Add(2, 200)
+
+	seq.BatchUpdateCheckTime(pairs, false)
+	require.Equal(t, uint64(2), seq.SeriesTotal())
+	seq.BatchUpdateCheckTime(pairs, false)
+	require.Equal(t, uint64(2), seq.SeriesTotal())
+
+	seq.AddRowCounts("memory", 3, 1)
+	require.Equal(t, uint64(3), seq.SeriesTotal())
+	seq.DelMmsIdTime("cpu")
+	require.Equal(t, uint64(1), seq.SeriesTotal())
+	seq.DelMmsIdTime("memory")
+	require.Zero(t, seq.SeriesTotal())
+}
+
 func TestSingleMeasurement(t *testing.T) {
 	idTimes := []idTime{
 		{id: 1660001, tm: 1626710820000000000},

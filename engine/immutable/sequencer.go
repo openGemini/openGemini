@@ -139,13 +139,15 @@ func NewMmsIdTime(sc *SeriesCounter) *MmsIdTime {
 }
 
 type Sequencer struct {
+	// Keep the 64-bit atomic counter first for alignment on 32-bit platforms.
+	sc SeriesCounter
+
 	mu        sync.RWMutex
 	mmsIdTime map[string]*MmsIdTime // {"cpu_0001": *MmsIdTime}
 	seqMu     sync.RWMutex          // only one goroutine can reload sequencer and others wait
 	isLoading bool                  // is loading for mmsIdTime, set isLoading false when loading mmsIdTime finish
 	isFree    bool                  // if free successfully, set isFree true else false
 	ref       int32                 // used for mark use of sequencer, if sequencer is in used, can not free
-	sc        SeriesCounter
 }
 
 func NewSequencer() *Sequencer {
