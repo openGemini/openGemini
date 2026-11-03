@@ -57,6 +57,17 @@ Flags:
 Use "ts-cli [command] --help" for more information about a command.
 ```
 
+## Bundled source dependencies
+
+This copy uses the openGemini sources in this repository. Its `go.mod`
+replaces the server module with the repository root and repeats the root
+module's local replacements, because Go does not inherit dependency
+replacements. Keep these paths in sync with the root `go.mod`.
+
+From this directory, run `go mod tidy` and `go test ./...` to check the
+dependency graph and CLI. The nightly image installs the separately pinned
+upstream CLI release in `Dockerfile.nightly`.
+
 ## Develop Requirements
 
 - Go 1.24+
