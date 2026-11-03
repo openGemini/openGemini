@@ -302,11 +302,8 @@ func (c *csvParser) writeMstInfoFromTssp(metaWriter io.Writer, outputWriter io.W
 	if sid == 0 {
 		return fmt.Errorf("series ID is zero")
 	}
-	var combineKey []byte
-	var seriesKeys [][]byte
-	var isExpectSeries []bool
-	// Use sid get series key's []byte
-	if seriesKeys, _, _, err = index.SearchSeriesWithTagArray(sid, seriesKeys, nil, combineKey, isExpectSeries, nil); err != nil {
+	seriesKeys, err := searchSeriesKeys(index.GetSeries, sid)
+	if err != nil {
 		return err
 	}
 	_, src, err := influx.MeasurementName(seriesKeys[0])

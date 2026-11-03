@@ -613,21 +613,14 @@ func (e *Exporter) writeSingleTsspFile(filePath string, outputWriter io.Writer, 
 // writeSeriesRecords writes all records pointed to by one sid.
 func (e *Exporter) writeSeriesRecords(outputWriter io.Writer, sid uint64, rec *record.Record, index *tsi.MergeSetIndex) error {
 
-	var combineKey []byte
-	var seriesKeys [][]byte
-	var isExpectSeries []bool
-	var err error
-	// Use sid get series key's []byte
-	if seriesKeys, _, isExpectSeries, err = index.SearchSeriesWithTagArray(sid, seriesKeys, nil, combineKey, isExpectSeries, nil); err != nil {
+	seriesKeys, err := searchSeriesKeys(index.GetSeries, sid)
+	if err != nil {
 		return err
 	}
 	series := make([][]byte, 1)
 	point := &opengemini.Point{}
 	sIndex := 0
 	for i := range seriesKeys {
-		if !isExpectSeries[i] {
-			continue
-		}
 		if sIndex >= 1 {
 			bufSeries := influx.GetBytesBuffer()
 			bufSeries, err = e.parser.parse2SeriesKeyWithoutVersion(seriesKeys[i], bufSeries, false, point)

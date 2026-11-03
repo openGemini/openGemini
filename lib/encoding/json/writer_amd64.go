@@ -1,4 +1,4 @@
-//go:build amd64
+//go:build amd64 && !go1.27
 
 // Copyright 2025 Huawei Cloud Computing Technologies Co., Ltd.
 //
@@ -23,6 +23,9 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
+// Sonic v1.15.2 disables its native implementation on Go 1.27 and newer.
+// Keep this file's build constraint in sync so those toolchains use writer.go.
+//
 //go:linkname i64toa github.com/bytedance/sonic/internal/native/avx2.i64toa
 func i64toa(out *byte, val int64) int
 
