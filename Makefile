@@ -14,7 +14,7 @@
 
 include Makefile.common
 
-.PHONY: go-build style-check gotest integration-test buildsucc static-check start-subscriber stop-subscriber clean-test-env
+.PHONY: build-check test-386 go-build style-check gotest integration-test buildsucc static-check start-subscriber stop-subscriber clean-test-env
 
 GOTEST_TIMEOUT ?= 15m
 
@@ -95,10 +95,16 @@ build-check:
 	@$(PYTHON) build.py --clean --platform linux --arch arm64
 	@$(PYTHON) build.py --clean --platform linux --arch arm
 	@$(PYTHON) build.py --clean --platform linux --arch 386
-	@GOOS=linux GOARCH=386 $(GOTEST) ./lib/codec
-	@GOOS=linux GOARCH=386 $(GOTEST) -run TestChunkCodec ./engine/executor
-	@GOOS=linux GOARCH=386 $(GOTEST) -run "Test_WindowDataPool_Len|Test_WindowCachePool_Block|Test_CacheRowPool_Len" ./app/ts-store/stream
+	@$(MAKE) test-386
 	@$(PYTHON) build.py --clean --platform linux --arch amd64
+
+# Run on a Linux host that supports executing 32-bit x86 binaries.
+test-386:
+	@GOOS=linux GOARCH=386 $(GOTEST) -count=1 ./lib/codec
+	# Stress allocations with two Ps to catch write-barrier preemption regressions.
+	@GOOS=linux GOARCH=386 GOMAXPROCS=2 $(GOTEST) -count=1000 -run "^TestChunkCodec$$" ./engine/executor
+	@GOOS=linux GOARCH=386 $(GOTEST) -count=1 -run "^(TestSequencerSeriesCounterAlignment|TestTableStoreOpen)$$" ./engine/immutable
+	@GOOS=linux GOARCH=386 $(GOTEST) -count=1 -run "Test_WindowDataPool_Len|Test_WindowCachePool_Block|Test_CacheRowPool_Len" ./app/ts-store/stream
 
 integration-test:
 	@echo "running integration test begin."

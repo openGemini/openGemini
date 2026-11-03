@@ -19,7 +19,10 @@ export GOARCH=$(shell go env GOARCH)
 export PATH := $(PATH):$(GOROOT)/bin:$(GOPATH)/bin
 
 GO          := GO111MODULE=on go
-GOTEST      := $(GO) test -gcflags "all=-N -l"
+# Monkey-patch tests need -N -l in application and dependency code.
+# Keep the runtime at its default flags: disabling its inlining exposes
+# an unsafe write-barrier preemption point on 386. The last match wins.
+GOTEST      := $(GO) test -gcflags "all=-N -l" -gcflags "runtime="
 PYTHON      := python
 STATICCHECK := staticcheck
 
