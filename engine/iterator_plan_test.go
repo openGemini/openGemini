@@ -9525,7 +9525,8 @@ func TestCreateCursorIndexShardTierErr(t *testing.T) {
 	}
 
 	// **** start write data to the shard.
-	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
+	sh, err := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
+	require.NoError(t, err)
 	defer sh.Close()
 	defer sh.indexBuilder.Close()
 	if err := sh.WriteRows(pts, nil); err != nil {
@@ -9540,7 +9541,10 @@ func TestCreateCursorIndexShardTierErr(t *testing.T) {
 	}
 	sh.ForceFlush()
 	sh.waitSnapshot()
-	time.Sleep(time.Second)
+	// Make the index visible without waiting for its background flush.
+	idx, ok := sh.indexBuilder.GetPrimaryIndex().(*tsi.MergeSetIndex)
+	require.True(t, ok)
+	idx.DebugFlush()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -9570,7 +9574,7 @@ func TestCreateCursorIndexShardTierErr(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "index did not return any series before checking tier errors")
 
 	sh.indexBuilder.Tier = util.Clearing
-	_, err := sh.CreateCursor(ctx, querySchema)
+	_, err = sh.CreateCursor(ctx, querySchema)
 	require.EqualError(t, err, "Index Clearing while reading, indexId:1, startTier:7, endTier:7")
 
 	sh.indexBuilder.Tier = util.Cleared
