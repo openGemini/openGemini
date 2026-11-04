@@ -18,11 +18,11 @@ package raftlog
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
 
-	"github.com/cockroachdb/errors"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
@@ -72,14 +72,14 @@ func (fw *FileWrapV2) rotateCurrent() {
 func OpenFileV2(fpath string, flag int, maxSz int) (FileWrapper, error) {
 	fd, err := fileops.OpenFile(fpath, flag, 0600, fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL))
 	if err != nil {
-		return nil, errors.Wrapf(err, "unable to open: %s", fpath)
+		return nil, fmt.Errorf("unable to open: %s: %w", fpath, err)
 	}
 
 	filename := fd.Name()
 	fi, err := fd.Stat()
 	if err != nil {
 		fd.Close()
-		return nil, errors.Wrapf(err, "cannot stat file: %s", filename)
+		return nil, fmt.Errorf("cannot stat file: %s: %w", filename, err)
 	}
 
 	fw := NewFileWrapV2(fd)
@@ -90,13 +90,13 @@ func OpenFileV2(fpath string, flag int, maxSz int) (FileWrapper, error) {
 		var buff = make([]byte, maxSz)
 		if _, err = fw.Write(buff); err != nil {
 			fd.Close()
-			return nil, errors.Wrapf(err, "error while truncation")
+			return nil, fmt.Errorf("error while truncation: %w", err)
 		}
 		if err = fw.TrySync(); err != nil {
 			fd.Close()
-			return nil, errors.Wrapf(err, "error while trySync")
+			return nil, fmt.Errorf("error while trySync: %w", err)
 		}
-		rerr = NewFile
+		rerr = ErrNewFile
 	}
 	if strings.HasSuffix(fpath, metaName) {
 		_, err = fw.fd.Seek(0, io.SeekStart)
@@ -108,7 +108,7 @@ func OpenFileV2(fpath string, flag int, maxSz int) (FileWrapper, error) {
 		n, err := io.ReadFull(reader, fw.metaCache)
 		if err != nil || n != len(fw.metaCache) {
 			fd.Close()
-			return nil, errors.Wrapf(err, "error while reading meta file:%s n:%d, len:%d", fw.Name(), n, len(fw.metaCache))
+			return nil, fmt.Errorf("error while reading meta file:%s n:%d, len:%d: %w", fw.Name(), n, len(fw.metaCache), err)
 		}
 	}
 	return fw, rerr
@@ -162,7 +162,7 @@ func (fw *FileWrapV2) Write(dat []byte) (int, error) {
 	defer fw.mu.Unlock()
 	n, err := fw.fd.Write(dat)
 	if err != nil {
-		return 0, errors.Wrapf(err, "write failed:%s", fw.Name())
+		return 0, fmt.Errorf("write failed:%s: %w", fw.Name(), err)
 	}
 	return n, err
 }
@@ -172,11 +172,11 @@ func (fw *FileWrapV2) WriteAt(slotIdx int, offset int64, dat []byte, isMeta bool
 	defer fw.mu.Unlock()
 	_, err := fw.fd.Seek(offset, 0)
 	if err != nil {
-		return 0, errors.Wrapf(err, "seek unreachable file:%s", fw.Name())
+		return 0, fmt.Errorf("seek unreachable file:%s: %w", fw.Name(), err)
 	}
 	n, err := fw.fd.Write(dat)
 	if err != nil {
-		return 0, errors.Wrapf(err, "write failed for file:%s", fw.Name())
+		return 0, fmt.Errorf("write failed for file:%s: %w", fw.Name(), err)
 	}
 	if !isMeta {
 		if len(fw.cache) <= slotIdx {
@@ -188,7 +188,7 @@ func (fw *FileWrapV2) WriteAt(slotIdx int, offset int64, dat []byte, isMeta bool
 		copy(fw.metaCache[offset:], dat)
 	}
 
-	return n, errors.Wrapf(err, "seek unreachable file:%s", fw.Name())
+	return n, nil
 }
 
 func (fw *FileWrapV2) WriteSlice(slotIdx int, endSlotIdx int, offset int64, dat []byte, isMeta bool, clearSlots bool) error {
@@ -196,18 +196,18 @@ func (fw *FileWrapV2) WriteSlice(slotIdx int, endSlotIdx int, offset int64, dat 
 	defer fw.mu.Unlock()
 	_, err := fw.fd.Seek(offset, 0)
 	if err != nil {
-		return errors.Wrapf(err, "seek unreachable file:%s", fw.Name())
+		return fmt.Errorf("seek unreachable file:%s: %w", fw.Name(), err)
 	}
 	var buff = make([]byte, 0, unit32Size)
 	buff = encoding.MarshalUint32(buff, uint32(len(dat))) // size
 	_, err = fw.fd.Write(buff)
 	if err != nil {
-		return errors.Wrapf(err, "write failed for file:%s", fw.Name())
+		return fmt.Errorf("write failed for file:%s: %w", fw.Name(), err)
 	}
 
 	_, err = fw.fd.Write(dat) // data
 	if err != nil {
-		return errors.Wrapf(err, "write failed for file:%s", fw.Name())
+		return fmt.Errorf("write failed for file:%s: %w", fw.Name(), err)
 	}
 
 	if clearSlots {
@@ -235,7 +235,7 @@ func (fw *FileWrapV2) WriteSlice(slotIdx int, endSlotIdx int, offset int64, dat 
 		copy(fw.metaCache[offset+int64(len(buff)):], dat)
 	}
 
-	return errors.Wrapf(err, "seek unreachable file:%s", fw.Name())
+	return nil
 }
 
 func (fw *FileWrapV2) ReadSlice(slotIdx int, offset int64, isMeta bool) []byte {
@@ -321,22 +321,22 @@ func (fw *FileWrapV2) Delete() error {
 		return nil
 	}
 	if err := fw.fd.Close(); err != nil {
-		return errors.Wrapf(err, "while close file:%s", fw.Name())
+		return fmt.Errorf("while close file:%s: %w", fw.Name(), err)
 	}
 	if err := fileops.Remove(fw.fd.Name()); err != nil {
-		return errors.Wrapf(err, "while remove file:%s", fw.Name())
+		return fmt.Errorf("while remove file:%s: %w", fw.Name(), err)
 	}
 	return nil
 }
 
 func (fw *FileWrapV2) Close() error {
 	if err := fw.TrySync(); err != nil {
-		return errors.Wrapf(err, "sync error:%s", fw.Name())
+		return fmt.Errorf("sync error:%s: %w", fw.Name(), err)
 	}
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 	if err := fw.fd.Close(); err != nil {
-		return errors.Wrapf(err, "fw close error:%s", fw.Name())
+		return fmt.Errorf("fw close error:%s: %w", fw.Name(), err)
 	}
 	return nil
 }

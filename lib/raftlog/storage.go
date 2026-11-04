@@ -15,6 +15,7 @@
 package raftlog
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -22,7 +23,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -63,7 +63,7 @@ func Init(dir string, SyncInterval time.Duration) (*RaftDiskStorage, error) {
 
 	lockFile := fileops.FileLockOption("")
 	if err := fileops.MkdirAll(dir, 0750, lockFile); err != nil {
-		return nil, errors.Wrapf(err, "mkdir failed:%s", dir)
+		return nil, fmt.Errorf("mkdir failed:%s: %w", dir, err)
 	}
 
 	var err error
@@ -90,7 +90,7 @@ func Init(dir string, SyncInterval time.Duration) (*RaftDiskStorage, error) {
 			if err != nil {
 				return nil, err
 			}
-			return nil, errors.Newf("snap index: %d + 1 should be equal to first: %d last: %d\n", snap.Metadata.Index, first, last)
+			return nil, fmt.Errorf("snap index: %d + 1 should be equal to first: %d last: %d", snap.Metadata.Index, first, last)
 		}
 	}
 
@@ -132,7 +132,7 @@ func (rds *RaftDiskStorage) Exist() bool {
 
 func (rds *RaftDiskStorage) HardState() (raftpb.HardState, error) {
 	if rds.meta == nil {
-		return raftpb.HardState{}, errors.Errorf("uninitialized meta file")
+		return raftpb.HardState{}, errors.New("uninitialized meta file")
 	}
 	return rds.meta.HardState()
 }
@@ -355,10 +355,10 @@ func (rds *RaftDiskStorage) TrySync() error {
 		defer rds.lock.Unlock()
 
 		if err := rds.meta.meta.TrySync(); err != nil {
-			return errors.Wrapf(err, "while syncing meta")
+			return fmt.Errorf("while syncing meta: %w", err)
 		}
 		if err := rds.entryLog.current.entry.TrySync(); err != nil {
-			return errors.Wrapf(err, "while syncing current file")
+			return fmt.Errorf("while syncing current file: %w", err)
 		}
 		rds.firstSync = false
 		rds.logger.Debug("rds firstSync")
@@ -390,10 +390,10 @@ func (rds *RaftDiskStorage) backSync() {
 // Close closes the DiskStorage.
 func (rds *RaftDiskStorage) Close() error {
 	if err := rds.meta.Close(); err != nil {
-		return errors.Wrap(err, "close meta file")
+		return fmt.Errorf("close meta file: %w", err)
 	}
 	if err := rds.entryLog.Close(); err != nil {
-		return errors.Wrap(err, "close entryLog file")
+		return fmt.Errorf("close entryLog file: %w", err)
 	}
 	return nil
 }

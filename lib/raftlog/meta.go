@@ -21,11 +21,11 @@ package raftlog
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
-	"github.com/cockroachdb/errors"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -113,10 +113,13 @@ func (m *metaFile) lazyOpen() error {
 	} else {
 		m.meta, err = OpenFileV2(fname, os.O_RDWR|os.O_CREATE, metaFileSize)
 	}
-	if errors.Is(err, NewFile) {
+	if errors.Is(err, ErrNewFile) {
 		err = nil
 	}
-	return errors.Wrapf(err, "unable to open meta file")
+	if err != nil {
+		return fmt.Errorf("unable to open meta file: %w", err)
+	}
+	return nil
 }
 
 func (m *metaFile) bufAt(info MetaInfo) []byte {
@@ -151,7 +154,7 @@ func (m *metaFile) StoreHardState(hs *raftpb.HardState) error {
 	}
 	buf, err := hs.Marshal()
 	if err != nil {
-		return errors.Wrapf(err, "cannot marshal hard state")
+		return fmt.Errorf("cannot marshal hard state: %w", err)
 	}
 	if len(buf) >= snapshotIndex-hardStateOffset {
 		return fmt.Errorf("invalid HardState")
@@ -171,7 +174,7 @@ func (m *metaFile) HardState() (raftpb.HardState, error) {
 		return hs, nil
 	}
 	if err := hs.Unmarshal(val); err != nil {
-		return hs, errors.Wrapf(err, "cannot parse hardState")
+		return hs, fmt.Errorf("cannot parse hardState: %w", err)
 	}
 	return hs, nil
 }
@@ -188,7 +191,7 @@ func (m *metaFile) StoreSnapshot(snap *raftpb.Snapshot) error {
 
 	buf, err := snap.Marshal()
 	if err != nil {
-		return errors.Wrapf(err, "cannot marshal snapshot")
+		return fmt.Errorf("cannot marshal snapshot: %w", err)
 	}
 
 	if err = m.meta.WriteSlice(0, 0, snapshotOffset, buf, true, false); err != nil {
@@ -216,7 +219,7 @@ func (m *metaFile) snapshot() (raftpb.Snapshot, error) {
 	}
 
 	if err := snap.Unmarshal(val); err != nil {
-		return snap, errors.Wrapf(err, "cannot parse snapshot")
+		return snap, fmt.Errorf("cannot parse snapshot: %w", err)
 	}
 	return snap, nil
 }

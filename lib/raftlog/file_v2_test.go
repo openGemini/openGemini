@@ -29,14 +29,14 @@ import (
 func TestFileWrapV2_OpenFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	fw1, err := OpenFileV2(filepath.Join(tmpDir, "test"), os.O_CREATE|os.O_RDWR, 1000)
-	require.EqualError(t, err, NewFile.Error())
+	require.EqualError(t, err, ErrNewFile.Error())
 	defer fw1.Close()
 
 	assert.Contains(t, fw1.Name(), "test")
 	assert.Equal(t, 1000, fw1.Size())
 
 	fw2, err := OpenFileV2(filepath.Join(tmpDir, metaName), os.O_CREATE|os.O_RDWR, 1000)
-	require.EqualError(t, err, NewFile.Error())
+	require.EqualError(t, err, ErrNewFile.Error())
 
 	fw3, err := OpenFileV2(tmpDir, os.O_CREATE|os.O_RDWR, 1000)
 	assert.NotEqual(t, err, nil)
@@ -55,7 +55,7 @@ func TestGetEntryDataV2(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	fw1, err := OpenFileV2(filepath.Join(tmpDir, "test"), os.O_CREATE|os.O_RDWR, 1000)
-	require.EqualError(t, err, NewFile.Error())
+	require.EqualError(t, err, ErrNewFile.Error())
 	defer fw1.Close()
 
 	result = fw1.GetEntryData(0, 0, 5, false)
@@ -71,7 +71,7 @@ func TestGetEntryDataV2(t *testing.T) {
 func TestFileWrapV2_Write_WriteAt(t *testing.T) {
 	tmpDir := t.TempDir()
 	fw, err := OpenFileV2(filepath.Join(tmpDir, metaName), os.O_CREATE|os.O_RDWR, 1000)
-	require.EqualError(t, err, NewFile.Error())
+	require.EqualError(t, err, ErrNewFile.Error())
 	defer fw.Close()
 
 	n, err := fw.WriteAt(0, 0, []byte("meta"), true)
@@ -92,7 +92,7 @@ func TestFileWrapV2_TrySync(t *testing.T) {
 func TestFileWrapV2_WriteSlice_ReadSlice(t *testing.T) {
 	tmpDir := t.TempDir()
 	fw, err := OpenFileV2(filepath.Join(tmpDir, metaName), os.O_CREATE|os.O_RDWR, 1000)
-	require.EqualError(t, err, NewFile.Error())
+	require.EqualError(t, err, ErrNewFile.Error())
 	defer fw.Close()
 
 	err = fw.WriteSlice(0, 0, 0, []byte("meta"), true, false)
@@ -120,7 +120,7 @@ func TestFileWrapV2_WriteSlice_ReadSlice(t *testing.T) {
 func TestTruncateV2(t *testing.T) {
 	tmpDir := t.TempDir()
 	fw, err := OpenFileV2(filepath.Join(tmpDir, metaName), os.O_CREATE|os.O_RDWR, 1000)
-	require.EqualError(t, err, NewFile.Error())
+	require.EqualError(t, err, ErrNewFile.Error())
 	defer fw.Close()
 
 	err = fw.WriteSlice(0, 0, 0, []byte("Hello, world! GoodBye!!!"), false, false)
