@@ -104,6 +104,8 @@ func GetCustomProxy(ul *url.URL, targetHost string, body []byte, httpsEnabled bo
 	reverseProxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(uu)
+			pr.Out.Header["X-Forwarded-For"] = pr.In.Header["X-Forwarded-For"]
+			pr.SetXForwarded()
 			if len(body) > 0 {
 				pr.Out.Body = io.NopCloser(bytes.NewBuffer(body))
 				pr.Out.ContentLength = int64(len(body))
