@@ -2880,6 +2880,7 @@ func TestEngine_CreateLogicalPlan(t *testing.T) {
 func TestExpiredShardsForMst(t *testing.T) {
 	dir := t.TempDir()
 	config.SetProductType(config.LogKeeperService)
+	defer config.SetProductType("")
 	eng, err := initEngine1(dir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
@@ -2895,6 +2896,7 @@ func TestExpiredShardsForMst(t *testing.T) {
 func TestExpiredShards(t *testing.T) {
 	dir := t.TempDir()
 	config.SetProductType(config.LogKeeperService)
+	defer config.SetProductType("")
 	eng, err := initEngine1(dir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
