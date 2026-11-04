@@ -101,15 +101,16 @@ func GetCustomProxy(ul *url.URL, targetHost string, body []byte, httpsEnabled bo
 	if err != nil {
 		return nil, err
 	}
-	reverseProxy := httputil.NewSingleHostReverseProxy(uu)
-	reverseProxy.Rewrite = func(pr *httputil.ProxyRequest) {
-		pr.SetURL(uu)
-		if len(body) > 0 {
-			pr.Out.Body = io.NopCloser(bytes.NewBuffer(body))
-			pr.Out.ContentLength = int64(len(body))
-			pr.Out.Header.Set("Content-Length", strconv.Itoa(len(body)))
-		}
+	reverseProxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(uu)
+			if len(body) > 0 {
+				pr.Out.Body = io.NopCloser(bytes.NewBuffer(body))
+				pr.Out.ContentLength = int64(len(body))
+				pr.Out.Header.Set("Content-Length", strconv.Itoa(len(body)))
+			}
+		},
+		Transport: defaultTransport,
 	}
-	reverseProxy.Transport = defaultTransport
 	return reverseProxy, nil
 }
