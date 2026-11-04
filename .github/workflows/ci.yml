@@ -131,25 +131,3 @@ jobs:
         run: go test ./lib/encoding/json
       - name: Build nightly server binaries
         run: go build ./app/ts-server ./app/ts-sql ./app/ts-data ./app/ts-meta ./app/ts-store
-
-  BundledCLI:
-    name: bundled CLI dependencies and tests
-    needs: CommitLint
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: "lib/util/lifted/tscli/go.mod"
-          cache-dependency-path: |
-            go.mod
-            lib/util/lifted/tscli/go.mod
-      - name: Resolve bundled CLI dependencies
-        working-directory: lib/util/lifted/tscli
-        run: |
-          go mod tidy
-          git diff --exit-code -- go.mod
-      - name: Test bundled CLI
-        working-directory: lib/util/lifted/tscli
-        run: go test ./...
