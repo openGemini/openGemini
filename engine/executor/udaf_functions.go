@@ -18,7 +18,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/influxdata/influxdb/uuid"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -32,7 +32,7 @@ import (
 
 var tracer = otel.Tracer("castor_sql")
 
-type recordToChunkFunc func(r arrow.Record, c Chunk, fields map[string]struct{}) error
+type recordToChunkFunc func(r arrow.RecordBatch, c Chunk, fields map[string]struct{}) error
 
 func CastorReduce(fn recordToChunkFunc) WideReduce {
 	return func(in []Chunk, out Chunk, args ...interface{}) error {

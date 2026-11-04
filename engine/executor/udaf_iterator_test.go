@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -281,7 +281,7 @@ func Test_WideIterator_WideReduceError(t *testing.T) {
 	assert.Equal(t, "test error", err.Error())
 }
 
-func ErrorFn(r arrow.Record, c Chunk, fields map[string]struct{}) error {
+func ErrorFn(r arrow.RecordBatch, c Chunk, fields map[string]struct{}) error {
 	return errors.New("test fn error")
 }
 

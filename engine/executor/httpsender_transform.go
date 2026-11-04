@@ -23,9 +23,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/array"
-	"github.com/apache/arrow/go/v13/arrow/memory"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -741,7 +741,7 @@ func (g *RecordsGenerator) Generate(chunk Chunk, lastChunk bool, records []*mode
 		if !lastChunk || g.prevTags == nil {
 			return records
 		}
-		record := g.recordBuilder.NewRecord()
+		record := g.recordBuilder.NewRecordBatch()
 		records = append(records, &models.RecordContainer{Name: g.name, Data: record, Tags: g.prevTags})
 		g.prevTags = nil
 		return records
@@ -772,7 +772,7 @@ func (g *RecordsGenerator) Generate(chunk Chunk, lastChunk bool, records []*mode
 		}
 		tags := chunkTags[index].KeyValues()
 		if index == 0 && tagIndexLen > 0 && g.prevTags != nil && !hybridqp.EqualMap(tags, g.prevTags) {
-			record := g.recordBuilder.NewRecord()
+			record := g.recordBuilder.NewRecordBatch()
 			records = append(records, &models.RecordContainer{Name: name, Data: record, Tags: g.prevTags})
 		}
 		err = g.buildRecords(g.recordBuilder, start, end, times, columns)
@@ -786,7 +786,7 @@ func (g *RecordsGenerator) Generate(chunk Chunk, lastChunk bool, records []*mode
 			break
 		}
 		g.prevTags = nil
-		record := g.recordBuilder.NewRecord()
+		record := g.recordBuilder.NewRecordBatch()
 		records = append(records, &models.RecordContainer{Name: name, Data: record, Tags: tags})
 	}
 	return records

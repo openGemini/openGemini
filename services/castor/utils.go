@@ -20,7 +20,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/openGemini/openGemini/lib/errno"
 )
 
@@ -31,7 +31,7 @@ func IsInternalKey(key string) bool {
 }
 
 // return value from record's metadata according to key
-func GetMetaValueFromRecord(data arrow.Record, key string) (string, *errno.Error) {
+func GetMetaValueFromRecord(data arrow.RecordBatch, key string) (string, *errno.Error) {
 	md := data.Schema().Metadata()
 	idx := md.FindKey(key)
 	if idx == -1 {
@@ -60,7 +60,7 @@ func NewRespChan(size int) (*respChan, error) {
 		return nil, errno.NewError(errno.DataTooMuch, maxRespBufSize, size)
 	}
 	return &respChan{
-		C:     make(chan arrow.Record, size),
+		C:     make(chan arrow.RecordBatch, size),
 		ErrCh: make(chan *errno.Error, size),
 		alive: true,
 	}, nil
@@ -68,7 +68,7 @@ func NewRespChan(size int) (*respChan, error) {
 
 type respChan struct {
 	mu    sync.Mutex
-	C     chan arrow.Record
+	C     chan arrow.RecordBatch
 	ErrCh chan *errno.Error
 	alive bool
 }
@@ -89,12 +89,12 @@ func (r *respChan) Close() {
 	close(r.ErrCh)
 }
 
-func newData(record arrow.Record) *data {
+func newData(record arrow.RecordBatch) *data {
 	return &data{record: record}
 }
 
 type data struct {
-	record   arrow.Record
+	record   arrow.RecordBatch
 	retryCnt int
 	err      *errno.Error
 }
@@ -109,5 +109,5 @@ func (d *data) size() int {
 
 type dataChanSet struct {
 	dataChan   chan *data
-	resultChan chan arrow.Record
+	resultChan chan arrow.RecordBatch
 }

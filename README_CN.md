@@ -92,7 +92,7 @@ openGemini 是云原生计算基金会 (CNCF) 的一个沙箱项目。如果您�
 
 ### 编译环境信息
 
-[GO](https://golang.org/dl/) version v1.20+
+[GO](https://golang.org/dl/) version v1.26.10+
 
 [Python](https://www.python.org/downloads/) version v3.7+
 

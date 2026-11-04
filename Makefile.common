@@ -46,7 +46,7 @@ install-goimports-reviser:
 	@$(GO) install github.com/incu6us/goimports-reviser/v3@v3.13.2
 
 install-staticcheck:
-	@$(GO) install honnef.co/go/tools/cmd/staticcheck@v0.6.0
+	@$(GO) install honnef.co/go/tools/cmd/staticcheck@v0.8.2
 
 install-golangci-lint:
 	@$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.2

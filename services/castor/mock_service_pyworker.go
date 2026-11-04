@@ -21,15 +21,15 @@ import (
 	"net"
 
 	"github.com/BurntSushi/toml"
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/array"
-	"github.com/apache/arrow/go/v13/arrow/memory"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/openGemini/openGemini/lib/config"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
 
-func mockPyworkerHandleData(recs []arrow.Record, conn net.Conn) error {
+func mockPyworkerHandleData(recs []arrow.RecordBatch, conn net.Conn) error {
 	for _, rec := range recs {
 		metaKeys := rec.Schema().Metadata().Keys()
 		metaVals := rec.Schema().Metadata().Values()
@@ -57,7 +57,7 @@ func mockPyworkerHandleData(recs []arrow.Record, conn net.Conn) error {
 		valid := []bool{true}
 		b.Field(0).(*array.Float64Builder).AppendValues([]float64{0}, valid)
 		b.Field(1).(*array.Int64Builder).AppendValues([]int64{0}, valid)
-		if err := writeData(b.NewRecord(), conn); err != nil {
+		if err := writeData(b.NewRecordBatch(), conn); err != nil {
 			return err
 		}
 	}
@@ -94,7 +94,7 @@ func MockPyWorker(addr string) error {
 }
 
 // mock castor response
-func BuildNumericRecord() arrow.Record {
+func BuildNumericRecord() arrow.RecordBatch {
 	metaKeys := []string{"t", string(AnomalyNum), string(MessageType), string(TaskID)}
 	metaVals := []string{"1", "1", string(DATA), ""}
 	metaData := arrow.NewMetadata(metaKeys, metaVals)
@@ -115,12 +115,12 @@ func BuildNumericRecord() arrow.Record {
 	b.Field(1).(*array.Float64Builder).AppendValues([]float64{0, 1.0, 2.0, 3.0}, valid)
 	b.Field(2).(*array.Int64Builder).AppendValues([]int64{0, 1, 2, 3}, valid)
 
-	rec := b.NewRecord()
+	rec := b.NewRecordBatch()
 	return rec
 }
 
 // mock castor_ad response
-func BuildStringRecord() arrow.Record {
+func BuildStringRecord() arrow.RecordBatch {
 	metaKeys := []string{"t", string(AnomalyNum), string(MessageType), string(TaskID)}
 	metaVals := []string{"1", "1", string(DATA), ""}
 	metaData := arrow.NewMetadata(metaKeys, metaVals)
@@ -139,11 +139,11 @@ func BuildStringRecord() arrow.Record {
 	b.Field(0).(*array.StringBuilder).AppendValues([]string{"{}"}, valid)
 	b.Field(1).(*array.Int64Builder).AppendValues([]int64{0}, valid)
 
-	rec := b.NewRecord()
+	rec := b.NewRecordBatch()
 	return rec
 }
 
-func BuildEmptyRecord() arrow.Record {
+func BuildEmptyRecord() arrow.RecordBatch {
 	metaKeys := []string{"t", string(AnomalyNum), string(MessageType), string(TaskID)}
 	metaVals := []string{"1", "1", string(DATA), ""}
 	metaData := arrow.NewMetadata(metaKeys, metaVals)
@@ -152,7 +152,7 @@ func BuildEmptyRecord() arrow.Record {
 	pool := memory.NewGoAllocator()
 	b := array.NewRecordBuilder(pool, schema)
 	defer b.Release()
-	rec := b.NewRecord()
+	rec := b.NewRecordBatch()
 	return rec
 }
 

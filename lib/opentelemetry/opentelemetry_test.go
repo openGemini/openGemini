@@ -27,9 +27,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/array"
-	"github.com/apache/arrow/go/v13/arrow/memory"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/openGemini/openGemini/lib/opentelemetry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,7 +103,7 @@ func TestInjectContextToRecord(t *testing.T) {
 	assert.Equal(t, traceId, subSpan.SpanContext().TraceID().String())
 }
 
-func buildTestRecord() arrow.Record {
+func buildTestRecord() arrow.RecordBatch {
 	pool := memory.NewGoAllocator()
 	schema := arrow.NewSchema(
 		[]arrow.Field{
@@ -134,6 +134,6 @@ func buildTestRecord() arrow.Record {
 
 	activeArray := activeBuilder.NewBooleanArray()
 
-	record := array.NewRecord(schema, []arrow.Array{nameArray, ageArray, activeArray}, 4)
+	record := array.NewRecordBatch(schema, []arrow.Array{nameArray, ageArray, activeArray}, 4)
 	return record
 }

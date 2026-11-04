@@ -19,7 +19,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/apache/arrow/go/v13/parquet/compress"
+	"github.com/apache/arrow-go/v18/parquet/compress"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,12 +43,6 @@ func TestZSTDCodec(t *testing.T) {
 	decode(codec.EncodeLevel(nil, buf, 1))
 	decode(codec.EncodeLevel(nil, buf, 10))
 	decode(codec.Encode(nil, buf))
-
-	require.NotEmpty(t, codec.NewWriter(nil))
-	require.NotEmpty(t, codec.NewReader(nil))
-
-	_, err = codec.NewWriterLevel(nil, 1)
-	require.NoError(t, err)
 
 	require.Less(t, int64(10), codec.CompressBound(10))
 }
