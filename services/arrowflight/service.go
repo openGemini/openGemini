@@ -26,10 +26,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/flight"
-	"github.com/apache/arrow/go/v13/arrow/ipc"
-	"github.com/apache/arrow/go/v13/arrow/memory"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/flight"
+	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -54,7 +54,7 @@ const (
 )
 
 type RecordWriter interface {
-	RetryWriteRecord(database, retentionPolicy, measurement string, rec arrow.Record) error
+	RetryWriteRecord(database, retentionPolicy, measurement string, rec arrow.RecordBatch) error
 }
 
 type FlightMetaClient interface {
@@ -82,7 +82,7 @@ type Service struct {
 	MetaClient FlightMetaClient
 
 	RecordWriter interface {
-		RetryWriteRecord(database, retentionPolicy, measurement string, rec arrow.Record) error
+		RetryWriteRecord(database, retentionPolicy, measurement string, rec arrow.RecordBatch) error
 	}
 }
 
@@ -329,7 +329,7 @@ func (s *flightServer) DoPut(server flight.FlightService_DoPutServer) error {
 
 	s.logger.Info("arrow flight DoPut starting", zap.String("DB", metaData.DataBase), zap.String("rp", metaData.RetentionPolicy), zap.String("mst", metaData.Measurement))
 	for wr.Next() {
-		r := wr.Record()
+		r := wr.RecordBatch()
 		r.Retain() // Memory reserved. The value of reference counting is increased by 1.
 
 		err = s.RecordWriter.RetryWriteRecord(metaData.DataBase, metaData.RetentionPolicy, metaData.Measurement, r)

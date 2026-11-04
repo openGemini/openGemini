@@ -25,9 +25,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/array"
-	"github.com/apache/arrow/go/v13/arrow/memory"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
@@ -73,7 +73,7 @@ func (w *MockStorageEngine) WriteRec(db, rp, mst string, ptId uint32, shardID ui
 
 var StrValuePad = "aaaaabbbbbcccccdddddeeeeefffffggggghhhhhiiiijjjjj"
 
-func MockArrowRecords(numRec, numRowPerRec int) []arrow.Record {
+func MockArrowRecords(numRec, numRowPerRec int) []arrow.RecordBatch {
 	schema := arrow.NewSchema(
 		[]arrow.Field{
 			{Name: "int", Type: arrow.PrimitiveTypes.Int64},
@@ -88,7 +88,7 @@ func MockArrowRecords(numRec, numRowPerRec int) []arrow.Record {
 	b := array.NewRecordBuilder(memory.DefaultAllocator, schema)
 	b.Retain()
 
-	recs := make([]arrow.Record, 0, numRec)
+	recs := make([]arrow.RecordBatch, 0, numRec)
 	now := time.Now().UnixNano()
 	for i := 0; i < numRec; i++ {
 		for j := 0; j < numRowPerRec; j++ {
@@ -102,7 +102,7 @@ func MockArrowRecords(numRec, numRowPerRec int) []arrow.Record {
 			b.Field(3).(*array.StringBuilder).Append(fmt.Sprintf("%s-%d", StrValuePad, i*numRec+j))
 			b.Field(4).(*array.Int64Builder).Append(now + int64(i*numRec+j))
 		}
-		rec := b.NewRecord()
+		rec := b.NewRecordBatch()
 		rec.Retain()
 		recs = append(recs, rec)
 	}
@@ -470,24 +470,24 @@ func TestSplitAndWriteByShardErr(t *testing.T) {
 	assert.Equal(t, errno.Equal(err, errno.ArrowFlightGetShardGroupErr), true)
 }
 
-func MockArrowRecord1() arrow.Record {
+func MockArrowRecord1() arrow.RecordBatch {
 	schema := arrow.NewSchema([]arrow.Field{{Name: "time", Type: arrow.PrimitiveTypes.Int64}}, nil)
-	return array.NewRecordBuilder(memory.DefaultAllocator, schema).NewRecord()
+	return array.NewRecordBuilder(memory.DefaultAllocator, schema).NewRecordBatch()
 }
 
-func MockArrowRecord2() arrow.Record {
+func MockArrowRecord2() arrow.RecordBatch {
 	schema := arrow.NewSchema([]arrow.Field{{Name: "int1", Type: arrow.PrimitiveTypes.Int64}, {Name: "time", Type: arrow.PrimitiveTypes.Int64}}, nil)
-	return array.NewRecordBuilder(memory.DefaultAllocator, schema).NewRecord()
+	return array.NewRecordBuilder(memory.DefaultAllocator, schema).NewRecordBatch()
 }
 
-func MockArrowRecord3() arrow.Record {
+func MockArrowRecord3() arrow.RecordBatch {
 	schema := arrow.NewSchema([]arrow.Field{{Name: "time", Type: arrow.PrimitiveTypes.Float64}, {Name: "int", Type: arrow.PrimitiveTypes.Int64}}, nil)
-	return array.NewRecordBuilder(memory.DefaultAllocator, schema).NewRecord()
+	return array.NewRecordBuilder(memory.DefaultAllocator, schema).NewRecordBatch()
 }
 
-func MockArrowRecord4() arrow.Record {
+func MockArrowRecord4() arrow.RecordBatch {
 	schema := arrow.NewSchema([]arrow.Field{{Name: "int", Type: arrow.PrimitiveTypes.Float64}, {Name: "time", Type: arrow.PrimitiveTypes.Int64}}, nil)
-	return array.NewRecordBuilder(memory.DefaultAllocator, schema).NewRecord()
+	return array.NewRecordBuilder(memory.DefaultAllocator, schema).NewRecordBatch()
 }
 
 func MockRecord1() *record.Record {

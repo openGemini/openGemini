@@ -86,23 +86,69 @@ func TestGetCustomProxy(t *testing.T) {
 	u, err := url.Parse("http://127.0.0.1:8080")
 	customProxy, err := proxy.GetCustomProxy(u, "127.0.0.2:8086", bytes.NewBufferString("test").Bytes(), true)
 	require.NoError(t, err)
-	require.NotNil(t, *customProxy)
+	require.NotNil(t, customProxy)
 	r := httptest.NewRequest("POST", "http://localhost:8086/test", io.NopCloser(bytes.NewBufferString("test")))
 	w := httptest.NewRecorder()
-	customProxy.Transport = &CusTransport{}
+	transport := &CusTransport{}
+	customProxy.Transport = transport
 	customProxy.ServeHTTP(w, r)
-	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "test", w.Body.String())
+	require.NotNil(t, transport.req)
+	require.Equal(t, "https", transport.req.URL.Scheme)
+	require.Equal(t, "127.0.0.2:8086", transport.req.URL.Host)
+	require.Equal(t, "/test", transport.req.URL.Path)
+	require.Equal(t, int64(4), transport.req.ContentLength)
 
 	u, err = url.Parse("https://127.0.0.1:8080")
 	customProxy, err = proxy.GetCustomProxy(u, "127.0.0.2:8086", bytes.NewBufferString("test").Bytes(), true)
 	require.NoError(t, err)
-	require.NotNil(t, *customProxy)
+	require.NotNil(t, customProxy)
+}
+
+func TestGetCustomProxyPreservesXForwardedFor(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		incoming string
+		want     string
+	}{
+		{
+			name: "direct_client",
+			want: "192.0.2.10",
+		},
+		{
+			name:     "existing_trusted_chain",
+			incoming: "198.51.100.7",
+			want:     "198.51.100.7, 192.0.2.10",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "http://frontend:8086/api/v1/query_range?query=up", nil)
+			r.RemoteAddr = "192.0.2.10:12345"
+			if tc.incoming != "" {
+				r.Header.Set("X-Forwarded-For", tc.incoming)
+			}
+
+			p, err := proxy.GetCustomProxy(r.URL, "127.0.0.2:8086", nil, false)
+			require.NoError(t, err)
+			transport := &CusTransport{}
+			p.Transport = transport
+			w := httptest.NewRecorder()
+			p.ServeHTTP(w, r)
+
+			require.Equal(t, http.StatusOK, w.Code)
+			require.NotNil(t, transport.req)
+			require.Equal(t, tc.want, transport.req.Header.Get("X-Forwarded-For"))
+		})
+	}
 }
 
 type CusTransport struct {
+	req *http.Request
 }
 
-func (*CusTransport) RoundTrip(*http.Request) (*http.Response, error) {
+func (t *CusTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.req = req
 	return &http.Response{
 		StatusCode: 200,
 		Body:       io.NopCloser(bytes.NewBufferString("test")),

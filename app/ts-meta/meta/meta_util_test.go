@@ -100,9 +100,8 @@ func MakeRaftListen(c *config.Meta) (net.Listener, net.Listener, error) {
 	mux := tcp.NewMux(tcp.MuxLogger(c.Logging.NewLumberjackLogger("meta_mux")))
 	log := zap.NewNop()
 	go func() {
-		if err := mux.Serve(ln); err != nil {
-			log.Warn("mux server closed", zap.Error(err))
-		}
+		err := mux.Serve(ln)
+		log.Warn("mux server closed", zap.Error(err))
 	}()
 
 	return ln, mux.Listen(MuxHeader), nil

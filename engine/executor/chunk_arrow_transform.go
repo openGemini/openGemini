@@ -20,9 +20,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/array"
-	"github.com/apache/arrow/go/v13/arrow/memory"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/influxdata/influxdb/uuid"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -91,7 +91,7 @@ type CastorParams struct {
 }
 
 // ChunkToArrowRecords must release record after use
-func ChunkToArrowRecords(chunks []Chunk, taskId string, args []influxql.Expr) ([]arrow.Record, error) {
+func ChunkToArrowRecords(chunks []Chunk, taskId string, args []influxql.Expr) ([]arrow.RecordBatch, error) {
 	seriesFieldInfo, err := GetFieldInfo(chunks)
 	if err != nil {
 		return nil, err
@@ -150,14 +150,14 @@ func ChunkToArrowRecords(chunks []Chunk, taskId string, args []influxql.Expr) ([
 		return nil, err
 	}
 
-	var ret []arrow.Record
+	var ret []arrow.RecordBatch
 	for _, b := range builderWithoutInterval {
-		rec := b.NewRecord()
+		rec := b.NewRecordBatch()
 		ret = append(ret, rec)
 		b.Release()
 	}
 	for _, b := range builderWithInterval {
-		rec := b.NewRecord()
+		rec := b.NewRecordBatch()
 		ret = append(ret, rec)
 		b.Release()
 	}
@@ -433,7 +433,7 @@ func appendArrowInt64(b *array.RecordBuilder, col Column, fieldIndex, seriesStar
 	}
 }
 
-func CopyCastorADArrowRecordToChunk(r arrow.Record, c Chunk, fields map[string]struct{}) error {
+func CopyCastorADArrowRecordToChunk(r arrow.RecordBatch, c Chunk, fields map[string]struct{}) error {
 	if r.NumRows() == 0 {
 		return nil
 	}
@@ -464,7 +464,7 @@ func CopyCastorADArrowRecordToChunk(r arrow.Record, c Chunk, fields map[string]s
 	return nil
 }
 
-func MergeRecordColToChunk(r arrow.Record, c Chunk) error {
+func MergeRecordColToChunk(r arrow.RecordBatch, c Chunk) error {
 	schema := r.Schema()
 
 	idx := 0
@@ -509,7 +509,7 @@ func MergeRecordColToChunk(r arrow.Record, c Chunk) error {
 	return nil
 }
 
-func CopyArrowRecordToChunk(r arrow.Record, c Chunk, fields map[string]struct{}) error {
+func CopyArrowRecordToChunk(r arrow.RecordBatch, c Chunk, fields map[string]struct{}) error {
 	// check errInfo, if exist, just return it
 	metaData := r.Schema().Metadata()
 	errInfoIdx := metaData.FindKey(string(castor.ErrInfo))
@@ -614,7 +614,7 @@ func buildChunkTagsWithFilter(metaData arrow.Metadata) *ChunkTags {
 	return NewChunkTags(newTags, validKeys)
 }
 
-func getTimestamp(r arrow.Record) (*array.Int64, *errno.Error) {
+func getTimestamp(r arrow.RecordBatch) (*array.Int64, *errno.Error) {
 	timeFieldIdx := r.Schema().FieldIndices(string(castor.DataTime))
 	if len(timeFieldIdx) != 1 {
 		timeFieldIdx = r.Schema().FieldIndices(string(castor.DataTimeStamp))
@@ -629,7 +629,7 @@ func getTimestamp(r arrow.Record) (*array.Int64, *errno.Error) {
 	return rTime, nil
 }
 
-func copyRecordToChunk(r arrow.Record, c Chunk, fields map[string]struct{}) *errno.Error {
+func copyRecordToChunk(r arrow.RecordBatch, c Chunk, fields map[string]struct{}) *errno.Error {
 	schema := r.Schema()
 	idx := 0
 	for j, rCol := range r.Columns() {

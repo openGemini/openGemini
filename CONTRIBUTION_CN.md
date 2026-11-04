@@ -123,7 +123,7 @@ openGemini
 
 #### 4.2.2 编译环境信息
 
-[GO](https://golang.org/dl/) version v1.20+
+[GO](https://golang.org/dl/) version v1.26.10+
 
 [Python](https://www.python.org/downloads/) version v3.7+
 

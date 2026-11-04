@@ -20,12 +20,12 @@ import (
 	"os"
 	"sync/atomic"
 
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/array"
-	"github.com/apache/arrow/go/v13/arrow/memory"
-	"github.com/apache/arrow/go/v13/parquet"
-	"github.com/apache/arrow/go/v13/parquet/compress"
-	"github.com/apache/arrow/go/v13/parquet/pqarrow"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/apache/arrow-go/v18/parquet"
+	"github.com/apache/arrow-go/v18/parquet/compress"
+	"github.com/apache/arrow-go/v18/parquet/pqarrow"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/record"
@@ -205,7 +205,7 @@ func (w *Writer) WriteRecord(series map[string]string, rec *record.Record) error
 func (w *Writer) ForceFlush() error {
 	b := w.recordBuilder
 	aw := w.arrowWriter
-	arrowRecord := b.NewRecord()
+	arrowRecord := b.NewRecordBatch()
 	defer arrowRecord.Release()
 	if arrowRecord.NumRows() == 0 {
 		return nil

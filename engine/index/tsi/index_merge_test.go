@@ -43,7 +43,7 @@ func TestMergeIndexRows(t *testing.T) {
 			t.Fatalf("unexpected len(resultItemsB); got %d; want %d", len(resultItemsB), len(expectedItems))
 		}
 		if !checkItemsSorted(resultData, resultItemsB) {
-			t.Fatalf("result items aren't sorted; items:\n%q", resultItemsB)
+			t.Fatalf("result items aren't sorted; items:\n%+v", resultItemsB)
 		}
 		buf := resultData
 		for i, it := range resultItemsB {
@@ -284,7 +284,7 @@ func TestMergeItemsForLabelStore(t *testing.T) {
 			t.Fatalf("unexpected len(resultItemsB); got %d; want %d", len(resultItemsB), len(expectedItems))
 		}
 		if !checkItemsSorted(resultData, resultItemsB) {
-			t.Fatalf("result items aren't sorted; items:\n%q", resultItemsB)
+			t.Fatalf("result items aren't sorted; items:\n%+v", resultItemsB)
 		}
 		buf := resultData
 		for i, it := range resultItemsB {

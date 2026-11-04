@@ -15,16 +15,15 @@
 package parquet
 
 import (
-	"io"
 	"sync"
 	_ "unsafe" // for go linkname
 
-	"github.com/apache/arrow/go/v13/parquet/compress"
+	"github.com/apache/arrow-go/v18/parquet/compress"
 	"github.com/klauspost/compress/zstd"
 	"github.com/openGemini/openGemini/lib/cpu"
 )
 
-//go:linkname codecs github.com/apache/arrow/go/v13/parquet/compress.codecs
+//go:linkname codecs github.com/apache/arrow-go/v18/parquet/compress.codecs
 var codecs map[compress.Compression]compress.Codec
 var defaultZSTDCodec compress.Codec
 
@@ -41,18 +40,6 @@ type zstdCodec struct {
 
 func (z *zstdCodec) Decode(dst, src []byte) []byte {
 	return defaultZSTDCodec.Decode(dst, src)
-}
-
-func (z *zstdCodec) NewReader(r io.Reader) io.ReadCloser {
-	return defaultZSTDCodec.NewReader(r)
-}
-
-func (z *zstdCodec) NewWriter(w io.Writer) io.WriteCloser {
-	return defaultZSTDCodec.NewWriter(w)
-}
-
-func (z *zstdCodec) NewWriterLevel(w io.Writer, level int) (io.WriteCloser, error) {
-	return defaultZSTDCodec.NewWriterLevel(w, level)
 }
 
 func (z *zstdCodec) Encode(dst, src []byte) []byte {

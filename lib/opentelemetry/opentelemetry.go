@@ -22,8 +22,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -89,7 +89,7 @@ func newOtlpTraceExporter(endPoint string, httpsEnabled bool, storePath string, 
 	return exp, err
 }
 
-func InjectContextToRecord(r arrow.Record, ctx context.Context) arrow.Record {
+func InjectContextToRecord(r arrow.RecordBatch, ctx context.Context) arrow.RecordBatch {
 	propagator := otel.GetTextMapPropagator()
 	carrier := make(map[string]string)
 	propagator.Inject(ctx, propagation.MapCarrier(carrier))
@@ -110,6 +110,6 @@ func InjectContextToRecord(r arrow.Record, ctx context.Context) arrow.Record {
 		r.Schema().Fields(),
 		&newMeta,
 	)
-	newRec := array.NewRecord(newSchema, r.Columns(), r.NumRows())
+	newRec := array.NewRecordBatch(newSchema, r.Columns(), r.NumRows())
 	return newRec
 }

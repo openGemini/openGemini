@@ -26,7 +26,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/bufferpool"
@@ -110,7 +110,7 @@ func NewRecordWriter(timeout time.Duration, ptNum, recMsgChFactor int) *RecordWr
 	return rw
 }
 
-func (w *RecordWriter) RetryWriteRecord(database, retentionPolicy, measurement string, rec arrow.Record) error {
+func (w *RecordWriter) RetryWriteRecord(database, retentionPolicy, measurement string, rec arrow.RecordBatch) error {
 	w.recMsgCh <- &RecMsg{
 		Database:        database,
 		RetentionPolicy: retentionPolicy,
@@ -304,7 +304,7 @@ func (w *RecordWriter) processRecord(msg *RecMsg, ptIdx int) {
 			w.logger.Error("processRecord err", zap.String("db", msg.Database), zap.String("rp", msg.RetentionPolicy), zap.String("mst", msg.Measurement), zap.Error(writeErr))
 		}
 		switch m := msg.Rec.(type) {
-		case arrow.Record:
+		case arrow.RecordBatch:
 			m.Release()
 		case *record.Record:
 			if msg.MsgType == record.LogStoreRecord {
@@ -322,7 +322,7 @@ func (w *RecordWriter) processRecord(msg *RecMsg, ptIdx int) {
 	}
 	start := time.Now()
 	switch m := msg.Rec.(type) {
-	case arrow.Record:
+	case arrow.RecordBatch:
 		writeErr = w.writeRecord(msg.Database, msg.RetentionPolicy, msg.Measurement, m, ptIdx)
 		rowNums = m.NumRows()
 	case *record.Record:
@@ -339,7 +339,7 @@ func (w *RecordWriter) processRecord(msg *RecMsg, ptIdx int) {
 	handlerStat.WriteStoresDuration.AddSinceNano(start)
 }
 
-func (w *RecordWriter) writeRecord(db, rp, mst string, rec arrow.Record, ptIdx int) error {
+func (w *RecordWriter) writeRecord(db, rp, mst string, rec arrow.RecordBatch, ptIdx int) error {
 	colNum, rowNum := rec.NumCols(), rec.NumRows()
 	if colNum == 0 || rowNum == 0 {
 		return nil

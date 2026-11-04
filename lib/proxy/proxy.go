@@ -101,16 +101,18 @@ func GetCustomProxy(ul *url.URL, targetHost string, body []byte, httpsEnabled bo
 	if err != nil {
 		return nil, err
 	}
-	reverseProxy := httputil.NewSingleHostReverseProxy(uu)
-	originDirector := reverseProxy.Director
-	reverseProxy.Director = func(req *http.Request) {
-		originDirector(req)
-		if len(body) > 0 {
-			req.Body = io.NopCloser(bytes.NewBuffer(body))
-			req.ContentLength = int64(len(body))
-			req.Header.Set("Content-Length", strconv.Itoa(len(body)))
-		}
+	reverseProxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(uu)
+			pr.Out.Header["X-Forwarded-For"] = pr.In.Header["X-Forwarded-For"]
+			pr.SetXForwarded()
+			if len(body) > 0 {
+				pr.Out.Body = io.NopCloser(bytes.NewBuffer(body))
+				pr.Out.ContentLength = int64(len(body))
+				pr.Out.Header.Set("Content-Length", strconv.Itoa(len(body)))
+			}
+		},
+		Transport: defaultTransport,
 	}
-	reverseProxy.Transport = defaultTransport
 	return reverseProxy, nil
 }

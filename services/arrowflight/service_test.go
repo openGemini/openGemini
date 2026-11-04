@@ -22,11 +22,11 @@ import (
 	"log"
 	"testing"
 
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/array"
-	"github.com/apache/arrow/go/v13/arrow/flight"
-	"github.com/apache/arrow/go/v13/arrow/ipc"
-	"github.com/apache/arrow/go/v13/arrow/memory"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/flight"
+	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/cpu"
@@ -51,7 +51,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func MockArrowRecord(size int) arrow.Record {
+func MockArrowRecord(size int) arrow.RecordBatch {
 	schema := arrow.NewSchema(
 		[]arrow.Field{
 			{Name: "age", Type: arrow.PrimitiveTypes.Int64},
@@ -73,7 +73,7 @@ func MockArrowRecord(size int) arrow.Record {
 		b.Field(3).(*array.BooleanBuilder).AppendValues([]bool{true, false, true, false}, nil)
 		b.Field(4).(*array.Int64Builder).AppendValues([]int64{1629129600000000000, 1629129601000000000, 1629129602000000000, 1629129603000000000}, nil)
 	}
-	return b.NewRecord()
+	return b.NewRecordBatch()
 }
 
 type MockFlightMetaClient struct {
@@ -141,7 +141,7 @@ type WriteRecRes struct {
 	db   string
 	rp   string
 	mst  string
-	recs []arrow.Record
+	recs []arrow.RecordBatch
 }
 
 type MockRecordWriter struct {
@@ -149,7 +149,7 @@ type MockRecordWriter struct {
 
 var writeRecRes = &WriteRecRes{}
 
-func (w *MockRecordWriter) RetryWriteRecord(database, retentionPolicy, measurement string, rec arrow.Record) error {
+func (w *MockRecordWriter) RetryWriteRecord(database, retentionPolicy, measurement string, rec arrow.RecordBatch) error {
 	writeRecRes.recs = append(writeRecRes.recs, rec)
 	writeRecRes.db = database
 	writeRecRes.rp = retentionPolicy
@@ -193,7 +193,7 @@ func newMockStatementExecutor() *mockStatementExecutor {
 	return &mockStatementExecutor{}
 }
 
-func getRecords() (*arrow.Schema, []arrow.Record) {
+func getRecords() (*arrow.Schema, []arrow.RecordBatch) {
 	// 创建内存分配器
 	mem := memory.NewGoAllocator()
 
@@ -248,7 +248,7 @@ func getRecords() (*arrow.Schema, []arrow.Record) {
 	defer isStudentArray.Release()
 
 	// 创建Record
-	r := array.NewRecord(
+	r := array.NewRecordBatch(
 		schema,
 		[]arrow.Array{idArray, nameArray, ageArray, isStudentArray},
 		int64(len(ids)),
@@ -256,7 +256,7 @@ func getRecords() (*arrow.Schema, []arrow.Record) {
 
 	r.Retain()
 
-	return schema, []arrow.Record{r, r}
+	return schema, []arrow.RecordBatch{r, r}
 }
 
 var Token = "token"
@@ -606,7 +606,7 @@ func testArrowFlightServiceDoGet(t *testing.T, authEnabled bool) {
 		return
 	}
 	for reader.Next() {
-		rec := reader.Record()
+		rec := reader.RecordBatch()
 		assert.Equal(t, rec.NumRows(), int64(3))
 		rec.Release()
 	}

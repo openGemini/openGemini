@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -53,8 +53,8 @@ func newTimeValTuple(timestamp []int64, values []interface{}) *timeValList {
 func (t timeValList) Len() int           { return len(t) }
 func (t timeValList) Swap(i, j int)      { t[i], t[j] = t[j], t[i] }
 func (t timeValList) Less(i, j int) bool { return t[i].timestamp < t[j].timestamp }
-func matchContent(c executor.Chunk, recs []arrow.Record) bool {
-	// timestamp store as a column in arrow.Record
+func matchContent(c executor.Chunk, recs []arrow.RecordBatch) bool {
+	// timestamp store as a column in arrow.RecordBatch
 
 	// one series one record
 	if c.TagLen() != len(recs) {
@@ -194,7 +194,7 @@ func matchContent(c executor.Chunk, recs []arrow.Record) bool {
 	return true
 }
 
-func isTagMatch(c executor.Chunk, recs []arrow.Record) bool {
+func isTagMatch(c executor.Chunk, recs []arrow.RecordBatch) bool {
 	rKeyVals := make(map[string]map[string]struct{})
 	for _, r := range recs {
 		for i, k := range r.Schema().Metadata().Keys() {
@@ -222,7 +222,7 @@ func isTagMatch(c executor.Chunk, recs []arrow.Record) bool {
 	return true
 }
 
-func isTimeEqual(c executor.Chunk, recs []arrow.Record) bool {
+func isTimeEqual(c executor.Chunk, recs []arrow.RecordBatch) bool {
 	cTimes := c.Time()
 	var rTimes []int64
 
@@ -237,7 +237,7 @@ func isTimeEqual(c executor.Chunk, recs []arrow.Record) bool {
 	return reflect.DeepEqual(cTimes, rTimes)
 }
 
-func matchMultiContent(chunks []executor.Chunk, recs []arrow.Record) error {
+func matchMultiContent(chunks []executor.Chunk, recs []arrow.RecordBatch) error {
 	chunkVals := make(map[string][]interface{})
 	chunkTimes := make(map[string][]int64)
 	for _, c := range chunks {
@@ -464,7 +464,7 @@ func Test_arrowRecordToChunk(t *testing.T) {
 	if err := executor.CopyArrowRecordToChunk(rec, chunk, nil); err != nil {
 		t.Fatal("convert pure numeric record fail")
 	}
-	if !matchContent(chunk, []arrow.Record{rec}) {
+	if !matchContent(chunk, []arrow.RecordBatch{rec}) {
 		t.Fatal("content not match")
 	}
 }
@@ -481,7 +481,7 @@ func Test_castorADArrowRecordToChunk(t *testing.T) {
 	if err := executor.CopyCastorADArrowRecordToChunk(rec, chunk, nil); err != nil {
 		t.Fatal("convert pure numeric record fail")
 	}
-	if !matchContent(chunk, []arrow.Record{rec}) {
+	if !matchContent(chunk, []arrow.RecordBatch{rec}) {
 		t.Fatal("content not match")
 	}
 
