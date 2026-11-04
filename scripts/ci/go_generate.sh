@@ -87,11 +87,7 @@ genGrammar() {
 # for goyacc
 for i in `find . -name "*.y"`
 do
-  if [[ $(dirname $i) == *"ts-cli"* ]]; then
-    genGrammar $i QL parser.go
-  else
-    genGrammar $i yy y.go
-  fi
+  genGrammar $i yy y.go
 done
 
 GIT_STATUS=$(git status | grep "Changes not staged for commit") || echo ""

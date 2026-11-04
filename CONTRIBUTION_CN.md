@@ -24,7 +24,7 @@ openGemini
 
 | 目录        | 说明                                                         |
 | ----------- | ------------------------------------------------------------ |
-| app         | 包括ts-meta, ts-sql, ts-store, ts-monitor, ts-server, ts-cli等组件的启动和通信模块代码 |
+| app         | 包括ts-meta, ts-sql, ts-store, ts-monitor, ts-server等组件的启动和通信模块代码 |
 | build       | openGemin源码编译后，二进制文件存放目录                      |
 | config      | openGemini的配置文件存放目录                                 |
 | coordinator | 分布式系统的协调层，主要负责将读写请求分发到不同ts-store节点，还包含DDL命令执行时与ts-meta的元数据交互 |

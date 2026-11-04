@@ -24,7 +24,7 @@ openGemini
 
 | 目录        | 说明                                                         |
 | ----------- | ------------------------------------------------------------ |
-| app         | Including startup and communication module codes for ts-meta, ts-sql, ts-store, ts-monitor, ts-server, ts-cli and other components |
+| app         | Including startup and communication module codes for ts-meta, ts-sql, ts-store, ts-monitor, ts-server and other components |
 | build       | After the openGemin source code is compiled, the binary file is stored in the directory |
 | config      | OpenGemini's configuration file storage directory            |
 | coordinator | The coordination layer of the distributed system is mainly responsible for distributing read and write requests to different ts-store nodes, and also includes metadata interaction with ts-meta when DDL commands are executed. |

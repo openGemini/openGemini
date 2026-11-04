@@ -12,11 +12,13 @@ docker run -d --name opengemini-server-example opengeminidb/opengemini-server
 
 By default, starting above server instance will be run as the default user without password.
 
-### connect to it from gemini cli
+### connect with openGemini CLI
 
 ```shell
-docker exec -it opengemini-server-example ts-cli
+ts-cli --host 127.0.0.1 --port 8086
 ```
+
+Install the independent [openGemini CLI](https://github.com/openGemini/openGemini-cli) and expose port 8086 from the container when connecting from the host.
 
 
 ### stopping / removing the container
