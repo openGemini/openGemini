@@ -9564,20 +9564,25 @@ func TestCreateCursorIndexShardTierErr(t *testing.T) {
 	ctx := context.Background()
 	querySchema.Options().(*query.ProcessorOptions).Name = "cpu"
 
+	require.Eventually(t, func() bool {
+		tagSets, _, _, err := sh.Scan(nil, querySchema, func(int64) error { return nil })
+		return err == nil && len(tagSets) > 0
+	}, 5*time.Second, 50*time.Millisecond, "index did not return any series before checking tier errors")
+
 	sh.indexBuilder.Tier = util.Clearing
 	_, err := sh.CreateCursor(ctx, querySchema)
-	ast.Equal(t, err.Error(), "Index Clearing while reading, indexId:1, startTier:7, endTier:7")
+	require.EqualError(t, err, "Index Clearing while reading, indexId:1, startTier:7, endTier:7")
 
 	sh.indexBuilder.Tier = util.Cleared
 	sh.tier = util.Clearing
 	_, err = sh.CreateCursor(ctx, querySchema)
-	ast.Equal(t, err.Error(), "Shard Clearing while reading, shardId:1, startTier:7, endTier:7")
+	require.EqualError(t, err, "Shard Clearing while reading, shardId:1, startTier:7, endTier:7")
 
 	sh.tier = util.Cleared
 	_, err = sh.CreateCursor(ctx, querySchema)
-	ast.Equal(t, err, nil)
+	require.NoError(t, err)
 
 	sh.tier = util.Cold
 	_, err = sh.CreateCursor(ctx, querySchema)
-	ast.Equal(t, err.Error(), "misMatched shardId:1 and indexId:1, shardEndTier:3, indexEndTier:5")
+	require.EqualError(t, err, "misMatched shardId:1 and indexId:1, shardEndTier:3, indexEndTier:5")
 }
