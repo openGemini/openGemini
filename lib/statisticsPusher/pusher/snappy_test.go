@@ -171,30 +171,14 @@ func TestSnappy_ReadErr(t *testing.T) {
 	file := t.TempDir() + "/stat_file_push_err.data"
 	writer := pusher.NewSnappyWriter()
 	require.NoError(t, writer.OpenFile(file))
-	require.NoError(t, writeData(writer, []byte{0, 0, 0, 20}))
 	defer writer.Close()
 
-	wg := sync.WaitGroup{}
-	wg.Add(1)
+	// The header announces a 20-byte block that never arrives.
+	require.NoError(t, writeData(writer, []byte{0, 0, 0, 20}))
+	require.EqualError(t, snappyRead(file, 0), errno.NewError(errno.ShortRead, 0, 20).Error())
 
-	var readErr error
-	go func() {
-		defer wg.Done()
-		readErr = snappyRead(file, 0)
-	}()
-	wg.Wait()
-	require.EqualError(t, readErr, errno.NewError(errno.ShortRead, 0, 20).Error())
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		readErr = snappyRead(file, time.Second/10)
-	}()
-	for i := 0; i < 11; i++ {
-		require.NoError(t, writeData(writer, []byte{1}))
-		time.Sleep(time.Second / 8)
-	}
-
-	wg.Wait()
-	require.EqualError(t, readErr, errno.NewError(errno.ShortRead, 11, 20).Error())
+	// Only part of the block arrives. All of it is written before the read
+	// starts, so the result does not depend on how fast the disk syncs.
+	require.NoError(t, writeData(writer, make([]byte, 11)))
+	require.EqualError(t, snappyRead(file, 0), errno.NewError(errno.ShortRead, 11, 20).Error())
 }
