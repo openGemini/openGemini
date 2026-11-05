@@ -22,18 +22,18 @@ This code is originally from: https://github.com/dgraph-io/dgraph/blob/v23.1.1/r
 package raftlog
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
 
-	"github.com/cockroachdb/errors"
 	"github.com/openGemini/openGemini/lib/logger"
 	"go.etcd.io/etcd/raft/v3"
 	"go.etcd.io/etcd/raft/v3/raftpb"
 	"go.uber.org/zap"
 )
 
-var errNotFound = errors.New("Unable to find raft entry")
+var errNotFound = errors.New("unable to find raft entry")
 
 // wal represents the entire entry log. It consists of one or more
 // entryFile objects. This object is not lock protected but it's used by
@@ -339,15 +339,15 @@ func (l *entryLog) rotate(firstIndex uint64, offset int) error {
 
 	err := l.current.entry.Truncate(int64(offset))
 	if err != nil {
-		return errors.Wrapf(err, "while truncating entry file")
+		return fmt.Errorf("while truncating entry file: %w", err)
 	}
 	if err = l.current.entry.TrySync(); err != nil {
-		return errors.Wrapf(err, "while trying sync entry file")
+		return fmt.Errorf("while trying sync entry file: %w", err)
 	}
 
 	ef, err := openLogFile(l.dir, nextFid)
 	if err != nil {
-		return errors.Wrapf(err, "while creating a new entry file")
+		return fmt.Errorf("while creating a new entry file: %w", err)
 	}
 
 	// Move the existing current file to the end of the list of files and
@@ -461,9 +461,9 @@ func (l *entryLog) getEntryFile(fidx int) *logFile {
 func (l *entryLog) Close() error {
 	var err error
 	for _, file := range l.files {
-		err = errors.CombineErrors(file.Close(), err)
+		err = errors.Join(file.Close(), err)
 	}
-	return errors.CombineErrors(l.current.Close(), err)
+	return errors.Join(l.current.Close(), err)
 }
 
 func (l *entryLog) FileRLock() {

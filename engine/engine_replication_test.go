@@ -96,7 +96,7 @@ func TestStartRaftNode(t *testing.T) {
 	dbPt.id = 7 // not existed
 	err = e.startRaftNode(1, 1, dbPt, client, nil)
 	assert1.Error(t, err)
-	assert1.EqualError(t, err, "Got database: test, ptId: 7 peers error, opId:1")
+	assert1.EqualError(t, err, "got database: test, ptId: 7 peers error, opId:1")
 }
 
 func TestSendRaftMessage_ErrorGetPartition(t *testing.T) {
@@ -194,5 +194,5 @@ func TestCheckRepGroupStatus(t *testing.T) {
 	assert1.NoError(t, err)
 
 	err2 := e.checkRepGroupStatus(1, "testUnFull", 1)
-	assert1.Equal(t, "Got database: testUnFull, ptId: 1 raftGroup is still UnFull, opId:1", err2.Error())
+	assert1.Equal(t, "got database: testUnFull, ptId: 1 raftGroup is still UnFull, opId:1", err2.Error())
 }
