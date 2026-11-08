@@ -57,7 +57,7 @@ func TestParquetTaskPrepare(t *testing.T) {
 			Files:  []string{tsspFile, mergedFile},
 			enable: false,
 		}}
-		p1 := gomonkey.ApplyFunc(fileops.Mkdir, func(_ string, _ os.FileMode, _ ...fileops.FSOption) error {
+		p1 := gomonkey.ApplyFunc(fileops.MkdirAll, func(_ string, _ os.FileMode, _ ...fileops.FSOption) error {
 			return nil
 		})
 		defer p1.Reset()
