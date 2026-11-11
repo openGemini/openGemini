@@ -53,6 +53,7 @@ import (
 	"github.com/openGemini/openGemini/services/castor"
 	"github.com/openGemini/openGemini/services/continuousquery"
 	"github.com/openGemini/openGemini/services/fence"
+	"github.com/openGemini/openGemini/services/graphite"
 	"github.com/openGemini/openGemini/services/runtimecfg"
 	"github.com/openGemini/openGemini/services/sherlock"
 	"github.com/openGemini/openGemini/services/writer"
@@ -98,6 +99,8 @@ type Server struct {
 	runtimeCfgService *runtimecfg.Service
 
 	writerService *writer.Service
+
+	graphiteServices []*graphite.Service
 
 	ctx          context.Context
 	ctxCancel    context.CancelFunc
@@ -215,6 +218,9 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	}
 
 	s.initRecordWriterService()
+	if err = s.initGraphiteServices(); err != nil {
+		return nil, err
+	}
 	util.SetTopoManagerUrl(c.Topo.TopoManagerUrl)
 	return s, nil
 }
@@ -288,6 +294,21 @@ func (s *Server) initRecordWriterService() {
 	}
 	ws.WithAuthorizer(a)
 	s.writerService = ws
+}
+
+func (s *Server) initGraphiteServices() error {
+	for _, c := range s.config.Graphite {
+		if !c.Enabled {
+			continue
+		}
+		srv, err := graphite.NewService(c)
+		if err != nil {
+			return err
+		}
+		srv.WithLogger(s.Logger)
+		s.graphiteServices = append(s.graphiteServices, srv)
+	}
+	return nil
 }
 
 func (s *Server) initArrowFlightService(c *config.TSSql) error {
@@ -442,6 +463,14 @@ func (s *Server) Open() error {
 		}
 	}
 
+	for _, srv := range s.graphiteServices {
+		srv.PointsWriter = s.PointsWriter
+		srv.MetaClient = s.MetaClient
+		if err := srv.Open(); err != nil {
+			return err
+		}
+	}
+
 	if config.GetStoreConfig().Fence.FenceEnable {
 		err := fence.ManagerIns().Open()
 		if err != nil {
@@ -497,6 +526,10 @@ func (s *Server) Close() error {
 
 	if s.httpService != nil {
 		util.MustClose(s.httpService)
+	}
+
+	for _, srv := range s.graphiteServices {
+		util.MustClose(srv)
 	}
 
 	if s.arrowFlightService != nil {
