@@ -220,6 +220,16 @@ func TestParse(t *testing.T) {
 			time:        testTime,
 		},
 		{
+			test:        "negative fractional timestamp",
+			input:       `cpu 1 -0.5`,
+			template:    "measurement",
+			measurement: "cpu",
+			tags:        map[string]string{},
+			field:       "value",
+			value:       1,
+			time:        time.Unix(-1, int64(500*time.Millisecond)),
+		},
+		{
 			test:        "fractional timestamp",
 			input:       `cpu 1 1435077219.5`,
 			template:    "measurement",

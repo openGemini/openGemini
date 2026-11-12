@@ -35,6 +35,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/graphite"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -42,6 +43,9 @@ import (
 )
 
 const udpBufferSize = 65536
+
+// maxLineSize is the longest line accepted on a TCP connection.
+const maxLineSize = 64 * 1024
 
 // PointsWriter writes the rows parsed from the Graphite lines.
 type PointsWriter interface {
@@ -256,15 +260,32 @@ func (s *Service) handleTCPConnection(conn net.Conn) {
 		_ = conn.Close()
 	}()
 
-	reader := bufio.NewReader(conn)
+	reader := bufio.NewReaderSize(conn, maxLineSize)
 	for {
-		// Read up to the next newline.
-		buf, err := reader.ReadBytes('\n')
+		// Read up to the next newline, never buffering more than maxLineSize bytes.
+		buf, err := reader.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			s.logger.Warn("graphite line too long, dropping it", zap.Int("max", maxLineSize))
+			if err = discardLine(reader); err != nil {
+				return
+			}
+			continue
+		}
 		if len(buf) > 0 {
 			s.handleLine(strings.TrimSpace(string(buf)))
 		}
 		if err != nil {
 			return
+		}
+	}
+}
+
+// discardLine skips the rest of the current line.
+func discardLine(reader *bufio.Reader) error {
+	for {
+		_, err := reader.ReadSlice('\n')
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return err
 		}
 	}
 }
@@ -327,7 +348,31 @@ func (s *Service) handleLine(line string) {
 		return
 	}
 
+	if err = checkPointSize(point); err != nil {
+		s.logger.Warn("graphite dropped point", zap.String("line", line), zap.Error(err))
+		return
+	}
+
 	s.rows <- pointToRow(point)
+}
+
+// checkPointSize ensures the point fits the limits of the shard-write serialization.
+func checkPointSize(p graphite.Point) error {
+	if len(p.Measurement) > util.MaxMeasurementLength {
+		return errno.NewError(errno.MeasurementNameTooLong, p.Measurement, util.MaxMeasurementLength, len(p.Measurement))
+	}
+	if len(p.Field) > util.MaxFieldNameLength {
+		return errno.NewError(errno.FieldNameTooLong, p.Field, util.MaxFieldNameLength, len(p.Field))
+	}
+	for k, v := range p.Tags {
+		if len(k) > util.MaxTagNameLength {
+			return errno.NewError(errno.TagNameTooLong, k, util.MaxTagNameLength, len(k))
+		}
+		if len(v) > util.MaxTagValueLength {
+			return errno.NewError(errno.TagValueTooLong, k, util.MaxTagValueLength, len(v))
+		}
+	}
+	return nil
 }
 
 // pointToRow converts a Graphite point to a row with sorted tags, dropping tags with an empty value.

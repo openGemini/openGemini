@@ -169,7 +169,8 @@ func (p *Parser) Parse(line string) (Point, error) {
 		// See https://github.com/graphite-project/carbon/issues/54
 		if unixTime != float64(-1) {
 			// Check if we have fractional seconds
-			timestamp = time.Unix(int64(unixTime), int64((unixTime-math.Floor(unixTime))*float64(time.Second)))
+			sec := math.Floor(unixTime)
+			timestamp = time.Unix(int64(sec), int64((unixTime-sec)*float64(time.Second)))
 			if timestamp.Before(MinDate) || timestamp.After(MaxDate) {
 				return Point{}, fmt.Errorf("timestamp out of range")
 			}

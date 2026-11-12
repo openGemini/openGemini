@@ -17,6 +17,7 @@ package graphite
 import (
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ import (
 	itoml "github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/graphite"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -163,6 +165,44 @@ func TestService_TCP(t *testing.T) {
 	}, batches[0].rows)
 	require.Equal(t, graphite.DefaultDatabase, m.createdDB)
 	require.Equal(t, 1, m.numCreates)
+}
+
+func TestService_TCPLongLine(t *testing.T) {
+	s, w, _ := newTestService(t, graphite.Config{BatchSize: 1, BatchTimeout: itoml.Duration(time.Hour)})
+	require.NoError(t, s.Open())
+	defer func() {
+		require.NoError(t, s.Close())
+	}()
+
+	conn, err := net.Dial("tcp", s.Addr().String())
+	require.NoError(t, err)
+	long := strings.Repeat("a", 3*maxLineSize)
+	_, err = conn.Write([]byte(long + " 1 1435077219\ncpu 2 1435077220\n"))
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	batches := waitBatches(t, w, 1)
+	require.Len(t, batches, 1)
+	require.Equal(t, "cpu", batches[0].rows[0].Name)
+}
+
+func TestService_DropOversizedPoint(t *testing.T) {
+	s, w, _ := newTestService(t, graphite.Config{BatchSize: 1, BatchTimeout: itoml.Duration(time.Hour)})
+	require.NoError(t, s.Open())
+	defer func() {
+		require.NoError(t, s.Close())
+	}()
+
+	conn, err := net.Dial("tcp", s.Addr().String())
+	require.NoError(t, err)
+	long := strings.Repeat("a", util.MaxMeasurementLength+1)
+	_, err = conn.Write([]byte(long + " 1 1435077219\ncpu 2 1435077220\n"))
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	batches := waitBatches(t, w, 1)
+	require.Len(t, batches, 1)
+	require.Equal(t, "cpu", batches[0].rows[0].Name)
 }
 
 func TestService_UDP(t *testing.T) {
