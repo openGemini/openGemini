@@ -74,7 +74,7 @@ a fresh `/tmp/openGemini` directory:
 make gotest PACKAGES_OPEN_GEMINI_TESTS="./engine/executor ./lib/config"
 
 # Equivalent manual invocation for a quick run
-go test -gcflags "all=-N -l" -tags failpoint -short -count 1 -p 1 -run TestName ./lib/config
+go test -gcflags "all=-N -l" -gcflags "runtime=" -tags failpoint -short -count 1 -p 1 -run TestName ./lib/config
 ```
 
 - `make gotest` without arguments runs every package except `tests/` and is
@@ -98,9 +98,16 @@ Generated files are committed and CI fails if regenerating them produces a
 diff (`make go-generate`, see `scripts/ci/go_generate.sh`). Never edit them by
 hand:
 
-- `*.gen.go` files come from the `*.tmpl` templates next to them through
-  `//go:generate tmpl ...` directives. Change the template or its `tmpldata`
-  file and run `go generate` in that package.
+- Most `*.gen.go` files come from `*.tmpl` templates through
+  `//go:generate tmpl ...` directives. Find the directive (for example in
+  `app/ts-meta/meta/processor.go`, `lib/compress/mlf/decompressor.go` or
+  `lib/statisticsPusher/statistics/gen/gen.go`), change the template or its
+  data file and run `go generate` in the package that holds the directive.
+  The statistics files are generated from `lib/statisticsPusher/statistics/gen`,
+  not from the statistics package itself.
+- `engine/executor/chunk_codec.gen.go` has no template. It is written by
+  `TestGenTrunk` in `engine/executor/chunk_codec_test.go`, which only runs
+  with `GO_DEV=true`.
 - `y.go` parsers are generated from `sql.y` (InfluxQL in
   `lib/util/lifted/influx/influxql`, log queries in `lib/util/lifted/logparser`)
   with `goyacc` plus post-processing in `scripts/ci/go_generate.sh`. The
