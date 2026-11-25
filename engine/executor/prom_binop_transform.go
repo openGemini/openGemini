@@ -300,7 +300,7 @@ func (trans *BinOpTransform) initComputeFn() {
 	case parser.ATAN2:
 		trans.computeValue = BinOpATAN2
 	default:
-		panic(fmt.Errorf("operator %q not allowed", trans.OpType))
+		panic(fmt.Errorf("operator %q not allowed", parser.ItemType(trans.OpType)))
 	}
 }
 

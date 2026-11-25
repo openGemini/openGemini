@@ -15,15 +15,15 @@
 package record
 
 import (
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/array"
-	"github.com/apache/arrow/go/v13/arrow/memory"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
-func ArrowRecordToNativeRecord(rec arrow.Record, r *Record) error {
+func ArrowRecordToNativeRecord(rec arrow.RecordBatch, r *Record) error {
 	for i := 0; i < r.ColNums(); i++ {
 		r.ColVals[i].Len = rec.Column(i).Len()
 		r.ColVals[i].NilCount = rec.Column(i).NullN()

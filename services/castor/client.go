@@ -25,8 +25,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/ipc"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 )
@@ -37,7 +37,7 @@ type ByteReadReader interface {
 }
 
 // write record into connection
-func writeData(record arrow.Record, out io.WriteCloser) error {
+func writeData(record arrow.RecordBatch, out io.WriteCloser) error {
 	w := ipc.NewWriter(out, ipc.WithSchema(record.Schema()))
 	err := w.Write(record)
 	if err != nil {
@@ -51,7 +51,7 @@ func writeData(record arrow.Record, out io.WriteCloser) error {
 }
 
 // read record from connection
-func readData(in ByteReadReader) ([]arrow.Record, error) {
+func readData(in ByteReadReader) ([]arrow.RecordBatch, error) {
 	rdr, err := ipc.NewReader(in)
 	if err != nil {
 		if strings.HasSuffix(err.Error(), ": EOF") {
@@ -62,9 +62,9 @@ func readData(in ByteReadReader) ([]arrow.Record, error) {
 		}
 		return nil, err
 	}
-	var records []arrow.Record
+	var records []arrow.RecordBatch
 	for rdr.Next() {
-		out := rdr.Record()
+		out := rdr.RecordBatch()
 		out.Retain()
 		records = append(records, out)
 	}
@@ -185,7 +185,7 @@ func (h *castorCli) close() {
 	h.logger.Info("close castorCli")
 }
 
-func checkRecordType(rec arrow.Record) *errno.Error {
+func checkRecordType(rec arrow.RecordBatch) *errno.Error {
 	msgType, err := GetMetaValueFromRecord(rec, string(MessageType))
 	if err != nil {
 		return errno.NewError(errno.UnknownDataMessage)

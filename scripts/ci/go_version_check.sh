@@ -3,7 +3,7 @@
 set -eo pipefail
 
 function main () {
-    # Compare language versions, so go.mod accepts both 1.25 and 1.25.0.
+    # Compare language versions, so go.mod accepts both 1.26 and 1.26.0.
     local current_version required_version
     current_version=$(go version | sed -nE 's/^.*go([0-9]+\.[0-9]+).*$/\1/p')
     required_version=$(sed -nE 's/^[[:space:]]*go[[:space:]]+([0-9]+\.[0-9]+)(\.[0-9]+)?([[:space:]]|$).*/\1/p' go.mod)

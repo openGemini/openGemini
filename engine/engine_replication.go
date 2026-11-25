@@ -15,11 +15,11 @@
 package engine
 
 import (
+	"fmt"
 	"path"
 	"strconv"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/metaclient"
@@ -59,7 +59,7 @@ func (e *EngineImpl) startRaftNode(opId uint64, nodeId uint64, dbPt *DBPTInfo, c
 	}
 	if rgId == -1 || len(ptGroup[uint32(rgId)]) <= 0 {
 		e.log.Error("[ASSIGN]Got database: %s, ptId: %d peers error, opId:%d", zap.String("db", database), zap.Uint32("pt", ptId))
-		return errors.Newf("Got database: %s, ptId: %d peers error, opId:%d", database, ptId, opId)
+		return fmt.Errorf("got database: %s, ptId: %d peers error, opId:%d", database, ptId, opId)
 	}
 	var peers []raft.Peer
 	ptPeers := ptGroup[uint32(rgId)]
@@ -131,7 +131,7 @@ func (e *EngineImpl) checkRepGroupStatus(opId uint64, database string, ptId uint
 			e.log.Error("[ASSIGN]start raft node failed,rep status is UnFull, need retry", zap.String("db", database), zap.Uint32("pt", ptId), zap.Error(err))
 		}
 		if retryNum < 0 {
-			return errors.Newf("Got database: %s, ptId: %d raftGroup is still UnFull, opId:%d", database, ptId, opId)
+			return fmt.Errorf("got database: %s, ptId: %d raftGroup is still UnFull, opId:%d", database, ptId, opId)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -144,7 +144,7 @@ func (e *EngineImpl) SendRaftMessage(database string, ptId uint64, msgs raftpb.M
 		if errno.Equal(err, errno.DBPTClosed) {
 			return err
 		}
-		return errors.Wrapf(err, "get partition %s:%d error", database, ptId)
+		return fmt.Errorf("get partition %s:%d error: %w", database, ptId, err)
 	}
 	if dbPt.node == nil {
 		return nil

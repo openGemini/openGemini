@@ -51,19 +51,19 @@ run_case() {
     fi
 }
 
-run_case 1.25.0 1.25.0 pass
-run_case 1.25.0 1.25 pass
-run_case 1.25 1.25.0 pass
-run_case 1.25.6 1.25.0 pass
-run_case 1.25rc1 1.25.0 pass
-run_case 1.24.9 1.25.0 fail
-run_case 1.26.4 1.25.0 fail
-run_case 2.25.0 1.25.0 fail
-run_case invalid 1.25.0 fail
-run_case 1.25.0 '' fail
-run_case 1.25.0 1.25.0 fail 1
-run_case 1.25.0 1.25 pass 0 crlf
-run_case 1.25.0 1.25.0 pass 0 crlf
+run_case 1.26.10 1.26.10 pass
+run_case 1.26.10 1.26 pass
+run_case 1.26 1.26.10 pass
+run_case 1.26.9 1.26.10 pass
+run_case 1.26rc1 1.26.10 pass
+run_case 1.25.9 1.26.10 fail
+run_case 1.27.0 1.26.10 fail
+run_case 2.26.0 1.26.10 fail
+run_case invalid 1.26.10 fail
+run_case 1.26.10 '' fail
+run_case 1.26.10 1.26.10 fail 1
+run_case 1.26.10 1.26 pass 0 crlf
+run_case 1.26.10 1.26.10 pass 0 crlf
 
 if [ "$failures" -ne 0 ]; then
     printf '%s regression checks failed\n' "$failures" >&2

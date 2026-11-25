@@ -21,10 +21,10 @@ import (
 	"net"
 	"testing"
 
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/array"
-	"github.com/apache/arrow/go/v13/arrow/flight"
-	"github.com/apache/arrow/go/v13/arrow/memory"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/flight"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/cpu"
@@ -117,7 +117,7 @@ func newQueryExecutorForTest() *query.Executor {
 	return queryExecutor
 }
 
-func getRecords() (*arrow.Schema, []arrow.Record) {
+func getRecords() (*arrow.Schema, []arrow.RecordBatch) {
 	mem := memory.NewGoAllocator()
 	schema := arrow.NewSchema(
 		[]arrow.Field{
@@ -132,8 +132,8 @@ func getRecords() (*arrow.Schema, []arrow.Record) {
 	idBuilder.AppendValues([]int64{1, 2, 3}, nil)
 	nameBuilder := builder.Field(1).(*array.StringBuilder)
 	nameBuilder.AppendValues([]string{"Alice", "Bob", "Charlie"}, nil)
-	record := builder.NewRecord()
-	return schema, []arrow.Record{record}
+	record := builder.NewRecordBatch()
+	return schema, []arrow.RecordBatch{record}
 }
 
 type MockFlightMetaClient struct {

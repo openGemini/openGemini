@@ -1,4 +1,4 @@
-FROM fedora:latest AS builder
+FROM golang:1.26.10-bookworm AS builder
 
 WORKDIR /build
 
@@ -6,7 +6,7 @@ ENV GOPROXY=https://mirrors.huaweicloud.com/repository/goproxy/,https://goproxy.
 ENV CGO_ENABLED=1
 ENV GOBIN=/build/bin
 
-RUN dnf install golang gcc gcc-c++ git -y --setopt=tsflags=nodocs && dnf clean all
+RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ git && rm -rf /var/lib/apt/lists/*
 
 COPY . .
 

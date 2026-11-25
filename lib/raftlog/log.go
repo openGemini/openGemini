@@ -23,6 +23,7 @@ package raftlog
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,7 +31,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cockroachdb/errors"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -115,10 +115,10 @@ func openLogFile(dir string, fid int64) (*logFile, error) {
 	} else {
 		lf.entry, err = OpenFileV2(fpath, os.O_CREATE|os.O_RDWR, logFileOffset)
 	}
-	if errors.Is(err, NewFile) {
+	if errors.Is(err, ErrNewFile) {
 		logger.GetLogger().Info(fmt.Sprintf("New file: %d\n", fid))
 	} else if err != nil {
-		return nil, errors.Wrapf(err, "fail to open entry log file: %s", fpath)
+		return nil, fmt.Errorf("fail to open entry log file: %s: %w", fpath, err)
 	}
 	return lf, nil
 }
@@ -181,7 +181,7 @@ func (lf *logFile) delete() error {
 func getLogFiles(dir string) ([]*logFile, error) {
 	fis, err := fileops.ReadDir(dir)
 	if err != nil && !os.IsNotExist(err) {
-		return nil, errors.Wrapf(err, "fail to read raft entry log dir: %s", dir)
+		return nil, fmt.Errorf("fail to read raft entry log dir: %s: %w", dir, err)
 	}
 	var entryFiles = make([]os.FileInfo, 0, len(fis))
 	for _, fi := range fis {
@@ -202,11 +202,11 @@ func getLogFiles(dir string) ([]*logFile, error) {
 
 		fid, err := strconv.ParseInt(fname, 10, 64)
 		if err != nil {
-			return nil, errors.Wrapf(err, "while parsing: %s", fi.Name())
+			return nil, fmt.Errorf("while parsing: %s: %w", fi.Name(), err)
 		}
 
 		if _, ok := seen[fid]; ok {
-			return nil, errors.Newf("Entry file with id: %d is repeated. file: %s", fid, fi.Name())
+			return nil, fmt.Errorf("entry file with id: %d is repeated. file: %s", fid, fi.Name())
 		}
 		seen[fid] = struct{}{}
 
