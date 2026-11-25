@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"

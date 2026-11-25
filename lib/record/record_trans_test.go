@@ -21,15 +21,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/array"
-	"github.com/apache/arrow/go/v13/arrow/memory"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 )
 
-func MockArrowRecord(size int) arrow.Record {
+func MockArrowRecord(size int) arrow.RecordBatch {
 	s := arrow.NewSchema(
 		[]arrow.Field{
 			{Name: "age", Type: arrow.PrimitiveTypes.Int64},
@@ -51,7 +51,7 @@ func MockArrowRecord(size int) arrow.Record {
 		b.Field(3).(*array.BooleanBuilder).AppendValues([]bool{true, false, true, false}, nil)
 		b.Field(4).(*array.Int64Builder).AppendValues([]int64{1629129600000000000, 1629129601000000000, 1629129602000000000, 1629129603000000000}, nil)
 	}
-	return b.NewRecord()
+	return b.NewRecordBatch()
 }
 
 func MockNativeRecord(size int) *record.Record {
@@ -75,7 +75,7 @@ func MockNativeRecord(size int) *record.Record {
 	return b
 }
 
-func MockArrowRecordWithNull() arrow.Record {
+func MockArrowRecordWithNull() arrow.RecordBatch {
 	s := arrow.NewSchema(
 		[]arrow.Field{
 			{Name: "age", Type: arrow.PrimitiveTypes.Int64},
@@ -96,7 +96,7 @@ func MockArrowRecordWithNull() arrow.Record {
 	b.Field(3).(*array.StringBuilder).AppendValues([]string{"shenzhen", "shanghai", "beijin", "guangzhou"}, []bool{true, true, false, true})
 	b.Field(4).(*array.Int64Builder).AppendValues([]int64{1629129600000000000, 1629129601000000000, 1629129602000000000, 1629129603000000000}, []bool{true, true, true, true})
 
-	return b.NewRecord()
+	return b.NewRecordBatch()
 }
 
 func MockNativeRecordWithNull() *record.Record {
@@ -156,7 +156,7 @@ func TestToPrimitiveType(t *testing.T) {
 
 var StrValuePad = "aaaaabbbbbcccccdddddeeeeefffffggggghhhhhiiiijjjjj"
 
-func MockFlowScopeArrowRecord(recIdx, numIntField, numStrField, numRowPerRec, now int, withNull bool) arrow.Record {
+func MockFlowScopeArrowRecord(recIdx, numIntField, numStrField, numRowPerRec, now int, withNull bool) arrow.RecordBatch {
 	schemaField := make([]arrow.Field, 0, numIntField+numStrField+1)
 	for i := 0; i < numIntField; i++ {
 		schemaField = append(schemaField, arrow.Field{Name: fmt.Sprintf("intKey%d", i), Type: arrow.PrimitiveTypes.Int64})
@@ -191,13 +191,13 @@ func MockFlowScopeArrowRecord(recIdx, numIntField, numStrField, numRowPerRec, no
 		}
 		b.Field(timeFieldIdx).(*array.Int64Builder).Append(int64(now + recIdx*numRowPerRec + i))
 	}
-	return b.NewRecord()
+	return b.NewRecordBatch()
 }
 
-func MockFlowScopeArrowRecords(numRec, numRowPerRec, numIntField, numStrField int, withNull bool) []arrow.Record {
+func MockFlowScopeArrowRecords(numRec, numRowPerRec, numIntField, numStrField int, withNull bool) []arrow.RecordBatch {
 	rand.Seed(time.Now().UnixNano())
 	now := time.Now().Nanosecond()
-	recs := make([]arrow.Record, 0, numRec)
+	recs := make([]arrow.RecordBatch, 0, numRec)
 	for i := 0; i < numRec; i++ {
 		recs = append(recs, MockFlowScopeArrowRecord(i, numIntField, numStrField, numRowPerRec, now, withNull))
 	}

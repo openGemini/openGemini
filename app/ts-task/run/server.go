@@ -171,11 +171,10 @@ func (s *Server) Open() error {
 		// Multiplex listener.
 		mux := tcp.NewMux(tcp.MuxLogger(os.Stdout))
 		go func() {
-			if err := mux.Serve(ln); err != nil {
-				s.Logger.Error("listen failed",
-					zap.String("addr", ln.Addr().String()),
-					zap.Error(err))
-			}
+			err := mux.Serve(ln)
+			s.Logger.Error("listen failed",
+				zap.String("addr", ln.Addr().String()),
+				zap.Error(err))
 		}()
 	}
 

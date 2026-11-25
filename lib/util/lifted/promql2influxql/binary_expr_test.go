@@ -10,7 +10,7 @@ import (
 )
 
 func BinaryExpr(input string) *parser.BinaryExpr {
-	expr, err := parser.ParseExpr(input)
+	expr, err := PromQLParser.ParseExpr(input)
 	if err != nil {
 		panic(err)
 	}

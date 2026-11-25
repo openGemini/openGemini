@@ -12,7 +12,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxql"
 )

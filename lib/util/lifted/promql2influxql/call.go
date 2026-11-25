@@ -11,9 +11,8 @@ import (
 	"github.com/prometheus/prometheus/promql/parser"
 )
 
-func init() {
-	parser.EnableExperimentalFunctions = true
-}
+// PromQLParser applies openGemini's function set to query parsing and cache inspection.
+var PromQLParser = parser.NewParser(parser.Options{EnableExperimentalFunctions: true})
 
 var rangeVectorFunctions = map[string]aggregateFn{
 	"sum_over_time": {

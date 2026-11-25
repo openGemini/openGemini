@@ -55,7 +55,7 @@ func TestFileWrap_OpenFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Run("OpenFile", func(t *testing.T) {
 		fw, err := OpenFile(filepath.Join(tmpDir, "test"), os.O_CREATE|os.O_RDWR, 1000)
-		require.EqualError(t, err, NewFile.Error())
+		require.EqualError(t, err, ErrNewFile.Error())
 		defer fw.Close()
 
 		assert.Contains(t, fw.Name(), "test")
@@ -64,7 +64,7 @@ func TestFileWrap_OpenFile(t *testing.T) {
 
 	t.Run("OpenFile_twice", func(t *testing.T) {
 		fw, err := OpenFile(filepath.Join(tmpDir, "test2"), os.O_CREATE|os.O_RDWR, 1000)
-		require.EqualError(t, err, NewFile.Error())
+		require.EqualError(t, err, ErrNewFile.Error())
 		defer fw.Close()
 
 		assert.Contains(t, fw.Name(), "test")

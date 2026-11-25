@@ -29,7 +29,7 @@ func TestMain(m *testing.M) {
 }
 
 func numberLiteralExpr(input string) *parser.NumberLiteral {
-	expr, err := parser.ParseExpr(input)
+	expr, err := PromQLParser.ParseExpr(input)
 	if err != nil {
 		panic(err)
 	}
@@ -41,7 +41,7 @@ func numberLiteralExpr(input string) *parser.NumberLiteral {
 }
 
 func SubqueryExpr(input string) *parser.SubqueryExpr {
-	expr, err := parser.ParseExpr(input)
+	expr, err := PromQLParser.ParseExpr(input)
 	if err != nil {
 		panic(err)
 	}
@@ -53,7 +53,7 @@ func SubqueryExpr(input string) *parser.SubqueryExpr {
 }
 
 func StringLiteralExpr(input string) *parser.StringLiteral {
-	expr, err := parser.ParseExpr(input)
+	expr, err := PromQLParser.ParseExpr(input)
 	if err != nil {
 		panic(err)
 	}
@@ -65,7 +65,7 @@ func StringLiteralExpr(input string) *parser.StringLiteral {
 }
 
 func ParseExpr(input string) parser.Expr {
-	expr, err := parser.ParseExpr(input)
+	expr, err := PromQLParser.ParseExpr(input)
 	if err != nil {
 		panic(err)
 	}
@@ -1276,7 +1276,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 							},
 							PosRange: posrange.PositionRange{
 								Start: 29,
-								End:   52,
+								End:   51,
 							},
 						},
 					},
@@ -1467,7 +1467,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 	trans := &Transpiler{}
 	for _, test := range testCases {
 		t.Run(test.input, func(t *testing.T) {
-			expr, err := parser.ParseExpr(test.input)
+			expr, err := PromQLParser.ParseExpr(test.input)
 			require.NoError(t, err)
 			expr = trans.PreprocessExpr(expr, startTime, endTime)
 			if test.outputTest {

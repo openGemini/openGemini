@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/apache/arrow/go/v13/arrow"
-	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -629,7 +629,7 @@ func (wh *recordWriterHelper) checkAndUpdateRecordSchema(db, rp, mst, originName
 	return
 }
 
-func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst, originName string, rec arrow.Record) (startTime, endTime int64, r *record.Record, err error) {
+func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst, originName string, rec arrow.RecordBatch) (startTime, endTime int64, r *record.Record, err error) {
 	wh.fieldToCreatePool = wh.fieldToCreatePool[:0]
 	// check the number of columns
 	if rec.NumCols() <= 1 {

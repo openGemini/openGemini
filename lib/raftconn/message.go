@@ -15,7 +15,8 @@
 package raftconn
 
 import (
-	"github.com/cockroachdb/errors"
+	"errors"
+
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/config"

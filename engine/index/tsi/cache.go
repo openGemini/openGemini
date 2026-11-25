@@ -254,13 +254,13 @@ func newIndexCache(path string, store bool) *IndexCache {
 
 func (ic *IndexCache) close() error {
 	if ic.store {
-		if err := ic.SeriesKeyToTSIDCache.Save(filepath.Join(ic.path, SeriesKeyToTSIDCacheName)); err != nil {
+		if err := workingsetcache.Save(ic.SeriesKeyToTSIDCache, filepath.Join(ic.path, SeriesKeyToTSIDCacheName)); err != nil {
 			return err
 		}
-		if err := ic.TSIDToSeriesKeyCache.Save(filepath.Join(ic.path, TSIDToSeriesKeyCacheName)); err != nil {
+		if err := workingsetcache.Save(ic.TSIDToSeriesKeyCache, filepath.Join(ic.path, TSIDToSeriesKeyCacheName)); err != nil {
 			return err
 		}
-		if err := ic.TagKeyValueCache.Save(filepath.Join(ic.path, TagKeyToTagValueCacheName)); err != nil {
+		if err := workingsetcache.Save(ic.TagKeyValueCache, filepath.Join(ic.path, TagKeyToTagValueCacheName)); err != nil {
 			return err
 		}
 	}
