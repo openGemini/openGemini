@@ -382,6 +382,7 @@ type Store struct {
 	mu          sync.RWMutex
 	segregateMu sync.Mutex
 	closing     chan struct{}
+	stopOnce    sync.Once
 
 	config *config.Meta
 
@@ -1373,16 +1374,30 @@ func (s *Store) Close() error {
 	return s.close()
 }
 func (s *Store) close() error {
-	select {
-	case <-s.closing:
+	if !s.stopWorkers() {
 		return nil
-	default:
-		close(s.closing)
 	}
-	// wait checkLeaderChanged goroutine stopped to avoid cluster manager start and stop concurrently
-	s.deleteWg.Wait()
-	s.wg.Wait()
+	return s.closeResources()
+}
 
+func (s *Store) stopWorkers() bool {
+	stopped := false
+	s.stopOnce.Do(func() {
+		select {
+		case <-s.closing:
+			return
+		default:
+			close(s.closing)
+		}
+		// A leadership change can start managers and add deletion workers.
+		s.wg.Wait()
+		s.deleteWg.Wait()
+		stopped = true
+	})
+	return stopped
+}
+
+func (s *Store) closeResources() error {
 	if s.cm != nil {
 		s.cm.Close()
 	}

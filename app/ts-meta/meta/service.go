@@ -205,6 +205,7 @@ func (s *Service) openHttpServer() error {
 }
 
 func (s *Service) Close() error {
+	closeStore := s.store.stopWorkers()
 	if s.clusterManager != nil {
 		s.clusterManager.Close()
 	}
@@ -220,7 +221,10 @@ func (s *Service) Close() error {
 	if s.msm != nil {
 		s.msm.Stop()
 	}
-	err := s.store.close()
+	var err error
+	if closeStore {
+		err = s.store.closeResources()
+	}
 
 	if s.metaServer != nil {
 		s.metaServer.Stop()

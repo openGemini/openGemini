@@ -32,6 +32,26 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestServiceCloseWaitsForLeaderChange(t *testing.T) {
+	svc := &Service{
+		store:   &Store{closing: make(chan struct{}), config: &config.Meta{}},
+		msm:     NewMigrateStateMachine(),
+		closing: make(chan struct{}),
+	}
+	svc.msm.state = Running
+	recoveryStopped := make(chan bool, 1)
+	svc.store.wg.Add(1)
+	go func() {
+		defer svc.store.wg.Done()
+		<-svc.store.closing
+		recoveryStopped <- svc.msm.isStopped()
+	}()
+
+	require.NoError(t, svc.Close())
+	require.False(t, <-recoveryStopped, "migration recovery must stay available to the leadership worker")
+	require.True(t, svc.msm.isStopped())
+}
+
 func Test_StartReportServer(t *testing.T) {
 	svc := &Service{
 		store: &Store{
