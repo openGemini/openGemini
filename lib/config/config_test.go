@@ -156,6 +156,49 @@ func TestTSSql(t *testing.T) {
 	assert.EqualError(t, conf.Validate(), "comm meta-join must be specified")
 }
 
+func TestTSSql_Graphite(t *testing.T) {
+	txt := `
+[[graphite]]
+  enabled = true
+  bind-address = ":2003"
+  database = "metrics"
+  templates = ["servers.* .host.measurement*"]
+  tags = ["region=us-east"]
+
+[[graphite]]
+  enabled = true
+  protocol = "udp"
+  bind-address = ":2004"
+  separator = "_"
+`
+	configFile := t.TempDir() + "/sql.conf"
+	require.NoError(t, os.WriteFile(configFile, []byte(txt), 0600))
+
+	conf := config.NewTSSql(false)
+	require.Len(t, conf.Graphite, 1)
+	require.False(t, conf.Graphite[0].Enabled)
+
+	require.NoError(t, config.Parse(conf, configFile))
+	require.Len(t, conf.Graphite, 2)
+	assert.True(t, conf.Graphite[0].Enabled)
+	assert.Equal(t, ":2003", conf.Graphite[0].BindAddress)
+	assert.Equal(t, "metrics", conf.Graphite[0].Database)
+	assert.Equal(t, []string{"servers.* .host.measurement*"}, conf.Graphite[0].Templates)
+	assert.Equal(t, []string{"region=us-east"}, conf.Graphite[0].Tags)
+	assert.True(t, conf.Graphite[1].Enabled)
+	assert.Equal(t, ":2004", conf.Graphite[1].BindAddress)
+	assert.Equal(t, "udp", conf.Graphite[1].Protocol)
+	assert.Equal(t, "_", conf.Graphite[1].Separator)
+	require.NoError(t, conf.Validate())
+
+	conf.Graphite[1].Templates = []string{"host.region"}
+	require.EqualError(t, conf.Validate(), "invalid graphite config: no measurement in template `host.region`")
+
+	// disabled listeners are not validated
+	conf.Graphite[1].Enabled = false
+	require.NoError(t, conf.Validate())
+}
+
 func TestTSStore(t *testing.T) {
 	conf := config.NewTSStore(true)
 	conf.Data.InitFields()

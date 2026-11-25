@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/graphite"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/validation"
 	"github.com/openGemini/openGemini/services/fence"
@@ -82,6 +83,44 @@ func Test_NewServer_Open_Close(t *testing.T) {
 
 	err = server.Close()
 	require.NoError(t, err)
+}
+
+func Test_NewServer_Open_Close_Graphite(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	log := logger.NewLogger(errno.ModuleUnknown)
+
+	conf := config.NewTSSql(false)
+	conf.Common.MetaJoin = append(conf.Common.MetaJoin, []string{"127.0.0.1:9179"}...)
+	conf.Common.ReportEnable = false
+	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+	conf.Graphite[0].Enabled = true
+	conf.Graphite[0].BindAddress = "127.0.0.1:0"
+	udp := graphite.NewConfig()
+	udp.Enabled = true
+	udp.Protocol = "udp"
+	udp.BindAddress = "127.0.0.1:0"
+	disabled := graphite.NewConfig()
+	conf.Graphite = append(conf.Graphite, udp, disabled)
+
+	server, err := NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, log)
+	require.NoError(t, err)
+	services := server.(*Server).graphiteServices
+	require.Len(t, services, 2)
+
+	server.(*Server).initMetaClientFn = func() error {
+		return nil
+	}
+	require.NoError(t, server.Open())
+	for _, srv := range services {
+		require.NotNil(t, srv.Addr())
+		require.Same(t, server.(*Server).PointsWriter, srv.PointsWriter)
+	}
+	require.NoError(t, server.Close())
+
+	conf.Graphite[0].Protocol = "http"
+	_, err = NewServer(conf, app.ServerInfo{MonitorPass: &monitorP}, log)
+	require.EqualError(t, err, `invalid graphite config: unrecognized protocol "http", must be tcp or udp`)
 }
 
 func Test_NewServer_Open_Close_Flight(t *testing.T) {

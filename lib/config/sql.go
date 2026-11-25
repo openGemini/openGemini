@@ -16,11 +16,13 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"runtime"
 	"time"
 
 	"github.com/influxdata/influxdb/pkg/tlsconfig"
 	"github.com/influxdata/influxdb/toml"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/graphite"
 	httpdConfig "github.com/openGemini/openGemini/lib/util/lifted/influx/httpd/config"
 )
 
@@ -97,6 +99,9 @@ type TSSql struct {
 	RuntimeConfig RuntimeConfig     `toml:"runtime-config"`
 	RecordWrite   RecordWriteConfig `toml:"record-write"`
 	Topo          Topo              `toml:"topo"`
+
+	// Graphite holds the listeners receiving metrics in the Graphite plaintext protocol.
+	Graphite []graphite.Config `toml:"graphite"`
 }
 
 // NewTSSql returns an instance of Config with reasonable defaults.
@@ -119,6 +124,7 @@ func NewTSSql(enableGossip bool) *TSSql {
 	c.RuntimeConfig = NewRuntimeConfig()
 	c.RecordWrite = NewRecordWriteConfig()
 	c.Topo = NewTopo()
+	c.Graphite = []graphite.Config{graphite.NewConfig()}
 	return c
 }
 
@@ -201,6 +207,15 @@ func (c *TSSql) Validate() error {
 	for _, item := range items {
 		if err := item.Validate(); err != nil {
 			return err
+		}
+	}
+
+	for i := range c.Graphite {
+		if !c.Graphite[i].Enabled {
+			continue
+		}
+		if err := c.Graphite[i].Validate(); err != nil {
+			return fmt.Errorf("invalid graphite config: %v", err)
 		}
 	}
 
