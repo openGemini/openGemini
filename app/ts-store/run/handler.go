@@ -58,6 +58,12 @@ func (h *httpHandler) WrapHandler(hf http.HandlerFunc) http.Handler {
 
 // ServeHTTP responds to HTTP request to the handler.
 func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// This service is opened after the storage, so /ping succeeds once the storage is open.
+	if httpserver.IsPingRequest(r) {
+		httpserver.ServePing(w)
+		return
+	}
+
 	switch r.Method {
 	case "GET":
 		switch r.URL.Path {
