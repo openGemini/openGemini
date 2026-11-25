@@ -11,7 +11,7 @@ import (
 )
 
 func AggregateExpr(input string) *parser.AggregateExpr {
-	expr, err := parser.ParseExpr(input)
+	expr, err := PromQLParser.ParseExpr(input)
 	if err != nil {
 		panic(err)
 	}

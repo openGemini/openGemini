@@ -107,8 +107,8 @@ func parseLoad(lines []string, i int) (int, []string, error) {
 			i--
 			break
 		}
-		metric, vals, err := parser.ParseSeriesDesc(defLine)
-		if len(metric) > 0 {
+		metric, vals, err := promql2influxql.PromQLParser.ParseSeriesDesc(defLine)
+		if metric.Len() > 0 {
 			timeSeries = append(timeSeries, *GenTimeSeries(metric, vals, gap))
 		}
 		if err != nil {
@@ -134,16 +134,16 @@ func parseLoad(lines []string, i int) (int, []string, error) {
 }
 
 func GenTimeSeries(metric labels.Labels, vals []parser.SequenceValue, gap model.Duration) *prompb.TimeSeries {
-	if len(metric) == 0 {
+	if metric.Len() == 0 {
 		return nil
 	}
-	labels := make([]prompb.Label, 0, len(metric))
-	for _, m := range metric {
-		labels = append(labels, prompb.Label{
+	wireLabels := make([]prompb.Label, 0, metric.Len())
+	metric.Range(func(m labels.Label) {
+		wireLabels = append(wireLabels, prompb.Label{
 			Name:  m.Name,
 			Value: m.Value,
 		})
-	}
+	})
 
 	ts := testStartTime
 	samples := make([]prompb.Sample, 0, len(vals))
@@ -157,7 +157,7 @@ func GenTimeSeries(metric labels.Labels, vals []parser.SequenceValue, gap model.
 		ts = ts.Add(time.Duration(gap))
 	}
 	return &prompb.TimeSeries{
-		Labels:  labels,
+		Labels:  wireLabels,
 		Samples: samples,
 	}
 }
@@ -177,7 +177,7 @@ func (t *PromTest) parseEval(lines []string, i int) (int, []*Query, error) {
 		at   = parts[2]
 		expr = parts[3]
 	)
-	_, err := parser.ParseExpr(expr)
+	_, err := promql2influxql.PromQLParser.ParseExpr(expr)
 	if err != nil {
 		if perr, ok := err.(*parser.ParseErr); ok {
 			perr.LineOffset = i
@@ -212,7 +212,7 @@ func (t *PromTest) parseEval(lines []string, i int) (int, []*Query, error) {
 			})
 			break
 		}
-		metrics, vals, err := parser.ParseSeriesDesc(defLine)
+		metrics, vals, err := promql2influxql.PromQLParser.ParseSeriesDesc(defLine)
 		if err != nil {
 			if perr, ok := err.(*parser.ParseErr); ok {
 				perr.LineOffset = i
@@ -247,7 +247,7 @@ func AppendQueries(queries *[]*Query, line int, expr string, startTime time.Time
 	promExps := map[uint64]*PromExp{}
 	for _, e := range exps {
 		var h uint64 = 0
-		if e.Metric != nil && len(e.Metric) > 0 {
+		if e.Metric.Len() > 0 {
 			h = e.Metric.Hash()
 		}
 		promExps[h] = e
@@ -418,7 +418,7 @@ type atModifierTestCase struct {
 }
 
 func atModifierTestCases(exprStr string, evalTime time.Time) ([]atModifierTestCase, error) {
-	expr, err := parser.ParseExpr(exprStr)
+	expr, err := promql2influxql.PromQLParser.ParseExpr(exprStr)
 	if err != nil {
 		return nil, err
 	}

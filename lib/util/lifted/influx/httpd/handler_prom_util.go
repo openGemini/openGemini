@@ -888,7 +888,7 @@ func isExact(r *http.Request) bool {
 func parseMatchersParam(matchers []string) ([][]*labels2.Matcher, error) {
 	var matcherSets [][]*labels2.Matcher
 	for _, s := range matchers {
-		matchers, err := parser.ParseMetricSelector(s)
+		matchers, err := promql2influxql.PromQLParser.ParseMetricSelector(s)
 		if err != nil {
 			return nil, err
 		}
