@@ -11,4 +11,3 @@ type Sample = prompb.Sample
 type TimeSeries = prompb.TimeSeries
 
 type WriteRequest = prompb.WriteRequest
-type WriteRequestUnmarshaler = prompb.WriteRequestUnmarshaler
