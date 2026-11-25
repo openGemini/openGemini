@@ -336,7 +336,7 @@ func (idx *ShardKeyIndex) isSplitKey(rowCount, pos int64, shardKey []byte, f fun
 
 func (idx *ShardKeyIndex) Close() error {
 	idx.tb.MustClose()
-	return idx.cache.Save(path.Join(idx.path, ShardKeyCache))
+	return workingsetcache.Save(idx.cache, path.Join(idx.path, ShardKeyCache))
 }
 
 func (idx *ShardKeyIndex) loadSeriesCount() error {

@@ -248,7 +248,7 @@ func sliceFloats(points []promql.FPoint, minT int64) []promql.FPoint {
 }
 
 func sortPlanForQuery(q string) (sortPlan, error) {
-	expr, err := parser.ParseExpr(q)
+	expr, err := promql2influxql.PromQLParser.ParseExpr(q)
 	if err != nil {
 		return 0, err
 	}
