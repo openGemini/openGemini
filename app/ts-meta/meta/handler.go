@@ -114,8 +114,12 @@ func (h *httpHandler) WrapHandler(hf http.HandlerFunc) http.Handler {
 // ServeHTTP responds to HTTP request to the handler.
 func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Liveness probes are sent periodically, serve them without logging every request.
-	if httpserver.IsPingRequest(r) {
-		httpserver.ServePing(w)
+	if r.URL.Path == httpserver.PingPath {
+		if httpserver.IsPingRequest(r) {
+			httpserver.ServePing(w)
+		} else {
+			http.Error(w, "", http.StatusBadRequest)
+		}
 		return
 	}
 

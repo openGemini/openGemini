@@ -361,8 +361,10 @@ func TestHttpHandler_Ping(t *testing.T) {
 			assert.Empty(t, resp.Body.String())
 		}
 
-		resp := httptest.NewRecorder()
-		handler.ServeHTTP(resp, httptest.NewRequest(http.MethodPut, "/ping", nil))
-		assert.Equal(t, http.StatusBadRequest, resp.Code)
+		for _, method := range []string{http.MethodPost, http.MethodPut} {
+			resp := httptest.NewRecorder()
+			handler.ServeHTTP(resp, httptest.NewRequest(method, "/ping", nil))
+			assert.Equal(t, http.StatusBadRequest, resp.Code, "auth-enabled=%v method=%s", authEnabled, method)
+		}
 	}
 }
