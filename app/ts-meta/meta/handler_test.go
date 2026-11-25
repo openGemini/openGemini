@@ -349,3 +349,22 @@ func Test_httpHandler_serveGetdata(t *testing.T) {
 		assert.EqualValues(t, nil, err)
 	})
 }
+
+func TestHttpHandler_Ping(t *testing.T) {
+	// No meta client is set: /ping must not go through authentication.
+	for _, authEnabled := range []bool{false, true} {
+		handler := newHttpHandler(&config.Meta{AuthEnabled: authEnabled}, &MockIStore{})
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			resp := httptest.NewRecorder()
+			handler.ServeHTTP(resp, httptest.NewRequest(method, "/ping", nil))
+			assert.Equal(t, http.StatusNoContent, resp.Code, "auth-enabled=%v method=%s", authEnabled, method)
+			assert.Empty(t, resp.Body.String())
+		}
+
+		for _, method := range []string{http.MethodPost, http.MethodPut} {
+			resp := httptest.NewRecorder()
+			handler.ServeHTTP(resp, httptest.NewRequest(method, "/ping", nil))
+			assert.Equal(t, http.StatusBadRequest, resp.Code, "auth-enabled=%v method=%s", authEnabled, method)
+		}
+	}
+}

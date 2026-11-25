@@ -17,6 +17,7 @@ import (
 	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/flagutil"
 	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/prompb"
 	"github.com/klauspost/compress/snappy"
+	wirepb "github.com/prometheus/prometheus/prompb"
 )
 
 var maxInsertRequestSize = flagutil.NewBytes("maxInsertRequestSize", 32*1024*1024, "The maximum size in bytes of a single Prometheus remote_write API request")
@@ -75,17 +76,11 @@ func Parse(r io.Reader, isVMRemoteWrite bool, callback func(tss []prompb.TimeSer
 	}
 	wr := getWriteRequest()
 	defer putWriteRequest(wr)
-	if err := wr.UnmarshalProtobuf(bb.B); err != nil {
+	if err := wr.decode(bb.B); err != nil {
 		return fmt.Errorf("cannot unmarshal prompb.WriteRequest with size %d bytes: %w", len(bb.B), err)
 	}
 
-	rows := 0
-	tss := wr.Timeseries
-	for i := range tss {
-		rows += len(tss[i].Samples)
-	}
-
-	if err := callback(tss); err != nil {
+	if err := callback(wr.series); err != nil {
 		return fmt.Errorf("error when processing imported data: %w", err)
 	}
 	return nil
@@ -133,24 +128,58 @@ func putPushCtx(ctx *pushCtx) {
 }
 
 var pushCtxPool sync.Pool
-var writeRequestPool chan *prompb.WriteRequest
+var writeRequestPool chan *writeRequest
 var writeRequestSyncPool sync.Pool
 
-func getWriteRequest() *prompb.WriteRequest {
+type writeRequest struct {
+	series  []prompb.TimeSeries
+	labels  []prompb.Label
+	samples []prompb.Sample
+}
+
+func (wr *writeRequest) decode(src []byte) error {
+	// Preserve the original series for validation and partial-write responses.
+	// VictoriaMetrics' ingestion decoder drops empty series and expands histograms.
+	var msg wirepb.WriteRequest
+	if err := msg.Unmarshal(src); err != nil {
+		return err
+	}
+	for i := range msg.Timeseries {
+		ts := &msg.Timeseries[i]
+		labelStart, sampleStart := len(wr.labels), len(wr.samples)
+		for _, l := range ts.Labels {
+			wr.labels = append(wr.labels, prompb.Label{Name: l.Name, Value: l.Value})
+		}
+		for _, s := range ts.Samples {
+			wr.samples = append(wr.samples, prompb.Sample{Timestamp: s.Timestamp, Value: s.Value})
+		}
+		wr.series = append(wr.series, prompb.TimeSeries{
+			Labels:  wr.labels[labelStart:len(wr.labels):len(wr.labels)],
+			Samples: wr.samples[sampleStart:len(wr.samples):len(wr.samples)],
+		})
+	}
+	return nil
+}
+
+func getWriteRequest() *writeRequest {
 	select {
 	case wr := <-writeRequestPool:
 		return wr
 	default:
 		v := writeRequestSyncPool.Get()
 		if v == nil {
-			return &prompb.WriteRequest{}
+			return &writeRequest{}
 		}
-		return v.(*prompb.WriteRequest)
+		return v.(*writeRequest)
 	}
 }
 
-func putWriteRequest(wr *prompb.WriteRequest) {
-	wr.Reset()
+func putWriteRequest(wr *writeRequest) {
+	clear(wr.series)
+	clear(wr.labels)
+	wr.series = wr.series[:0]
+	wr.labels = wr.labels[:0]
+	wr.samples = wr.samples[:0]
 	select {
 	case writeRequestPool <- wr:
 	default:
@@ -159,5 +188,5 @@ func putWriteRequest(wr *prompb.WriteRequest) {
 }
 
 func NewWriteRequestPool(num int) {
-	writeRequestPool = make(chan *prompb.WriteRequest, num)
+	writeRequestPool = make(chan *writeRequest, num)
 }

@@ -308,13 +308,17 @@ func (rc *ResultsCache) isAtModifierCacheable(maxCacheTime int64, command *promq
 	if !strings.Contains(command.Cmd, "@") {
 		return true
 	}
-	expr, err := parser.ParseExpr(command.Cmd)
+	expr, err := promql2influxql.PromQLParser.ParseExpr(command.Cmd)
 	if err != nil {
 		rc.Logger.Error("failed to parse query,considering @ modifier as not cacheable", zap.Error(err))
 		return false
 	}
 
-	expr = promql.PreprocessExpr(expr, *command.Start, *command.End)
+	expr, err = promql.PreprocessExpr(expr, *command.Start, *command.End, command.Step)
+	if err != nil {
+		rc.Logger.Error("failed to preprocess query for cache", zap.Error(err))
+		return false
+	}
 	end := command.End.UnixNano()
 	shouldCache := true
 	parser.Inspect(expr, func(n parser.Node, _ []parser.Node) error {
@@ -348,7 +352,7 @@ func (rc *ResultsCache) isOffsetCacheable(command *promql2influxql.PromCommand) 
 	if !strings.Contains(command.Cmd, "offset") {
 		return true
 	}
-	expr, err := parser.ParseExpr(command.Cmd)
+	expr, err := promql2influxql.PromQLParser.ParseExpr(command.Cmd)
 	if err != nil {
 		rc.Logger.Error("failed to parse query,considering offset as not cacheable", zap.Error(err))
 		return false
