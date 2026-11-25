@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"strings"
 
-	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow-go/v18/arrow"
 )
 
 var (
@@ -21,7 +21,7 @@ type RecordContainer struct {
 
 	Partial bool `json:"partial,omitempty"`
 
-	Data arrow.Record `json:"-"`
+	Data arrow.RecordBatch `json:"-"`
 }
 
 func (c *RecordContainer) NewSlice(start int64, end int64) *RecordContainer {

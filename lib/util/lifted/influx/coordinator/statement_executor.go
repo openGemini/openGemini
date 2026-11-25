@@ -30,7 +30,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow-go/v18/arrow"
 	set "github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	"github.com/influxdata/influxdb/models"

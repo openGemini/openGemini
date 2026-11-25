@@ -16,9 +16,9 @@ package msgservice
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 
-	"github.com/cockroachdb/errors"
 	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/bufferpool"
@@ -640,7 +640,7 @@ func (r *RaftMessagesRequest) UnmarshalBinary(buf []byte) error {
 	r.PtId = dec.Uint32()
 	raftMsg := dec.BytesNoCopy()
 	if err := r.RaftMessage.Unmarshal(raftMsg); err != nil {
-		return errors.Wrapf(err, "unmarshal raft message error")
+		return fmt.Errorf("unmarshal raft message error: %w", err)
 	}
 	return nil
 }
