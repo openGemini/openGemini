@@ -75,7 +75,7 @@ func ValidateLabels(userID string, ls []prompb2.Label, unsafeMetricName string) 
 			return newNoMetricNameError()
 		}
 
-		if !model.IsValidMetricName(model.LabelValue(unsafeMetricName)) {
+		if !model.LegacyValidation.IsValidMetricName(unsafeMetricName) {
 			return newInvalidMetricNameError(unsafeMetricName)
 		}
 	}
@@ -89,7 +89,7 @@ func ValidateLabels(userID string, ls []prompb2.Label, unsafeMetricName string) 
 	maxLabelValueLength := limits.MaxLabelValueLength(userID)
 	lastLabelName := ""
 	for _, l := range ls {
-		if !model.LabelName(l.Name).IsValid() {
+		if !model.LegacyValidation.IsValidLabelName(l.Name) {
 			return newInvalidLabelError(ls, l.Name)
 		} else if len(l.Name) > maxLabelNameLength {
 			return newLabelNameTooLongError(ls, l.Name)

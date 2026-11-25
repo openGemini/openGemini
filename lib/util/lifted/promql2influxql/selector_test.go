@@ -11,7 +11,7 @@ import (
 )
 
 func VectorSelector(input string) *parser.VectorSelector {
-	expr, err := parser.ParseExpr(input)
+	expr, err := PromQLParser.ParseExpr(input)
 	if err != nil {
 		panic(err)
 	}
@@ -23,7 +23,7 @@ func VectorSelector(input string) *parser.VectorSelector {
 }
 
 func MatrixSelector(input string) *parser.MatrixSelector {
-	expr, err := parser.ParseExpr(input)
+	expr, err := PromQLParser.ParseExpr(input)
 	if err != nil {
 		panic(err)
 	}

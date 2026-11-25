@@ -798,7 +798,7 @@ func (h *Handler) execQuery(w ResponseWriter, r *http.Request, ctx context.Conte
 	db, rp := getDbRpByProm(h, r)
 
 	// Use the native parser of Prometheus to parse and generate AST.
-	expr, err := parser.ParseExpr(r.FormValue("query"))
+	expr, err := promql2influxql.PromQLParser.ParseExpr(r.FormValue("query"))
 	if err != nil {
 		apiErr = &apiError{
 			errorBadData, fmt.Errorf("invalid parameter %q: %w", "query", err),

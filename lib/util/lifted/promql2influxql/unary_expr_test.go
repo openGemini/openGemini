@@ -10,7 +10,7 @@ import (
 )
 
 func UnaryExpr(input string) *parser.UnaryExpr {
-	expr, err := parser.ParseExpr(input)
+	expr, err := PromQLParser.ParseExpr(input)
 	if err != nil {
 		panic(err)
 	}
