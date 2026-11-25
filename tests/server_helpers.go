@@ -820,7 +820,7 @@ func parseMetric(str string) uint64 {
 	if label == nil {
 		return 0
 	}
-	metric := make(labels.Labels, 0)
+	metric := make([]labels.Label, 0, len(label))
 	for _, m := range label {
 		if len(m) < 3 {
 			continue
@@ -830,8 +830,7 @@ func parseMetric(str string) uint64 {
 			Value: m[2],
 		})
 	}
-	h := metric.Hash()
-	return h
+	return labels.New(metric...).Hash()
 }
 
 func checkPromVector(exps map[uint64]*PromExp, act string) bool {

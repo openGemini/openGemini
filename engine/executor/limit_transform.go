@@ -226,9 +226,26 @@ func (trans *LimitTransform) abortSinkTransform() {
 		return
 	}
 
+	if !trans.dag.canAbortFromLimit(trans.vertex) {
+		return
+	}
+
 	go func() {
 		trans.dag.DepthFirstWalkVertex(trans, trans.vertex)
 	}()
+}
+
+// Store aborts are keyed by query ID, which sibling inputs share. A limit
+// may stop remote reads only when its output is the sole input downstream.
+func (dag *TransformDag) canAbortFromLimit(limit *TransformVertex) bool {
+	info := dag.mapVertexToInfo[limit]
+	for info != nil && len(info.directEdges) == 1 {
+		info = dag.mapVertexToInfo[info.directEdges[0].to]
+		if info == nil || len(info.backwardEdges) != 1 {
+			return false
+		}
+	}
+	return info != nil && len(info.directEdges) == 0
 }
 
 func (trans *LimitTransform) SingleRowLimitHelper() {

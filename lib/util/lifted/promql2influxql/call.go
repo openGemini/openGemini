@@ -11,8 +11,15 @@ import (
 	"github.com/prometheus/prometheus/promql/parser"
 )
 
+// PromQLParser applies openGemini's function set to query parsing and cache inspection.
+var PromQLParser = parser.NewParser(parser.Options{EnableExperimentalFunctions: true})
+
 func init() {
-	parser.EnableExperimentalFunctions = true
+	// Prometheus renamed holt_winters. Keep the original name for existing queries.
+	legacy := *parser.Functions["double_exponential_smoothing"]
+	legacy.Name = "holt_winters"
+	legacy.Experimental = false
+	parser.Functions[legacy.Name] = &legacy
 }
 
 var rangeVectorFunctions = map[string]aggregateFn{

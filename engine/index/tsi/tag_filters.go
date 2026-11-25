@@ -81,7 +81,7 @@ type TagFilters struct {
 var (
 	prefixesCacheMap  = make(map[string]prefixSuffix)
 	prefixesCacheLock sync.RWMutex
-	prefixesCache     = lrucache.NewCache(getMaxPrefixesCacheSize)
+	prefixesCache     = lrucache.NewCache(func() uint64 { return uint64(getMaxPrefixesCacheSize()) })
 )
 
 type prefixSuffix struct {
@@ -92,7 +92,7 @@ type prefixSuffix struct {
 var (
 	maxRegexpCacheSize     int
 	maxRegexpCacheSizeOnce sync.Once
-	regexpCache            = lrucache.NewCache(getMaxRegexpCacheSize)
+	regexpCache            = lrucache.NewCache(func() uint64 { return uint64(getMaxRegexpCacheSize()) })
 )
 
 var (
@@ -108,7 +108,7 @@ type regexpCacheValue struct {
 	reMatch       func(b []byte) bool
 	reCost        uint64
 	literalSuffix string
-	sizeBytes     int
+	sizeBytes     uint64
 }
 
 type openGeminiPrefixSuffix struct {
@@ -116,8 +116,8 @@ type openGeminiPrefixSuffix struct {
 	suffix string
 }
 
-func (ps *openGeminiPrefixSuffix) SizeBytes() int {
-	return len(ps.prefix) + len(ps.suffix) + int(unsafe.Sizeof(*ps))
+func (ps *openGeminiPrefixSuffix) SizeBytes() uint64 {
+	return uint64(len(ps.prefix)) + uint64(len(ps.suffix)) + uint64(unsafe.Sizeof(*ps))
 }
 
 const (
@@ -334,7 +334,7 @@ func (tf *tagFilter) OpGeminiRegrep() (*regexpCacheValue, error) {
 }
 
 // SizeBytes implements lrucache.Entry interface
-func (rcv *regexpCacheValue) SizeBytes() int {
+func (rcv *regexpCacheValue) SizeBytes() uint64 {
 	return rcv.sizeBytes
 }
 func getOpenGeminiRegexpFromCache(expr string) (*regexpCacheValue, error) {
@@ -371,7 +371,7 @@ func getOpenGeminiRegexpFromCache(expr string) (*regexpCacheValue, error) {
 	rcv.reCost = reCost
 	rcv.literalSuffix = literalSuffix
 	// heuristic for rcv in-memory size
-	rcv.sizeBytes = 8*len(exprOrig) + len(literalSuffix)
+	rcv.sizeBytes = 8*uint64(len(exprOrig)) + uint64(len(literalSuffix))
 	regexpCache.PutEntry(exprOrig, &rcv)
 
 	return &rcv, nil

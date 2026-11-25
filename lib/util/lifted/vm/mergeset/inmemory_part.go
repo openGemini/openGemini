@@ -10,6 +10,20 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 )
 
+type partBuffer struct {
+	bytesutil.ByteBuffer
+}
+
+func (b *partBuffer) MustReadAt(p []byte, off int64) {
+	if off < 0 || off > int64(len(b.B)-len(p)) {
+		panic(fmt.Sprintf("invalid part read: offset=%d length=%d buffer=%d", off, len(p), len(b.B)))
+	}
+	copy(p, b.B[off:])
+}
+
+// The part owns the buffer and resets it after all readers are done.
+func (*partBuffer) MustClose() {}
+
 type inmemoryPart struct {
 	ph partHeader
 	sb storageBlock
@@ -22,10 +36,10 @@ type inmemoryPart struct {
 	unpackedMetaindexBuf []byte
 	packedMetaindexBuf   []byte
 
-	metaindexData bytesutil.ByteBuffer
-	indexData     bytesutil.ByteBuffer
-	itemsData     bytesutil.ByteBuffer
-	lensData      bytesutil.ByteBuffer
+	metaindexData partBuffer
+	indexData     partBuffer
+	itemsData     partBuffer
+	lensData      partBuffer
 }
 
 func (mp *inmemoryPart) Reset() {
